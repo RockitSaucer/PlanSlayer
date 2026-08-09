@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0c09" />
+  <meta name="description" content="PlanSlayer — group event planning lists, invites, expenses, and map." />
+  <title>PLAN SLAYER</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" type="image/png" href="./icons/app/plan-192.png" />
+  <link rel="apple-touch-icon" href="./icons/app/plan-180.png" />
+  <link rel="stylesheet" href="./vendor/leaflet/leaflet.css" />
+  <style>
+    :root {
+      --bg: #0d0f0c;
+      --panel: #161a12;
+      --panel-light: #20261a;
+      --accent: #e59a18;
+      --green: #486a2f;
+      --ink: #f0f4ee;
+      --muted: #8d9c84;
+      --border: #28321a;
+      --danger: #d94136;
+    }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    html { color-scheme: dark; scrollbar-width: thin; scrollbar-color: #2a3224 #0a0c09; }
+    *::-webkit-scrollbar { width: 8px; height: 8px; background: #0a0c09; }
+    *::-webkit-scrollbar-button { display: none !important; width: 0; height: 0; }
+    *::-webkit-scrollbar-thumb { background: #2a3224; border-radius: 4px; }
+    body {
+      margin: 0; padding: 0;
+      background: var(--bg); color: var(--ink);
+      min-height: 100dvh; line-height: 1.45;
+    }
+    .brand-header {
+      --brand-stripe: 18px;
+      background:
+        linear-gradient(180deg, rgba(13,15,12,0.15) 0%, rgba(13,15,12,0.88) 100%),
+        repeating-linear-gradient(-35deg, #0f160e 0px, #0f160e var(--brand-stripe), #121b10 var(--brand-stripe), #121b10 calc(var(--brand-stripe) * 2));
+      border-bottom: 1px solid var(--border);
+      padding: max(8px, env(safe-area-inset-top, 0px)) 14px 10px;
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      position: relative;
+    }
+    .brand-title {
+      font-size: 18px; font-weight: 800; letter-spacing: 0.12em;
+      color: #fff; text-transform: uppercase;
+    }
+    .brand-title span { color: var(--accent); }
+    .brand-sub { font-size: 11px; color: var(--muted); }
+    .brand-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .user-chip {
+      font-size: 12px; font-weight: 700; color: var(--accent);
+      background: rgba(0,0,0,0.35); border: 1px solid var(--border);
+      padding: 6px 10px; border-radius: 8px;
+    }
+    .btn, button.btn {
+      appearance: none; border: 1px solid var(--border); background: var(--panel-light);
+      color: var(--ink); border-radius: 8px; padding: 8px 12px; font-weight: 700;
+      font-size: 12px; cursor: pointer;
+    }
+    .btn:hover { border-color: var(--accent); }
+    .btn-primary { background: var(--green); border-color: #4a7d32; color: #fff; }
+    .btn-accent { background: rgba(229,154,24,0.15); border-color: rgba(229,154,24,0.55); color: var(--accent); }
+    .btn-ghost { background: transparent; }
+    .nav {
+      display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border);
+      background: #10140e; position: sticky; top: 0; z-index: 40;
+    }
+    .nav button {
+      flex: 1; padding: 10px 8px; border-radius: 8px; border: 1px solid transparent;
+      background: transparent; color: var(--muted); font-weight: 700; font-size: 12px; cursor: pointer;
+    }
+    .nav button.is-active { color: #fff; border-color: var(--border); background: var(--panel); }
+    .shell { max-width: 920px; margin: 0 auto; padding: 12px 12px 40px; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
+    .toolbar input, .toolbar select, .field input, .field textarea, .field select {
+      background: #0c0f0a; border: 1px solid var(--border); color: var(--ink);
+      border-radius: 8px; padding: 9px 10px; font-size: 13px; width: 100%;
+    }
+    .toolbar input { max-width: 220px; }
+    .event-card {
+      display: block; width: 100%; text-align: left; margin-bottom: 8px;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 12px 14px; color: inherit; cursor: pointer;
+    }
+    .event-card:hover { border-color: var(--accent); }
+    .event-card.compact { padding: 10px 12px; }
+    .ec-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+    .ec-type { font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
+    .ec-meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .ec-code { font-size: 11px; color: #7dd3fc; margin-top: 4px; }
+    .cd { color: var(--accent); font-weight: 800; }
+    .cd-live { color: #86efac; font-weight: 700; }
+    .muted, .empty { color: var(--muted); font-size: 13px; }
+    .panel {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 12px; margin-bottom: 12px;
+    }
+    .panel h3, .panel h4 { margin: 0 0 8px; font-size: 14px; color: #fff; }
+    .tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+    .tabs button {
+      border: 1px solid var(--border); background: #12160f; color: var(--muted);
+      border-radius: 999px; padding: 7px 12px; font-size: 12px; font-weight: 700; cursor: pointer;
+    }
+    .tabs button.is-active { color: #fff; border-color: var(--accent); background: rgba(229,154,24,0.12); }
+    .list-item {
+      display: flex; gap: 8px; align-items: flex-start;
+      border: 1px solid var(--border); border-radius: 10px; padding: 8px;
+      margin-bottom: 8px; background: #12160f;
+    }
+    .list-item.is-highlight { box-shadow: inset 0 0 0 1px var(--accent); background: rgba(229,154,24,0.08); }
+    .list-item.pri-1 { border-left: 3px solid #eab308; }
+    .list-item.pri-2 { border-left: 3px solid #ef4444; }
+    .li-drag { color: var(--muted); cursor: grab; padding: 4px 2px; user-select: none; }
+    .li-main { flex: 1; min-width: 0; }
+    .li-title-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+    .li-title { font-weight: 700; }
+    .li-qty { font-size: 12px; color: var(--muted); }
+    .li-notes { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .li-actions { display: flex; flex-direction: column; gap: 4px; }
+    .btn-got {
+      border: 1px solid #3f6b2a; background: #1a2a14; color: #bbf7d0;
+      border-radius: 8px; padding: 6px 8px; font-size: 11px; font-weight: 800; cursor: pointer;
+    }
+    .btn-got.is-on { background: #3f6b2a; color: #fff; }
+    .btn-icon {
+      border: 1px solid var(--border); background: #1a1f14; color: var(--ink);
+      border-radius: 6px; width: 28px; height: 28px; cursor: pointer; font-size: 12px;
+    }
+    .btn-icon.danger { color: #fca5a5; }
+    .claim-bar {
+      display: flex; height: 8px; border-radius: 4px; overflow: hidden;
+      background: #0a0c09; margin-top: 6px; border: 1px solid #1f2618;
+    }
+    .claim-bar span { display: block; height: 100%; }
+    .claim-bar .claim-empty { background: #2a3224; }
+    .chip {
+      display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 999px;
+      background: #1a1f14; border: 1px solid var(--border); color: var(--muted); margin-top: 4px; margin-right: 4px;
+    }
+    .chip.exp { color: #86efac; border-color: #3f6b2a; }
+    .member-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px;
+      font-size: 12px; margin: 0 6px 6px 0;
+    }
+    .member-chip i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    #ev-map { height: 240px; border-radius: 10px; border: 1px solid var(--border); background: #111; }
+    .add-row { display: flex; gap: 8px; margin-top: 8px; position: relative; }
+    .add-row input { flex: 1; }
+    .suggest {
+      position: absolute; left: 0; right: 80px; top: 100%; z-index: 20;
+      background: #161a12; border: 1px solid var(--border); border-radius: 8px;
+      max-height: 160px; overflow: auto;
+    }
+    .suggest-item {
+      display: block; width: 100%; text-align: left; border: 0; background: transparent;
+      color: var(--ink); padding: 8px 10px; font-size: 12px; cursor: pointer;
+    }
+    .suggest-item:hover { background: rgba(229,154,24,0.12); }
+    .settle-line { font-size: 13px; padding: 6px 0; border-bottom: 1px solid #1f2618; }
+    .settle-line.is-mine { color: #fff; font-weight: 600; }
+    .cal-day { margin-bottom: 14px; }
+    .cal-day h4 { margin: 0 0 6px; color: var(--accent); font-size: 13px; }
+
+    /* Auth gate — same language as Hunt/Reg */
+    #auth-gate {
+      display: none; position: fixed; inset: 0; z-index: 9000;
+      background: rgba(8,10,7,0.92); align-items: center; justify-content: center; padding: 16px;
+    }
+    #auth-gate.is-open { display: flex; }
+    .auth-card {
+      width: min(400px, 100%); background: var(--panel); border: 1px solid var(--border);
+      border-radius: 14px; padding: 20px; box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+    }
+    .auth-card h2 { margin: 0 0 6px; letter-spacing: 0.08em; }
+    .auth-sub { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+    .auth-field { margin-bottom: 10px; }
+    .auth-field label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; font-weight: 700; }
+    .auth-field input {
+      width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border);
+      background: #0c0f0a; color: #fff; font-size: 14px;
+    }
+    .auth-actions button {
+      width: 100%; padding: 11px; border: 0; border-radius: 8px;
+      background: var(--green); color: #fff; font-weight: 800; cursor: pointer;
+    }
+    .auth-links { margin-top: 12px; text-align: center; font-size: 12px; }
+    .auth-links a { color: var(--accent); cursor: pointer; text-decoration: underline; }
+    #auth-error { color: #fca5a5; font-size: 12px; min-height: 1.2em; margin: 0 0 8px; }
+    .ver { font-size: 10px; color: var(--muted); }
+    @media (max-width: 640px) {
+      .brand-header { flex-direction: column; align-items: flex-start; }
+      .brand-right { width: 100%; justify-content: space-between; }
+      .li-actions { flex-direction: row; flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+  <header class="brand-header">
+    <div>
+      <div class="brand-title">Plan <span>Slayer</span></div>
+      <div class="brand-sub">Group lists · expenses · countdown · V1.0</div>
+    </div>
+    <div class="brand-right">
+      <span class="user-chip" id="user-chip">—</span>
+      <button type="button" class="btn btn-ghost" id="btn-signout">Sign out</button>
+    </div>
+  </header>
+
+  <nav class="nav" aria-label="Main">
+    <button type="button" data-nav="home" class="is-active">Events</button>
+    <button type="button" data-nav="calendar">Calendar</button>
+    <button type="button" data-nav="personal">My lists</button>
+  </nav>
+
+  <div id="app-root" class="shell">
+    <!-- HOME -->
+    <section data-view="home">
+      <div class="toolbar">
+        <button type="button" class="btn btn-primary" id="btn-create-event">+ Create event</button>
+        <button type="button" class="btn btn-accent" id="btn-join-event">Join with code</button>
+        <select id="sort-select" title="Sort">
+          <option value="soonest">Soonest first</option>
+          <option value="furthest">Furthest first</option>
+          <option value="alpha">Alphabetical</option>
+        </select>
+        <input id="search-input" type="search" placeholder="Search by name…" />
+      </div>
+      <div id="view-home-list"></div>
+      <p class="muted" style="margin-top:16px;font-size:11px;">
+        Same login as Hunt Slayer / Reg Slayer. Events are stored for PlanSlayer first;
+        calendar sync into Hunt/Reg calendars needs a future Hunt/Reg update (not in this V1).
+      </p>
+    </section>
+
+    <!-- EVENT -->
+    <section data-view="event" style="display:none">
+      <div class="toolbar">
+        <button type="button" class="btn" id="ev-back">← Events</button>
+        <button type="button" class="btn btn-accent" id="btn-copy-code">Copy invite</button>
+      </div>
+      <div class="panel">
+        <h3 id="ev-title">Event</h3>
+        <div class="ec-meta"><span id="ev-type"></span> · <span id="ev-start"></span></div>
+        <div style="margin-top:6px" id="ev-countdown"></div>
+        <div class="ec-code" id="ev-code"></div>
+        <div style="margin-top:10px" id="ev-members"></div>
+      </div>
+
+      <div class="tabs">
+        <button type="button" data-list-tab="todo" class="is-active">To do</button>
+        <button type="button" data-list-tab="buy">To buy</button>
+        <button type="button" data-list-tab="bring">To bring</button>
+      </div>
+      <div class="tabs">
+        <button type="button" data-scope-tab="group" class="is-active">Group</button>
+        <button type="button" data-scope-tab="personal">My personal</button>
+      </div>
+
+      <div class="panel">
+        <div class="toolbar" style="margin:0 0 8px">
+          <button type="button" class="btn btn-primary" id="btn-add-item">+ Add item</button>
+          <button type="button" class="btn" id="btn-save-list">Save list</button>
+        </div>
+        <div class="add-row">
+          <input id="add-item-input" type="text" placeholder="Type an item…" autocomplete="off" />
+          <button type="button" class="btn btn-primary" id="btn-add-from-input">Add</button>
+          <div class="suggest" id="add-suggest"></div>
+        </div>
+        <div id="ev-list" style="margin-top:12px"></div>
+      </div>
+
+      <div class="panel" id="ev-settle"></div>
+
+      <div class="panel">
+        <h4>Map</h4>
+        <p class="muted" style="font-size:12px;margin:0 0 8px">Satellite only. Tap map to set event location pin.</p>
+        <div id="ev-map"></div>
+      </div>
+    </section>
+
+    <!-- PERSONAL -->
+    <section data-view="personal" style="display:none">
+      <p class="muted">Personal lists not tied to a specific event. Invite sharing of personal lists ships fuller in V1.1; data is local + your account.</p>
+      <div class="tabs">
+        <button type="button" data-list-tab="todo" class="is-active">To do</button>
+        <button type="button" data-list-tab="buy">To buy</button>
+        <button type="button" data-list-tab="bring">To bring</button>
+      </div>
+      <div class="toolbar">
+        <button type="button" class="btn btn-primary" id="btn-add-item-personal" onclick="document.getElementById('btn-add-item').click()">+ Add item</button>
+      </div>
+      <div id="personal-list" class="panel"></div>
+    </section>
+
+    <!-- CALENDAR -->
+    <section data-view="calendar" style="display:none">
+      <p class="muted">Events with a start date, grouped by day. Click to open.</p>
+      <div id="view-calendar-list"></div>
+    </section>
+  </div>
+
+  <!-- AUTH -->
+  <div id="auth-gate" class="is-open" aria-hidden="false">
+    <div class="auth-card" role="dialog" aria-labelledby="auth-title">
+      <h2 id="auth-title">PLAN SLAYER</h2>
+      <p class="auth-sub">Same account as Hunt Slayer &amp; Reg Slayer — one username and password on all three.</p>
+      <p id="auth-error" role="alert"></p>
+      <div id="auth-panel-signin">
+        <div class="auth-field"><label for="auth-si-user">Username</label><input id="auth-si-user" autocomplete="username" autocapitalize="none" /></div>
+        <div class="auth-field"><label for="auth-si-pass">Password</label><input id="auth-si-pass" type="password" autocomplete="current-password" /></div>
+        <div class="auth-actions"><button type="button" id="auth-btn-signin">Sign in</button></div>
+        <div class="auth-links"><a data-auth-goto="signup">Create account</a></div>
+      </div>
+      <div id="auth-panel-signup" style="display:none">
+        <div class="auth-field"><label for="auth-su-user">Username</label><input id="auth-su-user" autocomplete="username" autocapitalize="none" /></div>
+        <div class="auth-field"><label for="auth-su-name">Display name</label><input id="auth-su-name" autocomplete="nickname" /></div>
+        <div class="auth-field"><label for="auth-su-pass">Password</label><input id="auth-su-pass" type="password" autocomplete="new-password" /></div>
+        <div class="auth-actions"><button type="button" id="auth-btn-signup">Create account</button></div>
+        <div class="auth-links"><a data-auth-goto="signin">Back to sign in</a></div>
+      </div>
+      <div id="auth-panel-recover" style="display:none">
+        <p class="auth-sub">Password recovery uses the same Hunt/Reg account flow. Sign in on Hunt Slayer if you need to reset.</p>
+        <div class="auth-links"><a data-auth-goto="signin">Back to sign in</a></div>
+      </div>
+      <p class="ver" style="margin-top:14px;text-align:center">V1.0 · Shared auth via HuntSlayer Supabase</p>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./vendor/leaflet/leaflet.js"></script>
+  <script src="./auth.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

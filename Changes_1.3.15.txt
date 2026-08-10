@@ -1,0 +1,21 @@
+PlanSlayer V1.3.15 — Share polish, multi-select members, faster list sync, categories
+
+Share
+- Renamed Copy list/event → **Share list** / **Share event** (same UI for both)
+- Taller buttons on share popup
+- Share/Add members modals sit **above** Edit event / Edit list (z-index fix)
+- Add members: multi-select (lights up), **Add** button, or tap outside to commit
+- Real map partners (UUID) written to plan_event_members so they see the event on next login
+- Event cards: **Edit list** removed — only **Edit event**
+
+Lists / sync
+- Saving a packing list mirrors into plan_events.state (namedListPack + todo/buy/bring) and cloud-saves immediately
+- Other devices pull packs every ~5s while the tab is open (was 20s)
+- Cloud pull rebuilds local packing lists from event packs
+
+Categories
+- Categories are permanent on the list/event type
+- Last 3 used stay at the top of the picker; higher frequency ranks next
+- Assigning a category auto-selects that filter chip so you can scan matching items
+
+Shell: plan-slayer-shell-v48

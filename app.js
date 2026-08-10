@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.14';
+  var APP_VERSION = '1.3.15';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -36,6 +36,8 @@
   var LOCAL_FREE_LISTS_KEY = 'plan_slayer_free_lists_v1'; // My lists (unified)
   var LOCAL_INBOX_PREFIX = 'plan_slayer_inbox_';
   var LOCAL_FREE_QUALIFIERS_KEY = 'plan_slayer_list_qualifiers_v1';
+  /** Category usage per event-type / list: { [scopeKey]: { recent: [id,...], counts: {id:n} } } */
+  var LOCAL_CAT_USAGE_KEY = 'plan_slayer_cat_usage_v1';
   // Muted member / claim colors (less neon)
   var COLORS = ['#a34a4a', '#4a6d9a', '#4d7a55', '#8a7340', '#6b5a8a', '#8a6048', '#3d6e6e', '#8a4a68'];
   var DEFAULT_ME_COLOR = '#a34a4a';
@@ -652,13 +654,13 @@
         loadEvents().then(function () { render(); }).catch(function () { render(); });
       }
     });
-    // Light poll while tab is open (multi-device / multi-user)
+    // Light poll while tab is open (multi-device / multi-user) — keep lists fresher across phones
     setInterval(function () {
       if (document.visibilityState !== 'visible') return;
       if (typeof loadEvents === 'function') {
         loadEvents().then(function () { render(); }).catch(function () {});
       }
-    }, 20000);
+    }, 5000);
   }
   function isMobileLayout() {
     try {
@@ -984,6 +986,131 @@
   }
   function saveFreeListQualifiers(qs) {
     saveJson(LOCAL_FREE_QUALIFIERS_KEY, qs || []);
+  }
+
+  /** Scope key for category ranking: event type, or list id, or "personal" */
+  function catUsageScopeKey(ev, freeList) {
+    if (freeList && freeList.id) {
+      if (freeList.eventId) {
+        var fe = findEventById(freeList.eventId);
+        if (fe && fe.event_type) return 'type:' + String(fe.event_type).toLowerCase();
+        return 'event:' + String(freeList.eventId);
+      }
+      return 'list:' + String(freeList.id);
+    }
+    if (ev && !ev._personalOnly) {
+      if (ev.event_type) return 'type:' + String(ev.event_type).toLowerCase();
+      return 'event:' + String(ev.id || 'unknown');
+    }
+    return 'personal';
+  }
+  function loadCatUsageBag() {
+    var bag = loadJson(LOCAL_CAT_USAGE_KEY, null);
+    return bag && typeof bag === 'object' ? bag : {};
+  }
+  function getCatUsage(scopeKey) {
+    var bag = loadCatUsageBag();
+    var row = bag[scopeKey] || { recent: [], counts: {} };
+    if (!Array.isArray(row.recent)) row.recent = [];
+    if (!row.counts || typeof row.counts !== 'object') row.counts = {};
+    return row;
+  }
+  function recordCategoryUse(catId, ev, freeList) {
+    if (!catId || catId === '__add_category__') return;
+    var key = catUsageScopeKey(ev, freeList);
+    var bag = loadCatUsageBag();
+    var row = bag[key] || { recent: [], counts: {} };
+    if (!Array.isArray(row.recent)) row.recent = [];
+    if (!row.counts || typeof row.counts !== 'object') row.counts = {};
+    row.counts[catId] = (Number(row.counts[catId]) || 0) + 1;
+    row.recent = [String(catId)].concat(row.recent.filter(function (id) {
+      return String(id) !== String(catId);
+    })).slice(0, 12);
+    bag[key] = row;
+    saveJson(LOCAL_CAT_USAGE_KEY, bag);
+    // Keep permanent category list ordered: last 3 used first, then by frequency
+    try { promoteCategoryInQualifiers(catId, ev, freeList); } catch (eP) {}
+  }
+  function promoteCategoryInQualifiers(catId, ev, freeList) {
+    var key = catUsageScopeKey(ev, freeList);
+    var usage = getCatUsage(key);
+    function reorder(qs) {
+      if (!Array.isArray(qs)) return qs;
+      var other = null;
+      var rest = [];
+      qs.forEach(function (q) {
+        if (!q) return;
+        if (q.id === 'other') other = q;
+        else rest.push(q);
+      });
+      var byId = {};
+      rest.forEach(function (q) { byId[String(q.id)] = q; });
+      var ordered = [];
+      var recent3 = (usage.recent || []).slice(0, 3);
+      recent3.forEach(function (id) {
+        if (byId[String(id)]) {
+          ordered.push(byId[String(id)]);
+          delete byId[String(id)];
+        }
+      });
+      // remaining by frequency desc then name
+      var leftovers = Object.keys(byId).map(function (id) { return byId[id]; });
+      leftovers.sort(function (a, b) {
+        var ca = Number(usage.counts[a.id]) || 0;
+        var cb = Number(usage.counts[b.id]) || 0;
+        if (cb !== ca) return cb - ca;
+        return String(a.name || '').localeCompare(String(b.name || ''));
+      });
+      ordered = ordered.concat(leftovers);
+      if (!other) other = { id: 'other', name: 'Other', color: '#8a9488' };
+      return ordered.concat([other]);
+    }
+    if (ev && !ev._personalOnly && !(freeList && freeList.id && !freeList.eventId)) {
+      // Event-linked or pure event
+      if (ev && ev.state) {
+        ensureQualifiers(ev);
+        ev.state.qualifiers = reorder(ev.state.qualifiers);
+      }
+    }
+    if (freeList || !ev || ev._personalOnly) {
+      var fqs = freeListQualifiers();
+      saveFreeListQualifiers(reorder(fqs));
+    }
+  }
+  function orderedQualifiersForSelect(ev, freeList) {
+    var qs;
+    if (ev && !ev._personalOnly && !(freeList && !freeList.eventId)) {
+      qs = ensureQualifiers(ev).map(function (q) { return Object.assign({}, q); });
+    } else {
+      qs = freeListQualifiers().map(function (q) { return Object.assign({}, q); });
+    }
+    var usage = getCatUsage(catUsageScopeKey(ev, freeList));
+    var other = null;
+    var rest = [];
+    qs.forEach(function (q) {
+      if (!q) return;
+      if (q.id === 'other') other = q;
+      else rest.push(q);
+    });
+    var byId = {};
+    rest.forEach(function (q) { byId[String(q.id)] = q; });
+    var ordered = [];
+    (usage.recent || []).slice(0, 3).forEach(function (id) {
+      if (byId[String(id)]) {
+        ordered.push(byId[String(id)]);
+        delete byId[String(id)];
+      }
+    });
+    var leftovers = Object.keys(byId).map(function (id) { return byId[id]; });
+    leftovers.sort(function (a, b) {
+      var ca = Number(usage.counts[a.id]) || 0;
+      var cb = Number(usage.counts[b.id]) || 0;
+      if (cb !== ca) return cb - ca;
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+    ordered = ordered.concat(leftovers);
+    if (!other) other = { id: 'other', name: 'Other', color: '#8a9488' };
+    return ordered.concat([other]);
   }
 
   /** Raw store — no normalize (safe for surgical saves) */
@@ -1395,11 +1522,139 @@
       var ok = saveJson(LOCAL_FREE_LISTS_KEY, store);
       if (ok && snapshot.eventId) {
         try { publishEventListBridge(snapshot); } catch (eB) {}
+        // Push list items into the linked plan event + cloud so phones/other people see them soon
+        try { syncNamedListToEventCloud(snapshot); } catch (eSync) {}
       }
       return ok;
     } catch (eS) {
       console.warn('saveNamedList', eS);
       return false;
+    }
+  }
+
+  /**
+   * Mirror a named packing list into plan_events.state so multi-device/cloud users get updates.
+   * Also dual-writes Hunt/Reg View list packs.
+   */
+  function syncNamedListToEventCloud(list) {
+    if (!list || !list.eventId) return;
+    var ev = findEventById(list.eventId);
+    if (!ev) return;
+    if (!ev.state) ev.state = {};
+    normalizeEvent(ev);
+    // Snapshot full named list for rebuild on other devices
+    try {
+      ev.state.namedListPack = {
+        listId: String(list.id),
+        name: list.name || 'List',
+        members: list.members || [],
+        columns: (list.columns || []).map(function (c) {
+          return {
+            id: c.id,
+            name: c.name,
+            items: (c.items || []).map(function (it) {
+              return Object.assign({}, it);
+            }),
+            minimized: !!c.minimized,
+            colors: c.colors || null
+          };
+        }),
+        invite_code: list.invite_code || null,
+        updated_at: list.updated_at || new Date().toISOString()
+      };
+    } catch (eP) {}
+    // Also mirror classic todo/buy/bring buckets when those column ids exist
+    ['todo', 'buy', 'bring'].forEach(function (k) {
+      var col = (list.columns || []).find(function (c) { return c && String(c.id) === k; });
+      if (!col) return;
+      if (!ev.state.lists[k]) ev.state.lists[k] = { group: [], personal: {} };
+      ev.state.lists[k].group = (col.items || []).map(function (it) { return Object.assign({}, it); });
+    });
+    // Copy list members into event localMembers for display
+    try {
+      if (!Array.isArray(ev.state.localMembers)) ev.state.localMembers = [];
+      (list.members || []).forEach(function (m) {
+        if (!m) return;
+        var exists = ev.state.localMembers.some(function (x) {
+          return String(x.user_id) === String(m.user_id) ||
+            String(x.display_name || '').toLowerCase() === String(m.display_name || '').toLowerCase();
+        });
+        if (!exists) {
+          ev.state.localMembers.push({
+            user_id: m.user_id,
+            display_name: m.display_name || m.username || 'Member',
+            role: m.role || 'member',
+            arrow_color: m.arrow_color || COLORS[0]
+          });
+        }
+      });
+    } catch (eM) {}
+    ev.updated_at = new Date().toISOString();
+    persistLocal();
+    cloudSaveEvent(ev);
+    try { dualWriteHuntCalendarEvent(ev, list); } catch (eD) {}
+  }
+
+  /** After cloud pull, rebuild free packing lists from event.state.namedListPack / lists */
+  function applyCloudListPackToLocal(ev) {
+    if (!ev || !ev.id) return;
+    var pack = ev.state && ev.state.namedListPack;
+    var store = loadFreeListsStoreRaw();
+    var existing = (store.named || []).find(function (n) {
+      return n && n.eventId && String(n.eventId) === String(ev.id);
+    });
+    if (pack && pack.columns && pack.columns.length) {
+      var listId = (existing && existing.id) || pack.listId || uid();
+      var localUpdated = existing && existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
+      var cloudUpdated = pack.updated_at ? new Date(pack.updated_at).getTime() : 0;
+      // Prefer cloud when newer or local missing
+      if (!existing || cloudUpdated >= localUpdated) {
+        var rebuilt = sanitizeNamedList({
+          id: listId,
+          name: pack.name || ((ev.name || 'Event') + ' · lists'),
+          owner_id: (existing && existing.owner_id) || ev.owner_user_id || myId() || 'local',
+          eventId: String(ev.id),
+          members: pack.members || (existing && existing.members) || [],
+          creators: (existing && existing.creators) || [],
+          columns: pack.columns,
+          invite_code: pack.invite_code || (existing && existing.invite_code) || null,
+          created_at: (existing && existing.created_at) || new Date().toISOString(),
+          updated_at: pack.updated_at || new Date().toISOString()
+        });
+        var idx = (store.named || []).findIndex(function (n) { return n && String(n.id) === String(listId); });
+        if (idx >= 0) store.named[idx] = rebuilt;
+        else {
+          // drop other packs for same event
+          store.named = (store.named || []).filter(function (n) {
+            return !(n && n.eventId && String(n.eventId) === String(ev.id));
+          });
+          store.named.push(rebuilt);
+        }
+        saveJson(LOCAL_FREE_LISTS_KEY, store);
+        try { publishEventListBridge(rebuilt); } catch (eB) {}
+        return;
+      }
+    }
+    // Fallback: seed from classic lists if no named pack
+    if (!existing) {
+      try { ensureAssociatedListForEvent(ev); } catch (eA) {}
+    } else if (ev.state && ev.state.lists) {
+      // Merge classic buckets when cloud event is newer (local write only — no cloud bounce)
+      var evT = ev.updated_at ? new Date(ev.updated_at).getTime() : 0;
+      var locT = existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
+      if (evT > locT) {
+        sanitizeNamedList(existing);
+        ['todo', 'buy', 'bring'].forEach(function (k) {
+          var group = (ev.state.lists[k] && ev.state.lists[k].group) || [];
+          var col = getListColumn(existing, k);
+          if (col && Array.isArray(group)) col.items = group.map(function (it) { return Object.assign({}, it); });
+        });
+        existing.updated_at = ev.updated_at || existing.updated_at;
+        var idx2 = (store.named || []).findIndex(function (n) { return n && String(n.id) === String(existing.id); });
+        if (idx2 >= 0) store.named[idx2] = existing;
+        saveJson(LOCAL_FREE_LISTS_KEY, store);
+        try { publishEventListBridge(existing); } catch (eB2) {}
+      }
     }
   }
 
@@ -1491,10 +1746,12 @@
   }
 
   var _sharePeopleCtx = { kind: 'list', id: null }; // kind: list | event
+  /** Selected people in Add members popup: [{user_id, display_name}] */
+  var _sharePeopleSelected = [];
 
   function openSharePeopleChooser(kind, id) {
     _sharePeopleCtx = { kind: kind || 'list', id: id };
-    var title = kind === 'event' ? 'Copy event' : 'Copy list';
+    var title = kind === 'event' ? 'Share event' : 'Share list';
     if ($('share-people-title')) $('share-people-title').textContent = title;
     if ($('share-people-sub')) {
       $('share-people-sub').textContent = kind === 'event'
@@ -1502,7 +1759,7 @@
         : 'Share this list with others, or copy an invite code.';
     }
     if ($('share-people-copy-label')) {
-      $('share-people-copy-label').textContent = 'Copy';
+      $('share-people-copy-label').textContent = 'Copy invite code';
     }
     if ($('share-people-chooser')) {
       $('share-people-chooser').classList.add('is-open');
@@ -1517,33 +1774,66 @@
   }
   function openSharePeopleMembers() {
     closeSharePeopleChooser();
-    refreshMapPartnersFromCloud().then(function () {
-      fillSharePeoplePick('');
-    });
+    _sharePeopleSelected = [];
     if ($('share-people-search')) $('share-people-search').value = '';
+    if ($('share-people-members-title')) {
+      $('share-people-members-title').textContent =
+        _sharePeopleCtx.kind === 'event' ? 'Add members to event' : 'Add members to list';
+    }
+    fillSharePeoplePick('');
+    refreshMapPartnersFromCloud().then(function () {
+      fillSharePeoplePick(($('share-people-search') && $('share-people-search').value) || '');
+    });
     if ($('share-people-members')) {
       $('share-people-members').classList.add('is-open');
       $('share-people-members').setAttribute('aria-hidden', 'false');
     }
   }
-  function closeSharePeopleMembers() {
+  function closeSharePeopleMembers(commit) {
+    if (commit) commitSharePeopleSelected();
+    else _sharePeopleSelected = [];
     if ($('share-people-members')) {
       $('share-people-members').classList.remove('is-open');
       $('share-people-members').setAttribute('aria-hidden', 'true');
     }
   }
+  function isSharePersonSelected(id) {
+    return _sharePeopleSelected.some(function (p) { return String(p.user_id) === String(id); });
+  }
+  function toggleSharePerson(personId, personName) {
+    if (!personId && !personName) return;
+    var key = String(personId || personName);
+    var idx = _sharePeopleSelected.findIndex(function (p) {
+      return String(p.user_id) === key ||
+        String(p.display_name || '').toLowerCase() === String(personName || '').toLowerCase();
+    });
+    if (idx >= 0) _sharePeopleSelected.splice(idx, 1);
+    else _sharePeopleSelected.push({ user_id: personId || personName, display_name: personName || 'Member' });
+    // Light up without wiping the whole list if possible
+    var btn = document.querySelector('#share-people-pick [data-share-person="' +
+      String(personId || personName).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]');
+    if (!btn) {
+      // attribute selector may fail on special chars — re-render
+      fillSharePeoplePick(($('share-people-search') && $('share-people-search').value) || '');
+      return;
+    }
+    btn.classList.toggle('is-selected', isSharePersonSelected(personId || personName));
+  }
   function fillSharePeoplePick(q) {
     var box = $('share-people-pick');
     if (!box) return;
-    var people = allPeopleForAddMembers(q, 30);
+    var people = allPeopleForAddMembers(q, 40);
     box.innerHTML = people.map(function (p) {
       var id = p.user_id || p.display_name;
-      return '<button type="button" class="btn" style="width:100%;justify-content:flex-start;margin:0 0 6px;text-align:left" data-share-person="' +
-        esc(String(id)) + '" data-share-person-name="' + esc(p.display_name || '') + '">' +
+      var on = isSharePersonSelected(id);
+      return '<button type="button" class="btn share-person-btn' + (on ? ' is-selected' : '') +
+        '" data-share-person="' + esc(String(id)) + '" data-share-person-name="' + esc(p.display_name || '') + '">' +
         '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' +
-        esc(p.arrow_color || COLORS[0]) + ';margin-right:8px"></span>' +
-        esc(p.display_name || 'Member') +
+        esc(p.arrow_color || COLORS[0]) + ';margin-right:8px;flex-shrink:0"></span>' +
+        '<span style="flex:1;min-width:0">' + esc(p.display_name || 'Member') +
         (p.username ? (' <span class="muted">@' + esc(p.username) + '</span>') : '') +
+        '</span>' +
+        (on ? '<span style="margin-left:8px;color:var(--accent);font-weight:900">✓</span>' : '') +
         '</button>';
     }).join('') || '<p class="muted">No map partners yet. Share maps on Hunt/Reg, or type a name below.</p>';
   }
@@ -1584,44 +1874,106 @@
       appToast(code);
     }
   }
-  function addPersonToShareCtx(personId, personName) {
+  function isUuidLike(id) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(id || ''));
+  }
+  /** Add one person to event or list; returns true if newly added. */
+  function addPersonToShareCtx(personId, personName, opts) {
+    opts = opts || {};
+    var quiet = !!opts.quiet;
     if (_sharePeopleCtx.kind === 'event') {
       var ev = findEventById(_sharePeopleCtx.id) || activeEvent();
-      if (!ev) return;
+      if (!ev) return false;
       if (!ev.state) ev.state = {};
       if (!Array.isArray(ev.state.localMembers)) ev.state.localMembers = [];
       var already = (ev.state.localMembers || []).some(function (m) {
         return String(m.user_id) === String(personId) ||
           String(m.display_name || '').toLowerCase() === String(personName || '').toLowerCase();
       });
-      if (already) { appToast('Already on this event'); return; }
-      ev.state.localMembers.push({
+      if (!already && state.members) {
+        already = state.members.some(function (m) {
+          return String(m.user_id) === String(personId) ||
+            String(m.display_name || '').toLowerCase() === String(personName || '').toLowerCase();
+        });
+      }
+      if (already) {
+        if (!quiet) appToast('Already on this event');
+        return false;
+      }
+      var row = {
         user_id: personId,
         display_name: personName || 'Member',
         role: 'member',
         arrow_color: COLORS[(ev.state.localMembers.length) % COLORS.length]
-      });
-      // Also into active members list
+      };
+      ev.state.localMembers.push(row);
       if (!state.members) state.members = [];
       if (!state.members.some(function (m) { return String(m.user_id) === String(personId); })) {
-        state.members.push({
-          user_id: personId,
-          display_name: personName || 'Member',
-          role: 'member',
-          arrow_color: COLORS[state.members.length % COLORS.length]
-        });
+        state.members.push(Object.assign({}, row));
       }
       rememberMapPartner({ user_id: personId, display_name: personName });
+      // Cloud: real accounts appear on their login via plan_event_members
+      if (isUuidLike(personId) && isUuidLike(ev.id) && !ev._localOnly) {
+        try {
+          var client = sb();
+          if (client) {
+            client.from('plan_event_members').upsert({
+              event_id: ev.id,
+              user_id: personId,
+              role: 'member'
+            }, { onConflict: 'event_id,user_id' }).then(function () {}).catch(function () {});
+          }
+        } catch (eCloud) {}
+      }
+      // Event list pack also gets the member
+      try {
+        var linked = listsForEvent(ev.id);
+        if (linked[0]) {
+          addListMemberFromPick(linked[0], personId || personName, !isUuidLike(personId));
+        }
+      } catch (eL) {}
       try { saveActiveEvent(); } catch (e) { persistLocal(); }
-      appToast('Added ' + (personName || 'member') + ' to event');
-      render();
-      return;
+      if (!quiet) appToast('Added ' + (personName || 'member') + ' to event');
+      return true;
     }
     var list = findNamedListById(_sharePeopleCtx.id || state.activeNamedListId);
-    if (!list) return;
-    addListMemberFromPick(list, personId || personName, !personId);
-    appToast('Added ' + (personName || 'member') + ' to list');
-    render();
+    if (!list) return false;
+    var before = (list.members || []).length;
+    addListMemberFromPick(list, personId || personName, !isUuidLike(personId));
+    // If list is linked to an event, add them there too (so they see the event)
+    if (list.eventId) {
+      var prevKind = _sharePeopleCtx.kind;
+      var prevId = _sharePeopleCtx.id;
+      _sharePeopleCtx = { kind: 'event', id: list.eventId };
+      addPersonToShareCtx(personId, personName, { quiet: true });
+      _sharePeopleCtx = { kind: prevKind, id: prevId };
+    }
+    var after = (findNamedListById(list.id) || list).members || [];
+    var ok = after.length > before || after.some(function (m) {
+      return String(m.user_id) === String(personId) ||
+        String(m.display_name || '').toLowerCase() === String(personName || '').toLowerCase();
+    });
+    if (!quiet && ok) appToast('Added ' + (personName || 'member') + ' to list');
+    return ok;
+  }
+  function commitSharePeopleSelected() {
+    if (!_sharePeopleSelected.length) {
+      appToast('Select at least one person');
+      return 0;
+    }
+    var n = 0;
+    _sharePeopleSelected.slice().forEach(function (p) {
+      if (addPersonToShareCtx(p.user_id, p.display_name, { quiet: true })) n++;
+    });
+    _sharePeopleSelected = [];
+    if (n > 0) {
+      appToast('Added ' + n + ' member' + (n === 1 ? '' : 's'));
+      try { render(); } catch (eR) {}
+      try { loadMembers(_sharePeopleCtx.kind === 'event' ? _sharePeopleCtx.id : (state.activeEventId || null)); } catch (eM) {}
+    } else {
+      appToast('Already members, or nothing to add');
+    }
+    return n;
   }
   function saveFreeListsStore(s) {
     if (!s) return false;
@@ -2238,9 +2590,11 @@
       var nImp = importHuntCalendarEvents();
       if (nImp) appToast('Imported ' + nImp + ' event' + (nImp === 1 ? '' : 's') + ' from Hunt/Reg');
     } catch (eImp) {}
-    // Ensure every plan event has a linked list pack
+    // Ensure every plan event has a linked list pack; pull cloud list packs onto this device
     state.events.forEach(function (e) {
-      try { ensureAssociatedListForEvent(e); } catch (eA) {}
+      try { applyCloudListPackToLocal(e); } catch (eA) {
+        try { ensureAssociatedListForEvent(e); } catch (e2) {}
+      }
     });
     fillTypeDatalist();
     render();
@@ -3394,18 +3748,9 @@
   }
 
   function categorySelectOptions(ev, selectedId) {
-    var qList = (ev ? ensureQualifiers(ev) : DEFAULT_QUALIFIERS.slice()).map(function (q) {
-      return Object.assign({}, q);
-    });
-    // "other" always last among real categories; then "Add…"
-    var others = [];
-    var rest = [];
-    qList.forEach(function (qq) {
-      if (String(qq.id) === 'other') others.push(qq);
-      else rest.push(qq);
-    });
-    if (!others.length) others.push({ id: 'other', name: 'Other', color: '#8a9488' });
-    var ordered = rest.concat(others);
+    var freeOpen = null;
+    try { freeOpen = state.activeNamedListId ? findNamedListById(state.activeNamedListId) : null; } catch (e) {}
+    var ordered = orderedQualifiersForSelect(ev, freeOpen);
     var sel = selectedId || 'other';
     var html = ordered.map(function (qq) {
       return '<option value="' + esc(qq.id) + '"' + (sel === qq.id ? ' selected' : '') + '>' +
@@ -3838,17 +4183,24 @@
     var box = $('qualifier-filters');
     if (!box) return;
     if (!ev && !freeList) { box.innerHTML = ''; return; }
-    var qs = ensureQualifiers(ev || { state: { qualifiers: freeListQualifiers() } });
+    var qs = orderedQualifiersForSelect(ev, freeList);
     var items = itemsForQualifierScan(ev, freeList);
     var used = {};
     items.forEach(function (it) {
       if (!it) return;
       used[it.qualifier || 'other'] = true;
     });
-    var usedQs = qs.filter(function (q) { return used[q.id]; });
-    if (state.filterQualifier !== 'all' && state.filterQualifier !== '__sort' && !used[state.filterQualifier]) {
-      state.filterQualifier = 'all';
+    // Always show categories currently used on items, plus active filter, plus last 3 used
+    var usage = getCatUsage(catUsageScopeKey(ev, freeList));
+    (usage.recent || []).slice(0, 3).forEach(function (id) { used[id] = true; });
+    if (state.filterQualifier && state.filterQualifier !== 'all' && state.filterQualifier !== '__sort') {
+      used[state.filterQualifier] = true;
     }
+    // Preserve permanent order from orderedQualifiers (recent first), only filter to known chips
+    var usedQs = qs.filter(function (q) { return q && used[q.id] && q.id !== 'other'; });
+    // "other" only if used
+    var otherQ = qs.find(function (q) { return q && q.id === 'other'; });
+    if (otherQ && used.other) usedQs.push(otherQ);
     // Far left: + Add section (named lists only) — keeps triad columns wider
     var html = '';
     if (freeList && isNamedListOwner(freeList)) {
@@ -4892,7 +5244,7 @@
     );
   }
 
-  /** My events cards — same shell as lists; Edit event + Edit list */
+  /** My events cards — same shell as lists; Edit event only */
   function renderEventCardHtml(e) {
     var active = String(e.id) === String(state.activeEventId) ? ' is-active' : '';
     var linked = listsForEvent(e.id);
@@ -4925,9 +5277,6 @@
           membersHtml: chips
         }) + '</div>';
     }
-    var editListBtn = linkedList
-      ? '<button type="button" class="btn ec-edit-btn" data-edit-list="' + esc(linkedList.id) + '" title="Edit list">Edit list</button>'
-      : '';
     var cd = countdownHtml(e.start_at, e.end_at);
     // Type + people count sit under the name (not beside edit buttons)
     var underBits = [];
@@ -4942,7 +5291,6 @@
           '<div class="ec-top">' +
             '<strong>' + esc(e.name) + '</strong>' +
             cd +
-            editListBtn +
             '<button type="button" class="btn ec-edit-btn" data-edit-event="' + esc(e.id) + '" title="Edit event">Edit event</button>' +
           '</div>' +
           metaHtml +
@@ -7796,7 +8144,17 @@
     if (get('priority')) item.priority = parseInt(get('priority').value, 10) || 0;
     var qVal = get('qualifier') ? get('qualifier').value : (item.qualifier || 'other');
     if (qVal === '__add_category__') return 'add-category';
+    var prevQ = item.qualifier || 'other';
     item.qualifier = qVal || 'other';
+    if (String(item.qualifier) !== String(prevQ)) {
+      try {
+        var freeOpenQ = state.activeNamedListId ? findNamedListById(state.activeNamedListId) : null;
+        var evQ = activeEvent();
+        recordCategoryUse(item.qualifier, evQ, freeOpenQ);
+        // Jump filter chip to this category so user can scan matching items
+        state.filterQualifier = item.qualifier;
+      } catch (eCat) {}
+    }
     if (get('highlight')) item.highlight = !!get('highlight').checked;
     var hlPick = row.querySelector('[data-f-hl-color].is-on');
     if (hlPick) {
@@ -8315,18 +8673,46 @@
     click('share-people-add', function () {
       openSharePeopleMembers();
     });
-    click('share-people-members-cancel', closeSharePeopleMembers);
+    click('share-people-members-cancel', function () {
+      closeSharePeopleMembers(false);
+    });
+    click('share-people-members-add', function () {
+      commitSharePeopleSelected();
+      closeSharePeopleMembers(false);
+    });
     on('share-people-members', 'click', function (e) {
-      if (e.target === $('share-people-members')) closeSharePeopleMembers();
+      // Tap outside the card = add selected + close
+      if (e.target === $('share-people-members')) {
+        if (_sharePeopleSelected.length) commitSharePeopleSelected();
+        closeSharePeopleMembers(false);
+      }
     });
     on('share-people-search', 'input', function () {
       fillSharePeoplePick(this.value);
     });
-    on('share-people-pick', 'click', function (e) {
-      var b = e.target.closest && e.target.closest('[data-share-person]');
+    // pointerup for mobile reliability; suppress the ghost click that would toggle twice
+    var _sharePickArmed = false;
+    function onSharePersonPick(e) {
+      var b = e.target && e.target.closest && e.target.closest('[data-share-person]');
       if (!b) return;
-      addPersonToShareCtx(b.getAttribute('data-share-person'), b.getAttribute('data-share-person-name'));
-    });
+      if (e.type === 'click' && _sharePickArmed) {
+        _sharePickArmed = false;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (e.type === 'pointerup') {
+        // Only primary button / touch
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        _sharePickArmed = true;
+        setTimeout(function () { _sharePickArmed = false; }, 400);
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      toggleSharePerson(b.getAttribute('data-share-person'), b.getAttribute('data-share-person-name'));
+    }
+    on('share-people-pick', 'click', onSharePersonPick);
+    on('share-people-pick', 'pointerup', onSharePersonPick);
     click('edit-list-save', function () {
       var list = findNamedListById(state.activeNamedListId);
       if (!list) { closeEditListModal(); return; }
@@ -8657,6 +9043,11 @@
             openAddCategoryModal(function (newId) {
               if (newId) {
                 metaAdd.item.qualifier = newId;
+                try {
+                  var freeOpenA = state.activeNamedListId ? findNamedListById(state.activeNamedListId) : null;
+                  recordCategoryUse(newId, activeEvent(), freeOpenA);
+                  state.filterQualifier = newId;
+                } catch (eRa) {}
                 persistItemByMeta(metaAdd.kind, metaAdd.scope, metaAdd.id, rowCh);
               }
               render();
@@ -9653,6 +10044,11 @@
         $('category-modal').classList.remove('is-open');
         $('category-modal').setAttribute('aria-hidden', 'true');
       }
+      try {
+        var freeOpenCat = state.activeNamedListId ? findNamedListById(state.activeNamedListId) : null;
+        recordCategoryUse(newId, activeEvent(), freeOpenCat);
+        state.filterQualifier = newId;
+      } catch (eCu) {}
       var cb = _catAddCallback;
       _catAddCallback = null;
       if (cb) cb(newId);
@@ -9675,10 +10071,19 @@
         if (cur.bucket) found = cur.bucket.find(function (x) { return x.id === itemId; });
         if (found) {
           found.qualifier = newId;
+          try {
+            var freeOpenN = state.activeNamedListId ? findNamedListById(state.activeNamedListId) : null;
+            recordCategoryUse(newId, activeEvent(), freeOpenN || (cur.free && cur.free.named) || null);
+            state.filterQualifier = newId;
+          } catch (eRec) {}
           if (cur.scope === 'group' && cur.ev) saveActiveEvent();
           else if (cur.free) {
-            if (cur.free.named) cur.free.named.updated_at = new Date().toISOString();
-            saveFreeListsStore(cur.free.store);
+            if (cur.free.named) {
+              cur.free.named.updated_at = new Date().toISOString();
+              saveNamedList(cur.free.named);
+            } else saveFreeListsStore(cur.free.store);
+          } else if (cur.named) {
+            saveNamedList(cur.named);
           }
         }
         render();

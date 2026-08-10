@@ -2736,6 +2736,35 @@
     #date-pick-modal {
       z-index: 31000 !important;
     }
+    /* Share list/event + Add members must sit above Edit list / Edit event */
+    #share-people-chooser,
+    #share-people-members {
+      z-index: 32000 !important;
+    }
+    #share-people-chooser .share-people-actions .btn,
+    #share-people-chooser .modal-actions .btn {
+      min-height: 48px;
+      padding: 14px 16px !important;
+      font-size: 15px !important;
+      font-weight: 800 !important;
+    }
+    #share-people-pick .share-person-btn {
+      min-height: 46px;
+      padding: 12px 12px !important;
+      justify-content: flex-start;
+      text-align: left;
+      width: 100%;
+      margin: 0 0 8px;
+      border: 1px solid var(--border);
+      transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
+    }
+    #share-people-pick .share-person-btn.is-selected {
+      border-color: var(--accent) !important;
+      background: linear-gradient(180deg, #3a4a28 0%, #2a3220 100%) !important;
+      box-shadow: 0 0 0 2px rgba(229, 154, 24, 0.45);
+      color: #fff !important;
+    }
+    #share-people-pick .share-person-btn.is-selected .muted { color: rgba(255,255,255,0.7) !important; }
     /* OCR review must sit above mobile list sheet (z 20000) and expense (#40) */
     #ocr-review-modal {
       z-index: 32000 !important;
@@ -2992,7 +3021,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.14</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.15</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -3670,13 +3699,13 @@
     </div>
   </div>
 
-  <!-- Share: Copy list/event → Copy code or Add members -->
+  <!-- Share: Share list/event → Copy code or Add members -->
   <div class="modal-overlay" id="share-people-chooser" aria-hidden="true">
     <div class="modal" role="dialog" style="max-width:360px">
-      <h3 id="share-people-title">Copy list</h3>
+      <h3 id="share-people-title">Share list</h3>
       <p class="muted" id="share-people-sub" style="font-size:12px;margin:0 0 12px">Share with others</p>
-      <div class="modal-actions" style="flex-direction:column;align-items:stretch;gap:8px">
-        <button type="button" class="btn btn-primary" id="share-people-copy" style="width:100%"><span id="share-people-copy-label">Copy</span></button>
+      <div class="modal-actions share-people-actions" style="flex-direction:column;align-items:stretch;gap:10px">
+        <button type="button" class="btn btn-primary" id="share-people-copy" style="width:100%"><span id="share-people-copy-label">Copy invite code</span></button>
         <button type="button" class="btn btn-accent" id="share-people-add" style="width:100%">Add members</button>
         <button type="button" class="btn" id="share-people-chooser-cancel" style="width:100%">Cancel</button>
       </div>
@@ -3684,15 +3713,16 @@
   </div>
   <div class="modal-overlay" id="share-people-members" aria-hidden="true">
     <div class="modal" role="dialog" style="max-width:380px">
-      <h3>Add members</h3>
-      <p class="muted" style="font-size:12px;margin:0 0 8px">People you’ve shared maps with on Hunt, Reg, or Plan — plus friends.</p>
+      <h3 id="share-people-members-title">Add members</h3>
+      <p class="muted" style="font-size:12px;margin:0 0 8px">Tap people to select them (they light up). Then tap <strong>Add</strong> — or tap outside this box.</p>
       <div class="field">
         <label for="share-people-search">Search</label>
         <input id="share-people-search" type="text" placeholder="Name or username" autocomplete="off" />
       </div>
       <div id="share-people-pick" style="max-height:240px;overflow:auto;margin:0 0 10px"></div>
-      <div class="modal-actions">
-        <button type="button" class="btn" id="share-people-members-cancel">Done</button>
+      <div class="modal-actions" style="flex-direction:column;align-items:stretch;gap:8px">
+        <button type="button" class="btn btn-primary" id="share-people-members-add" style="width:100%;min-height:48px;font-weight:800">Add</button>
+        <button type="button" class="btn" id="share-people-members-cancel" style="width:100%">Cancel</button>
       </div>
     </div>
   </div>

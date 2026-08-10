@@ -43,6 +43,31 @@
       gate.setAttribute('aria-hidden', show ? 'false' : 'true');
     }
     if (app) app.style.display = show ? 'none' : '';
+    try {
+      document.documentElement.classList.remove('ps-auth-booting');
+      if (show) {
+        document.documentElement.classList.remove('ps-session-hint');
+        document.documentElement.classList.add('ps-no-session-hint');
+      } else {
+        document.documentElement.classList.add('ps-session-hint');
+        document.documentElement.classList.remove('ps-no-session-hint');
+      }
+    } catch (eBoot) {}
+  }
+
+  /** True if localStorage already has a Supabase session (optimistic — hide login gate). */
+  function hasStoredSessionHint() {
+    try {
+      var keys = Object.keys(localStorage || {});
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (k.indexOf('sb-') === 0 && k.indexOf('auth-token') >= 0) {
+          var raw = localStorage.getItem(k);
+          if (raw && raw.length > 40 && raw.indexOf('access_token') >= 0) return true;
+        }
+      }
+    } catch (e) {}
+    return false;
   }
 
   async function loadProfile(uid) {
@@ -204,16 +229,38 @@
 
   async function boot() {
     wireAuthUi();
+    // Optimistic: if we already have a stored session, never flash the login form
+    if (hasStoredSessionHint()) {
+      setGateVisible(false);
+    } else {
+      // Keep gate closed during network check; only open after confirmed no session
+      try {
+        var gate0 = $('auth-gate');
+        if (gate0) {
+          gate0.classList.remove('is-open');
+          gate0.setAttribute('aria-hidden', 'true');
+        }
+      } catch (eG) {}
+    }
     try {
       await ensureClient();
-      sb.auth.onAuthStateChange(function () { refreshSession().catch(function () {}); });
+      sb.auth.onAuthStateChange(function (event, session) {
+        // Ignore INITIAL_SESSION noise if we already painted the app
+        refreshSession().catch(function () {});
+      });
       await refreshSession();
     } catch (e) {
       console.error(e);
-      setGateVisible(true);
-      setAuthError('Could not reach auth service. Check connection.');
-      if (authReadyResolve) authReadyResolve({ user: null, profile: null });
+      // Only show login if we do not already have a session user
+      if (!sessionUser && !hasStoredSessionHint()) {
+        setGateVisible(true);
+        setAuthError('Could not reach auth service. Check connection.');
+      } else {
+        setGateVisible(false);
+      }
+      if (authReadyResolve) authReadyResolve({ user: sessionUser, profile: profile });
     }
+    try { document.documentElement.classList.remove('ps-auth-booting'); } catch (eB) {}
     if ('serviceWorker' in navigator) {
       try { navigator.serviceWorker.register('./sw.js'); } catch (eS) {}
     }

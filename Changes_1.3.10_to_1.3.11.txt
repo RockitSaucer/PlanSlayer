@@ -1,0 +1,16 @@
+PlanSlayer V1.3.10 → V1.3.11
+============================
+
+1. Login flash
+- Auth gate no longer starts open.
+- Inline session hint: if Supabase token is already in localStorage, login form never paints.
+- Boot veil only; gate opens only when session is confirmed missing.
+
+2. Camera → list (handwriting) — real fix path
+- Client Tesseract cannot read handwriting reliably; prior patches could only polish junk.
+- New server route POST /api/ocr-list uses xAI vision (Grok) with image input.
+- Env: XAI_API_KEY on Vercel (required for handwriting). Optional XAI_OCR_MODEL.
+- UI: photo preview + single textarea (one item per line) + Dictate (Web Speech) + Add to list.
+- Falls back to Tesseract for print if AI key missing; always allows type/dictate.
+
+Version: 1.3.11 · shell plan-slayer-shell-v43

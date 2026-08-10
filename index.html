@@ -10,6 +10,29 @@
   <link rel="icon" type="image/png" href="./icons/app/plan-192.png" />
   <link rel="apple-touch-icon" href="./icons/app/plan-180.png" />
   <link rel="stylesheet" href="./vendor/leaflet/leaflet.css" />
+  <!-- Avoid login flash: if Supabase session exists, never paint the gate first -->
+  <script>
+    (function () {
+      try {
+        var hint = false;
+        var keys = Object.keys(localStorage || {});
+        for (var i = 0; i < keys.length; i++) {
+          var k = keys[i];
+          if (k.indexOf('sb-') === 0 && k.indexOf('auth-token') >= 0) {
+            var raw = localStorage.getItem(k);
+            if (raw && raw.length > 40 && raw.indexOf('access_token') >= 0) {
+              hint = true;
+              break;
+            }
+          }
+        }
+        document.documentElement.classList.add(hint ? 'ps-session-hint' : 'ps-no-session-hint');
+        document.documentElement.classList.add('ps-auth-booting');
+      } catch (e) {
+        document.documentElement.classList.add('ps-auth-booting');
+      }
+    })();
+  </script>
   <style>
     :root {
       --bg: #0a0c09; --panel: #161a12; --panel-light: #20261a; --accent: #e59a18;
@@ -2841,12 +2864,28 @@
     .cal-time { display: flex; gap: 8px; margin-top: 10px; }
     .cal-time input { flex: 1; }
 
-    /* Auth */
+    /* Auth — gate closed by default; only opens when session is confirmed missing */
     #auth-gate {
       display: none; position: fixed; inset: 0; z-index: 11000;
       background: rgba(8,10,7,0.94); align-items: center; justify-content: center; padding: 16px;
     }
     #auth-gate.is-open { display: flex; }
+    /* While booting: never flash login if we already have a session cookie in storage */
+    html.ps-auth-booting.ps-session-hint #auth-gate,
+    html.ps-auth-booting.ps-session-hint #auth-gate.is-open {
+      display: none !important;
+    }
+    /* Brief boot veil (not the login form) until auth resolves for cold visits */
+    html.ps-auth-booting::before {
+      content: '';
+      position: fixed; inset: 0; z-index: 10990;
+      background: #0a0c09;
+      pointer-events: none;
+      opacity: 0.35;
+      transition: opacity 0.15s ease;
+    }
+    html.ps-session-hint.ps-auth-booting::before { opacity: 0; }
+    html:not(.ps-auth-booting)::before { display: none !important; content: none !important; }
     .auth-card {
       width: min(400px, 100%); background: var(--panel); border: 1px solid var(--border);
       border-radius: 14px; padding: 20px;
@@ -2903,7 +2942,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.10</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.11</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -3483,19 +3522,29 @@
       </div>
     </div>
   </div>
-  <!-- Photo OCR review: confirm lines before adding to list (#39) -->
+  <!-- Photo / dictate → list lines (vision AI primary; edit before add) -->
   <div class="modal-overlay" id="ocr-review-modal" aria-hidden="true">
-    <div class="modal" role="dialog" aria-labelledby="ocr-review-title" style="max-width:420px">
-      <h3 id="ocr-review-title">Add from photo?</h3>
-      <p class="muted" id="ocr-review-sub" style="font-size:12px;margin:0 0 10px">Uncheck junk, edit words, then add selected.</p>
-      <ul class="ocr-review-list" id="ocr-review-list"></ul>
+    <div class="modal" role="dialog" aria-labelledby="ocr-review-title" style="max-width:440px">
+      <h3 id="ocr-review-title">Add to list</h3>
+      <p class="muted" id="ocr-review-sub" style="font-size:12px;margin:0 0 10px">One item per line. Edit anything before adding.</p>
+      <div id="ocr-preview-wrap" style="display:none;margin:0 0 10px">
+        <img id="ocr-preview-img" alt="Photo preview" style="max-width:100%;max-height:140px;border-radius:8px;border:1px solid var(--border);object-fit:contain;background:#000" />
+      </div>
+      <div class="field" style="margin-bottom:8px">
+        <label for="ocr-review-text">Items (one per line)</label>
+        <textarea id="ocr-review-text" rows="8" placeholder="chips&#10;soda&#10;ice" style="width:100%;resize:vertical;min-height:120px;font-size:15px;line-height:1.4"></textarea>
+      </div>
+      <p class="muted" id="ocr-review-status" style="font-size:11px;margin:0 0 10px"></p>
       <div class="modal-actions" style="flex-wrap:wrap;gap:8px">
         <button type="button" class="btn" id="ocr-review-cancel">Cancel</button>
-        <button type="button" class="btn" id="ocr-review-all">Select all</button>
-        <button type="button" class="btn btn-primary" id="ocr-review-add">Add selected</button>
+        <button type="button" class="btn" id="ocr-review-dictate" title="Speak list items">Dictate</button>
+        <button type="button" class="btn" id="ocr-review-retake">New photo</button>
+        <button type="button" class="btn btn-primary" id="ocr-review-add">Add to list</button>
       </div>
     </div>
   </div>
+  <!-- legacy list container kept empty for older code paths -->
+  <ul class="ocr-review-list" id="ocr-review-list" style="display:none" hidden></ul>
   <div id="app-toast" style="display:none;position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:12000;background:rgba(22,26,18,0.96);border:1px solid var(--border);color:var(--ink);padding:10px 16px;border-radius:10px;font-size:13px;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,0.45);max-width:90%;text-align:center"></div>
 
   <!-- Create list (My lists) -->
@@ -3853,7 +3902,8 @@
     </div>
   </div>
 
-  <div id="auth-gate" class="is-open" aria-hidden="false">
+  <!-- Gate starts CLOSED — auth.js only opens it when there is no session (no login flash) -->
+  <div id="auth-gate" aria-hidden="true">
     <div class="auth-card">
       <h2>PLAN SLAYER</h2>
       <p class="auth-sub">Same account as Hunt Slayer &amp; Reg Slayer.</p>

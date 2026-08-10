@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.10';
+  var APP_VERSION = '1.3.11';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -6423,6 +6423,7 @@
   }
 
   var _ocrReviewCtx = null;
+  var _ocrDictateRec = null;
 
   function closeOcrReviewModal() {
     var modal = $('ocr-review-modal');
@@ -6430,61 +6431,74 @@
       modal.classList.remove('is-open');
       modal.setAttribute('aria-hidden', 'true');
     }
+    stopOcrDictate();
     _ocrReviewCtx = null;
   }
 
+  function setOcrStatus(msg) {
+    var el = $('ocr-review-status');
+    if (el) el.textContent = msg || '';
+  }
+
+  function setOcrPreview(dataUrl) {
+    var wrap = $('ocr-preview-wrap');
+    var img = $('ocr-preview-img');
+    if (!wrap || !img) return;
+    if (dataUrl) {
+      img.src = dataUrl;
+      wrap.style.display = '';
+    } else {
+      img.removeAttribute('src');
+      wrap.style.display = 'none';
+    }
+  }
+
+  /**
+   * Review UI: one textarea, one item per line (no empty checkbox junk).
+   * lines: string[]  preview: optional data URL
+   */
   function openOcrReviewModal(lines, ctx) {
     _ocrReviewCtx = ctx || {};
     var modal = $('ocr-review-modal');
-    var listEl = $('ocr-review-list');
-    // Never show blank checkbox rows (#48)
+    var ta = $('ocr-review-text');
+    if (!modal) {
+      if (lines && lines.length) applyOcrLines(lines, _ocrReviewCtx);
+      else appToast('Could not open review');
+      return;
+    }
     lines = (lines || []).map(function (l) {
       return String(l || '').replace(/[\u0000-\u001F\u007F]/g, '').trim();
     }).filter(function (l) {
-      return l.length >= 2 && ocrLineLooksReal(l);
+      return l.length >= 1 && /[A-Za-z0-9]/.test(l);
     });
-    if (!modal || !listEl) {
-      if (lines.length) applyOcrLines(lines, _ocrReviewCtx);
-      else appToast('No readable words — try darker pen / better light');
-      return;
-    }
-    if (!lines.length) {
-      listEl.innerHTML =
-        '<li class="ocr-review-row" style="display:block;padding:8px 0">' +
-        '<p class="muted" style="margin:0 0 8px;font-size:12px">Couldn’t read clear words. Type lines below, or retake with better light / darker ink.</p>' +
-        '<input type="text" class="ocr-txt ocr-manual" placeholder="Type an item…" style="width:100%" />' +
-        '</li>';
-      if ($('ocr-review-sub')) {
-        $('ocr-review-sub').textContent = 'No OCR hits — type items manually, then Add selected.';
-      }
-      modal.classList.add('is-open');
-      modal.setAttribute('aria-hidden', 'false');
-      return;
-    }
-    listEl.innerHTML = lines.map(function (line, idx) {
-      var strong = ocrLineIsStrong(line);
-      return '<li class="ocr-review-row" data-ocr-idx="' + idx + '">' +
-        '<input type="checkbox" class="ocr-ck"' + (strong ? ' checked' : '') + ' />' +
-        '<input type="text" class="ocr-txt" value="' + esc(line) + '" />' +
-        '<button type="button" class="ocr-rm" title="Remove" aria-label="Remove">×</button>' +
-        '</li>';
-    }).join('') +
-      '<li class="ocr-review-row" data-ocr-manual="1">' +
-      '<input type="checkbox" class="ocr-ck" checked />' +
-      '<input type="text" class="ocr-txt ocr-manual" placeholder="+ type extra line…" value="" />' +
-      '<button type="button" class="ocr-rm" title="Remove" aria-label="Remove">×</button>' +
-      '</li>';
+    if (ta) ta.value = lines.join('\n');
+    setOcrPreview(ctx && ctx.previewUrl ? ctx.previewUrl : null);
     if ($('ocr-review-sub')) {
       $('ocr-review-sub').textContent =
         (ctx && ctx.mode === 'note')
-          ? 'Edit text, then Add selected to append to the note.'
-          : 'Uncheck junk, fix words, then Add selected. Empty lines are ignored.';
+          ? 'Edit lines, then Add to append to the note.'
+          : 'One item per line. Fix any mistakes, then Add to list.';
     }
+    if (ctx && ctx.status) setOcrStatus(ctx.status);
+    else if (lines.length) setOcrStatus(lines.length + ' line' + (lines.length === 1 ? '' : 's') + ' ready — edit if needed.');
+    else setOcrStatus('No auto-read yet — type or use Dictate, then Add.');
     modal.classList.add('is-open');
     modal.setAttribute('aria-hidden', 'false');
+    try { if (ta) ta.focus(); } catch (eF) {}
   }
 
   function collectOcrReviewSelected() {
+    var ta = $('ocr-review-text');
+    if (ta && ta.value != null) {
+      return String(ta.value || '')
+        .replace(/\r/g, '\n')
+        .split(/\n+/)
+        .map(function (l) { return l.replace(/^[\s•\-\*\u2022·▪◦\d\.\)\(]+/, '').trim(); })
+        .filter(function (l) {
+          return l.length >= 1 && l.length <= 80 && /[A-Za-z0-9]/.test(l);
+        });
+    }
+    // legacy checkbox path
     var listEl = $('ocr-review-list');
     if (!listEl) return [];
     var out = [];
@@ -6493,9 +6507,85 @@
       var txt = row.querySelector('.ocr-txt');
       if (ck && !ck.checked) return;
       var v = txt ? String(txt.value || '').trim() : '';
-      if (v.length >= 2 && ocrLineLooksReal(v)) out.push(v);
+      if (v.length >= 1 && /[A-Za-z0-9]/.test(v)) out.push(v);
     });
     return out;
+  }
+
+  function stopOcrDictate() {
+    try {
+      if (_ocrDictateRec) {
+        _ocrDictateRec.onresult = null;
+        _ocrDictateRec.onerror = null;
+        _ocrDictateRec.onend = null;
+        _ocrDictateRec.stop();
+      }
+    } catch (e) {}
+    _ocrDictateRec = null;
+    var b = $('ocr-review-dictate');
+    if (b) b.textContent = 'Dictate';
+  }
+
+  function startOcrDictate() {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      appToast('Dictate not supported on this browser — type instead');
+      return;
+    }
+    stopOcrDictate();
+    var rec = new SR();
+    _ocrDictateRec = rec;
+    rec.lang = 'en-US';
+    rec.continuous = true;
+    rec.interimResults = false;
+    var btn = $('ocr-review-dictate');
+    if (btn) btn.textContent = 'Listening…';
+    setOcrStatus('Listening — speak list items, pause between each…');
+    rec.onresult = function (ev) {
+      var ta = $('ocr-review-text');
+      if (!ta) return;
+      var chunk = '';
+      for (var i = ev.resultIndex; i < ev.results.length; i++) {
+        if (ev.results[i].isFinal) chunk += (ev.results[i][0].transcript || '') + '\n';
+      }
+      chunk = chunk.trim();
+      if (!chunk) return;
+      // Split spoken "chips, soda and ice" into lines
+      var bits = chunk.split(/[,;]|\band\b/i).map(function (s) { return s.trim(); }).filter(Boolean);
+      var cur = ta.value ? ta.value.replace(/\s+$/, '') + '\n' : '';
+      ta.value = cur + bits.join('\n');
+      setOcrStatus('Added speech — keep talking or tap Add to list');
+    };
+    rec.onerror = function () {
+      stopOcrDictate();
+      setOcrStatus('Dictate stopped');
+    };
+    rec.onend = function () {
+      if (btn) btn.textContent = 'Dictate';
+      _ocrDictateRec = null;
+    };
+    try { rec.start(); } catch (eS) {
+      stopOcrDictate();
+      appToast('Could not start microphone');
+    }
+  }
+
+  /** Call server vision OCR (xAI). Returns { lines, engine } or throws. */
+  function ocrViaVisionApi(dataUrl) {
+    return fetch('/api/ocr-list', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: dataUrl })
+    }).then(function (res) {
+      return res.json().then(function (j) {
+        if (!res.ok || !j || !j.ok) {
+          var err = new Error((j && j.error) || ('OCR API ' + res.status));
+          err.code = j && j.code;
+          throw err;
+        }
+        return j;
+      });
+    });
   }
 
   function applyOcrLines(items, ctx) {
@@ -6580,24 +6670,21 @@
       if (el) el.addEventListener('click', fn);
     }
     bind('ocr-review-cancel', function () { closeOcrReviewModal(); });
-    bind('ocr-review-all', function () {
-      var listEl = $('ocr-review-list');
-      if (!listEl) return;
-      listEl.querySelectorAll('.ocr-ck').forEach(function (ck) { ck.checked = true; });
-    });
     bind('ocr-review-add', function () {
       var selected = collectOcrReviewSelected();
       applyOcrLines(selected, _ocrReviewCtx);
     });
-    var listEl = $('ocr-review-list');
-    if (listEl) {
-      listEl.addEventListener('click', function (e) {
-        var rm = e.target.closest && e.target.closest('.ocr-rm');
-        if (!rm) return;
-        var row = rm.closest('.ocr-review-row');
-        if (row) row.remove();
-      });
-    }
+    bind('ocr-review-dictate', function () {
+      if (_ocrDictateRec) stopOcrDictate();
+      else startOcrDictate();
+    });
+    bind('ocr-review-retake', function () {
+      var ctx = _ocrReviewCtx || {};
+      closeOcrReviewModal();
+      setTimeout(function () {
+        runListPhotoOcr({ mode: ctx.mode || 'items', colId: ctx.colId, isEvent: ctx.isEvent });
+      }, 80);
+    });
     var modal = $('ocr-review-modal');
     if (modal) {
       modal.addEventListener('click', function (e) {
@@ -6668,84 +6755,121 @@
       try { inp.value = ''; } catch (eV) {}
 
       fileToOcrJpegDataUrl(held).then(function (urls) {
-        // Dual-pass: mild (pencil) + ink (dark pen) — merge real lines (#48)
-        var mildUrl = (urls && urls.mild) || urls;
+        var mildUrl = (urls && urls.mild) || (urls && urls.primary) || urls;
         var inkUrl = (urls && urls.ink) || mildUrl;
-        if (typeof mildUrl === 'object' && mildUrl.primary) mildUrl = mildUrl.primary;
-        appToast('Reading words…');
-        function ocrOne(T, dataUrl) {
-          if (T.createWorker) {
-            return T.createWorker('eng', 1, {
-              workerPath: TESSERACT_CDN + '/worker.min.js',
-              corePath: TESSERACT_CORE_CDN,
-              langPath: TESSERACT_LANG_CDN,
-              logger: function () {}
-            }).then(function (worker) {
-              return worker.setParameters({
-                tessedit_pageseg_mode: '6',
-                preserve_interword_spaces: '1'
-              }).then(function () {
-                return worker.recognize(dataUrl).then(function (result) {
-                  return worker.terminate().then(function () { return result; }, function () { return result; });
+        if (typeof mildUrl !== 'string') mildUrl = urls && urls.primary;
+        var preview = mildUrl;
+        appToast('Reading handwriting…');
+        wireOcrReviewModal();
+
+        // 1) Primary: xAI vision (actually reads handwriting)
+        return ocrViaVisionApi(mildUrl).then(function (j) {
+          var items = (j.lines || []).slice(0, 40);
+          return {
+            items: items,
+            engine: j.engine || 'xai',
+            previewUrl: preview,
+            status: items.length
+              ? ('Read ' + items.length + ' item' + (items.length === 1 ? '' : 's') + ' with AI — edit if needed.')
+              : 'AI saw no clear items — type or Dictate below.'
+          };
+        }).catch(function (apiErr) {
+          console.warn('Vision OCR', apiErr);
+          // 2) Fallback: Tesseract (print only; weak on handwriting)
+          setOcrStatus('AI OCR unavailable — trying basic reader…');
+          return loadTesseractLib().then(function (T) {
+            function ocrOne(dataUrl) {
+              if (T.createWorker) {
+                return T.createWorker('eng', 1, {
+                  workerPath: TESSERACT_CDN + '/worker.min.js',
+                  corePath: TESSERACT_CORE_CDN,
+                  langPath: TESSERACT_LANG_CDN,
+                  logger: function () {}
+                }).then(function (worker) {
+                  return worker.setParameters({
+                    tessedit_pageseg_mode: '6',
+                    preserve_interword_spaces: '1'
+                  }).then(function () {
+                    return worker.recognize(dataUrl).then(function (result) {
+                      return worker.terminate().then(function () { return result; }, function () { return result; });
+                    });
+                  });
                 });
+              }
+              return T.recognize(dataUrl, 'eng', {
+                workerPath: TESSERACT_CDN + '/worker.min.js',
+                corePath: TESSERACT_CORE_CDN,
+                langPath: TESSERACT_LANG_CDN,
+                logger: function () {}
+              });
+            }
+            return ocrOne(mildUrl).then(function (r1) {
+              var t1 = (r1 && r1.data && r1.data.text) || '';
+              var firstItems = splitOcrToListItems(t1);
+              if (firstItems.length >= 2) {
+                return {
+                  items: firstItems,
+                  engine: 'tesseract',
+                  previewUrl: preview,
+                  status: 'Basic OCR (best for print). For handwriting set XAI_API_KEY on Vercel. Edit or Dictate.'
+                };
+              }
+              return ocrOne(inkUrl).then(function (r2) {
+                var t2 = (r2 && r2.data && r2.data.text) || '';
+                var merged = mergeOcrLineLists(firstItems, splitOcrToListItems(t2));
+                return {
+                  items: merged,
+                  engine: 'tesseract',
+                  previewUrl: preview,
+                  status: merged.length
+                    ? 'Basic OCR result — fix lines or use Dictate (handwriting needs AI key).'
+                    : 'Could not read handwriting. Type lines or tap Dictate. (Deploy with XAI_API_KEY for AI read.)'
+                };
               });
             });
-          }
-          return T.recognize(dataUrl, 'eng', {
-            workerPath: TESSERACT_CDN + '/worker.min.js',
-            corePath: TESSERACT_CORE_CDN,
-            langPath: TESSERACT_LANG_CDN,
-            logger: function () {}
-          });
-        }
-        return loadTesseractLib().then(function (T) {
-          return ocrOne(T, mildUrl).then(function (r1) {
-            var t1 = (r1 && r1.data && r1.data.text) || '';
-            // Second pass only if first is weak
-            var firstItems = splitOcrToListItems(t1);
-            if (firstItems.length >= 3 || mildUrl === inkUrl) {
-              return { text: t1, items: firstItems, chars: String(t1).replace(/\s/g, '').length };
-            }
-            return ocrOne(T, inkUrl).then(function (r2) {
-              var t2 = (r2 && r2.data && r2.data.text) || '';
-              var merged = mergeOcrLineLists(firstItems, splitOcrToListItems(t2));
-              return {
-                text: t1 + '\n' + t2,
-                items: merged,
-                chars: String(t1 + t2).replace(/\s/g, '').length
-              };
-            });
+          }).catch(function () {
+            return {
+              items: [],
+              engine: 'none',
+              previewUrl: preview,
+              status: 'Could not read photo. Type items or use Dictate.'
+            };
           });
         });
       }).then(function (pack) {
         if (!pack) return;
         var items = pack.items || [];
-        try {
-          console.info('[PlanSlayer OCR] chars=', pack.chars, 'lines=', items.length, 'sample=', (pack.text || '').slice(0, 120));
-        } catch (eLog) {}
-        if (!items.length) {
-          // Still open modal so user can type lines manually
-          appToast('No clear words — type items in the review box');
-          wireOcrReviewModal();
-          openOcrReviewModal([], { mode: mode, colId: colId, isEvent: isEvent });
-          return;
-        }
-        // If OCR produced lots of junk vs a few strong words, keep strong only for review
-        var strongOnly = items.filter(ocrLineIsStrong);
-        if (strongOnly.length >= 1 && items.length > Math.max(6, strongOnly.length * 2)) {
-          items = strongOnly;
-        }
         if (items.length > 20) items = items.slice(0, 20);
-        appToast('Review ' + items.length + ' line' + (items.length === 1 ? '' : 's') + '…');
-        wireOcrReviewModal();
-        openOcrReviewModal(items, { mode: mode, colId: colId, isEvent: isEvent });
+        try {
+          console.info('[PlanSlayer OCR]', pack.engine, 'lines=', items.length);
+        } catch (eLog) {}
+        openOcrReviewModal(items, {
+          mode: mode,
+          colId: colId,
+          isEvent: isEvent,
+          previewUrl: pack.previewUrl,
+          status: pack.status
+        });
+        if (items.length) {
+          appToast('Review ' + items.length + ' line' + (items.length === 1 ? '' : 's'));
+        } else {
+          appToast('Type or Dictate your list items');
+        }
       }).catch(function (err) {
         console.warn('OCR', err);
         var msg = (err && err.message) ? String(err.message) : 'Could not read photo';
         if (/network|load|cdn|Failed to fetch|CORS/i.test(msg)) {
-          msg = 'OCR needs network once (blocked or offline). Check connection and retry.';
+          msg = 'Need network to read photo. Check connection and retry.';
         }
         appToast(msg, 5000);
+        // Still open empty review so user can dictate/type
+        wireOcrReviewModal();
+        openOcrReviewModal([], {
+          mode: mode,
+          colId: colId,
+          isEvent: isEvent,
+          status: msg
+        });
       });
     };
     try {

@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.6';
+  var APP_VERSION = '1.3.7';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -6130,25 +6130,46 @@
     appToast('Added ' + name);
   }
 
-  /** Load Tesseract.js once (CDN) for photo → text (#35) */
+  /** Tesseract CDN base (#35 / #38) — explicit worker paths for mobile */
+  var TESSERACT_CDN = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist';
+  var TESSERACT_CORE_CDN = 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/tesseract-core-simd-lstm.wasm.js';
+  var TESSERACT_LANG_CDN = 'https://tessdata.projectnaptha.com/4.0.0';
+
+  /** Load Tesseract.js once (CDN) for photo → text */
   function loadTesseractLib() {
     return new Promise(function (resolve, reject) {
       if (window.Tesseract) return resolve(window.Tesseract);
       var existing = document.querySelector('script[data-tesseract]');
       if (existing) {
-        existing.addEventListener('load', function () { resolve(window.Tesseract); });
-        existing.addEventListener('error', function () { reject(new Error('OCR load failed')); });
+        var wait = 0;
+        var t = setInterval(function () {
+          wait += 100;
+          if (window.Tesseract) {
+            clearInterval(t);
+            resolve(window.Tesseract);
+          } else if (wait > 20000) {
+            clearInterval(t);
+            reject(new Error('OCR load timed out'));
+          }
+        }, 100);
+        existing.addEventListener('error', function () {
+          clearInterval(t);
+          reject(new Error('OCR load failed'));
+        });
         return;
       }
       var s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+      s.src = TESSERACT_CDN + '/tesseract.min.js';
       s.async = true;
+      s.crossOrigin = 'anonymous';
       s.setAttribute('data-tesseract', '1');
       s.onload = function () {
         if (window.Tesseract) resolve(window.Tesseract);
-        else reject(new Error('OCR not available'));
+        else reject(new Error('OCR not available after load'));
       };
-      s.onerror = function () { reject(new Error('OCR library failed to load (need network once)')); };
+      s.onerror = function () {
+        reject(new Error('OCR library failed to load — need network once (cdn.jsdelivr.net)'));
+      };
       document.head.appendChild(s);
     });
   }
@@ -6166,6 +6187,105 @@
     return inp;
   }
 
+  /**
+   * Rasterize any camera/gallery file to JPEG data URL for Tesseract.
+   * Fixes HEIC/HEIF phones where raw File often fails OCR (#38).
+   */
+  function fileToOcrJpegDataUrl(file) {
+    return new Promise(function (resolve, reject) {
+      if (!file) {
+        reject(new Error('No photo selected'));
+        return;
+      }
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var w = img.naturalWidth || img.width || 0;
+          var h = img.naturalHeight || img.height || 0;
+          if (!w || !h) {
+            URL.revokeObjectURL(url);
+            reject(new Error('Could not read image dimensions'));
+            return;
+          }
+          var maxEdge = 1600;
+          var scale = 1;
+          if (Math.max(w, h) > maxEdge) scale = maxEdge / Math.max(w, h);
+          var cw = Math.max(1, Math.round(w * scale));
+          var ch = Math.max(1, Math.round(h * scale));
+          var canvas = document.createElement('canvas');
+          canvas.width = cw;
+          canvas.height = ch;
+          var ctx = canvas.getContext('2d');
+          if (!ctx) {
+            URL.revokeObjectURL(url);
+            reject(new Error('Canvas not available'));
+            return;
+          }
+          // White background helps dark/transparent photos
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, cw, ch);
+          ctx.drawImage(img, 0, 0, cw, ch);
+          var dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+          URL.revokeObjectURL(url);
+          if (!dataUrl || dataUrl.length < 100) {
+            reject(new Error('Could not convert photo for OCR'));
+            return;
+          }
+          resolve(dataUrl);
+        } catch (eDraw) {
+          try { URL.revokeObjectURL(url); } catch (eU) {}
+          reject(eDraw || new Error('Image convert failed'));
+        }
+      };
+      img.onerror = function () {
+        try { URL.revokeObjectURL(url); } catch (eU2) {}
+        // Fallback: FileReader as data URL (some HEIC browsers still fail)
+        try {
+          var fr = new FileReader();
+          fr.onload = function () {
+            var raw = fr.result;
+            if (typeof raw === 'string' && raw.indexOf('data:') === 0) {
+              // Try loading again via Image from data URL
+              var img2 = new Image();
+              img2.onload = function () {
+                try {
+                  var w2 = img2.naturalWidth || img2.width;
+                  var h2 = img2.naturalHeight || img2.height;
+                  var maxE = 1600;
+                  var sc = Math.max(w2, h2) > maxE ? maxE / Math.max(w2, h2) : 1;
+                  var c2 = document.createElement('canvas');
+                  c2.width = Math.max(1, Math.round(w2 * sc));
+                  c2.height = Math.max(1, Math.round(h2 * sc));
+                  var x2 = c2.getContext('2d');
+                  x2.fillStyle = '#fff';
+                  x2.fillRect(0, 0, c2.width, c2.height);
+                  x2.drawImage(img2, 0, 0, c2.width, c2.height);
+                  resolve(c2.toDataURL('image/jpeg', 0.92));
+                } catch (e2) {
+                  reject(new Error('Phone photo format not supported — try Gallery JPG'));
+                }
+              };
+              img2.onerror = function () {
+                reject(new Error('Could not open photo (try Gallery, or retake as JPG)'));
+              };
+              img2.src = raw;
+            } else {
+              reject(new Error('Could not open photo'));
+            }
+          };
+          fr.onerror = function () {
+            reject(new Error('Could not open photo'));
+          };
+          fr.readAsDataURL(file);
+        } catch (eFr) {
+          reject(new Error('Could not open photo (HEIC?). Use gallery JPG if possible'));
+        }
+      };
+      img.src = url;
+    });
+  }
+
   function splitOcrToListItems(text) {
     text = String(text || '').replace(/\r/g, '\n');
     var lines = text.split(/\n+/).map(function (l) {
@@ -6173,8 +6293,9 @@
     }).filter(Boolean);
     var items = [];
     lines.forEach(function (line) {
-      if (/;|\s{2,}/.test(line)) {
-        line.split(/;|\s{2,}/).forEach(function (p) {
+      // Prefer bullet/line splits; also split long lines on commas if many words
+      if (/;|\s{2,}|\t/.test(line)) {
+        line.split(/;|\t|\s{2,}/).forEach(function (p) {
           p = String(p || '').trim();
           if (p.length >= 2) items.push(p);
         });
@@ -6182,7 +6303,43 @@
         items.push(line);
       }
     });
-    return items;
+    // Dedupe consecutive identical lines (OCR noise)
+    var out = [];
+    items.forEach(function (it) {
+      if (!out.length || out[out.length - 1].toLowerCase() !== it.toLowerCase()) out.push(it);
+    });
+    return out;
+  }
+
+  function resolveOcrTargetList() {
+    var list = null;
+    try {
+      if (state.activeNamedListId) list = findNamedListById(state.activeNamedListId);
+    } catch (e0) {}
+    if (!list) {
+      try {
+        var triad = document.getElementById('list-triad');
+        if (triad && triad.getAttribute('data-list-id')) {
+          list = findNamedListById(triad.getAttribute('data-list-id'));
+        }
+      } catch (e1) {}
+    }
+    if (!list) {
+      try {
+        var open = resolveOpenNamedList(document.getElementById('ev-list') || document.body);
+        if (open) list = open;
+      } catch (e2) {}
+    }
+    if (!list) {
+      try {
+        var ev = activeEvent();
+        if (ev) {
+          var linked = listsForEvent(ev.id);
+          if (linked && linked.length) list = findNamedListById(linked[0].id) || linked[0];
+        }
+      } catch (e3) {}
+    }
+    return list || null;
   }
 
   function runListPhotoOcr(opts) {
@@ -6190,17 +6347,42 @@
     var mode = opts.mode || 'items'; // items | note
     var colId = opts.colId || null;
     var isEvent = !!opts.isEvent;
+    if (mode === 'items' && !colId) {
+      appToast('Open a list section first');
+      return;
+    }
+    if (mode === 'items' && !isEvent) {
+      var preList = resolveOcrTargetList();
+      if (!preList && !activeEvent()) {
+        appToast('Open a list first, then use the camera');
+        return;
+      }
+    }
     var inp = ensureOcrFileInput();
+    // Avoid stacking handlers if user taps camera twice
+    inp.onchange = null;
     inp.onchange = function () {
       var file = inp.files && inp.files[0];
+      // Do not clear value until we hold the File (some mobile browsers)
+      if (!file) {
+        try { inp.value = ''; } catch (eV0) {}
+        return;
+      }
+      appToast('Preparing photo…');
+      var held = file;
       try { inp.value = ''; } catch (eV) {}
-      if (!file) return;
-      appToast('Reading photo…');
-      var url = URL.createObjectURL(file);
-      loadTesseractLib().then(function (T) {
-        return T.recognize(url, 'eng');
+
+      fileToOcrJpegDataUrl(held).then(function (dataUrl) {
+        appToast('Reading words…');
+        return loadTesseractLib().then(function (T) {
+          return T.recognize(dataUrl, 'eng', {
+            workerPath: TESSERACT_CDN + '/worker.min.js',
+            corePath: TESSERACT_CORE_CDN,
+            langPath: TESSERACT_LANG_CDN,
+            logger: function () { /* quiet */ }
+          });
+        });
       }).then(function (result) {
-        try { URL.revokeObjectURL(url); } catch (eU) {}
         var text = result && result.data && result.data.text;
         if (!text || !String(text).trim()) {
           appToast('No words found — try better light / closer photo');
@@ -6217,6 +6399,20 @@
           var chunk = String(text).trim();
           ta.value = cur ? (cur.replace(/\s+$/, '') + '\n' + chunk) : chunk;
           try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch (eI) {}
+          // Persist if possible
+          try {
+            var row = ta.closest('.list-item');
+            if (row) {
+              var id = row.getAttribute('data-item-id');
+              var kind = row.getAttribute('data-kind');
+              var scope = row.getAttribute('data-scope') || 'free-list';
+              var item = findItemFromRow(row);
+              if (item) {
+                applyNoteFromDetail(item, ta.value);
+                persistItemByMeta(kind, scope, id, row);
+              }
+            }
+          } catch (eP) {}
           appToast('Note text added from photo');
           return;
         }
@@ -6225,47 +6421,57 @@
           appToast('No list lines found in photo');
           return;
         }
+        appToast('Found ' + items.length + ' line' + (items.length === 1 ? '' : 's') + '…');
         var added = 0;
-        var list = findNamedListById(state.activeNamedListId);
-        if (!list) {
-          try {
-            var triad = document.getElementById('list-triad');
-            if (triad && triad.getAttribute('data-list-id')) {
-              list = findNamedListById(triad.getAttribute('data-list-id'));
-            }
-          } catch (eL) {}
-        }
+        var list = resolveOcrTargetList();
+        var ev = activeEvent();
+
         items.forEach(function (title) {
           title = autoCap(String(title || '').trim());
-          if (!title) return;
-          if (list && colId && !isEvent) {
-            if (addItemToListColumn(list, colId, title)) added++;
-          } else if (colId) {
-            var ev = activeEvent();
-            if (ev) {
-              try {
-                getListBucket(ev, colId, 'group').push(newItem(title));
-                added++;
-              } catch (eA) {}
-            } else if (list && addItemToListColumn(list, colId, title)) {
+          if (!title || title.length < 2) return;
+          // Prefer named list column
+          if (list && colId) {
+            if (addItemToListColumn(list, colId, title)) {
               added++;
+              // refresh live list pointer after first save
+              try { list = resolveOcrTargetList() || list; } catch (eL2) {}
             }
+          } else if (colId && ev) {
+            try {
+              var bucket = getListBucket(ev, colId, 'group');
+              if (bucket) {
+                bucket.push(newItem(title));
+                added++;
+              }
+            } catch (eA) {}
           }
         });
         if (list) {
-          try { saveNamedList(list); } catch (eS) {}
-        } else if (activeEvent()) {
+          try { saveNamedList(resolveOcrTargetList() || list); } catch (eS) {}
+        } else if (ev && added) {
           try { saveActiveEvent(); } catch (eS2) {}
         }
         try { render(); } catch (eR) {}
-        appToast(added ? ('Added ' + added + ' item' + (added === 1 ? '' : 's') + ' from photo') : 'Could not add items');
+        if (added) {
+          var preview = items.slice(0, 3).map(function (x) { return autoCap(x); }).join(' · ');
+          appToast('Added ' + added + ' item' + (added === 1 ? '' : 's') + (preview ? ': ' + preview : ''), 4500);
+        } else if (!list && !ev) {
+          appToast('Open a list first, then try the camera again');
+        } else {
+          appToast('Read text but could not add — try again on an open list');
+        }
       }).catch(function (err) {
-        try { URL.revokeObjectURL(url); } catch (eU2) {}
         console.warn('OCR', err);
-        appToast((err && err.message) || 'Could not read photo');
+        var msg = (err && err.message) ? String(err.message) : 'Could not read photo';
+        if (/network|load|cdn|Failed to fetch|CORS/i.test(msg)) {
+          msg = 'OCR needs network once (blocked or offline). Check connection and retry.';
+        }
+        appToast(msg, 5000);
       });
     };
-    try { inp.click(); } catch (eClick) {
+    try {
+      inp.click();
+    } catch (eClick) {
       appToast('Camera / file picker not available');
     }
   }
@@ -6790,6 +6996,8 @@
           // Local static serve has no /api — give a clear hint
           if (r.res.status === 404 || r.res.status === 405) {
             err = 'Report API not available on this host. Deploy to Vercel (with GITHUB_ISSUE_TOKEN) or file on GitHub.';
+          } else if (r.res.status === 503 || /GITHUB_ISSUE_TOKEN|not configured/i.test(err)) {
+            err = 'Server missing GITHUB_ISSUE_TOKEN. On Vercel → PlanSlayer → Env: add a GitHub PAT with issues:write on Hunt-Slayer, then Redeploy.';
           }
           setStatus(err, 'err');
           submit.disabled = false;

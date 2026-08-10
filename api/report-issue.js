@@ -90,7 +90,7 @@ module.exports = async function handler(req, res) {
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({
       ok: false,
-      error: 'Issue reporting is not configured (missing GITHUB_ISSUE_TOKEN on server).'
+      error: 'Issue reporting is not configured on the server. Set Vercel env GITHUB_ISSUE_TOKEN (GitHub PAT with issues:write on RockitSaucer/Hunt-Slayer) and redeploy PlanSlayer.'
     }));
     return;
   }

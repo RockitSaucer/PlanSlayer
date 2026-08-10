@@ -1,0 +1,7 @@
+﻿V1.3.7 — #38 camera OCR reliability + report-issue message
+
+- Rasterize camera/gallery photo to JPEG canvas before OCR (HEIC-friendly when browser can decode)
+- Explicit Tesseract worker/lang CDN paths; clearer progress/error toasts
+- Hardened list resolution before adding OCR lines
+- Report-issue API error text explains Vercel GITHUB_ISSUE_TOKEN setup (Hunt-Slayer inbox)
+- shell v39

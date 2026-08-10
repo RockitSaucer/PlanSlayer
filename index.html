@@ -2091,19 +2091,23 @@
       flex-wrap: wrap;
       gap: 6px;
       align-items: center;
-      margin: 0 0 8px;
+      margin: 0 0 10px;
       position: relative;
-      z-index: 5;
+      z-index: 8;
       flex: 0 0 auto;
-      min-height: 34px;
-      padding: 2px 0;
+      min-height: 36px;
+      padding: 4px 0 6px;
       overflow: visible;
+      clear: both;
+      width: 100%;
+      box-sizing: border-box;
     }
     #qualifier-filters .filter-chip {
       flex: 0 0 auto;
       position: relative;
-      z-index: 6;
+      z-index: 9;
       white-space: nowrap;
+      max-width: none;
     }
     #qualifier-filters #btn-add-list-column {
       margin-right: 4px;
@@ -2113,28 +2117,88 @@
       padding: 2px 6px !important;
       margin: 0 2px 0 0 !important;
       display: inline-flex !important;
-      max-width: 90px;
+      max-width: 110px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      cursor: pointer;
+    }
+    .member-chip.is-clickable,
+    .member-chip-sm.is-clickable {
+      cursor: pointer;
+      border-color: rgba(229,154,24,0.35);
+    }
+    .member-chip.is-clickable:hover,
+    .member-chip-sm.is-clickable:hover {
+      border-color: var(--accent);
+      filter: brightness(1.08);
     }
     .list-detail-bar {
       display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      position: relative;
+      z-index: 4;
+      min-height: 28px;
+      overflow: visible;
     }
     #list-bar-members {
       display: flex; flex-wrap: wrap; align-items: center; gap: 2px;
-      margin-left: auto; max-width: 46%; justify-content: flex-end;
+      margin-left: auto; max-width: 50%; justify-content: flex-end;
+    }
+    .ev-countdown-slot {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      z-index: 5;
+      overflow: visible;
+      pointer-events: none;
+    }
+    .ev-countdown-slot .cd {
+      pointer-events: auto;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .event-card .ec-top .cd {
+      flex: 0 0 auto;
+      margin-left: 6px;
+      margin-right: 6px;
+      position: relative;
+      z-index: 2;
+      white-space: nowrap;
+      max-width: 42%;
+      overflow: visible;
     }
     .ev-toolbar-row {
       display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
       margin-bottom: 8px;
+      position: relative;
+      z-index: 4;
+      overflow: visible;
     }
     .ev-toolbar-row .ev-toolbar-btns {
       display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+      flex: 0 0 auto;
     }
     .ev-toolbar-row #ev-members {
       display: flex; flex-wrap: wrap; align-items: center; gap: 2px;
-      margin-left: auto; max-width: 50%; justify-content: flex-end;
+      margin-left: auto; max-width: 40%; justify-content: flex-end;
+      flex: 0 1 auto;
+    }
+    .inline-members-block .inline-add-members-form {
+      display: none;
+      margin-top: 8px;
+    }
+    .inline-members-block .inline-add-members-form.is-open {
+      display: block;
+    }
+    .inline-members-block .btn-inline-add-members {
+      width: 100%;
+      margin-top: 8px;
+      min-height: 40px;
+      font-weight: 800;
     }
     .list-col-body[data-col-focus-add] { cursor: text; }
     .list-triad .list-col { min-width: 200px; }
@@ -3021,7 +3085,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.15</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.16</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -3404,35 +3468,30 @@
         <div class="card-body" id="lists-body">
           <div id="my-lists-home" class="my-lists-home" style="display:none"></div>
           <p class="empty" id="lists-placeholder">Select a list or event on the left — details open here.</p>
-          <!-- Event detail (RIGHT column only) -->
+          <!-- Event detail (RIGHT column only) — name/type/dates live in Edit event; countdown only here -->
           <div id="event-meta" style="display:none">
             <div class="ev-toolbar-row">
               <div class="ev-toolbar-btns">
-                <button type="button" class="btn" id="ev-back">← Back</button>
+                <button type="button" class="btn" id="ev-back" style="display:none">← Back</button>
                 <button type="button" class="btn" id="ev-edit">Edit event</button>
-                <button type="button" class="btn btn-accent" id="btn-copy-code">Copy invite</button>
               </div>
+              <div id="ev-countdown" class="ev-countdown-slot" aria-live="polite"></div>
               <div id="ev-members" aria-label="Members"></div>
             </div>
-            <div class="ec-meta"><strong id="ev-title-side">Event</strong></div>
-            <div class="ec-meta"><span id="ev-type"></span></div>
-            <div class="ec-meta" style="margin-top:6px">
-              Start: <button type="button" class="btn tbd-date-btn" id="ev-start-tbd" style="padding:4px 8px;font-size:11px">TBD</button>
-              <span id="ev-start"></span>
-            </div>
-            <div class="ec-meta" style="margin-top:4px">
-              End: <button type="button" class="btn tbd-date-btn" id="ev-end-tbd" style="padding:4px 8px;font-size:11px">TBD</button>
-              <span id="ev-end"></span>
-            </div>
-            <div style="margin-top:6px" id="ev-countdown"></div>
-            <div class="ec-code" id="ev-code"></div>
+            <!-- Hidden legacy nodes kept for any date-display helpers -->
+            <span id="ev-title-side" style="display:none"></span>
+            <span id="ev-type" style="display:none"></span>
+            <span id="ev-start" style="display:none"></span>
+            <span id="ev-end" style="display:none"></span>
+            <button type="button" id="ev-start-tbd" style="display:none" aria-hidden="true"></button>
+            <button type="button" id="ev-end-tbd" style="display:none" aria-hidden="true"></button>
+            <div class="ec-code" id="ev-code" style="display:none"></div>
             <div class="panel-settle" id="ev-settle" style="margin-top:8px"></div>
           </div>
           <div id="lists-active" style="display:none">
             <div class="list-detail-bar" id="list-detail-bar">
-              <button type="button" class="btn" id="btn-lists-back">← Back</button>
-              <span class="list-invite-code" id="list-invite-code" style="display:none"></span>
-              <button type="button" class="btn btn-accent" id="btn-list-invite" style="display:none">Invite people</button>
+              <button type="button" class="btn" id="btn-lists-back" style="display:none">← Back</button>
+              <div id="list-bar-countdown" class="ev-countdown-slot" aria-live="polite"></div>
               <div id="list-bar-members" aria-label="Members"></div>
             </div>
             <div id="inbox-area"></div>

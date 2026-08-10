@@ -2,7 +2,8 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.15';
+  var APP_VERSION = '1.3.16';
+  // V1.3.16: event header cleanup, members drawer, Personal claim column
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -97,7 +98,11 @@
     /** Side calendar collapsed to a thin bar */
     calCollapsed: false,
     /** Mobile full-screen list sheet open */
-    mobileSheetOpen: false
+    mobileSheetOpen: false,
+    /** Expanded members drawer under left event/list card (id key) */
+    membersDrawerKey: null,
+    /** Inline "Add members" search open for drawer key */
+    membersAddOpenKey: null
   };
   var _sideCalNavLockUntil = 0;
   var _syncChannel = null;
@@ -1197,19 +1202,35 @@
           byId[k].items = fromBucket;
         }
       });
+      // Event packing lists get a live “Personal” column (my claimed bring items)
+      if (n.eventId) {
+        if (!byId.personal) {
+          byId.personal = defaultColumn('personal', 'Personal');
+          // Distinct tab tint so it reads as “mine”
+          byId.personal.colors = { font: '#f0f4ee', tab: '#2a3a4a', bg: '#0a1014' };
+        } else {
+          byId.personal.name = byId.personal.name || 'Personal';
+        }
+      } else if (byId.personal) {
+        // Personal (non-event) lists do not use the Personal box
+        delete byId.personal;
+      }
 
-      // Preserve custom columns + classic order first
+      // Preserve custom columns + classic order first; Personal always last on event lists
       var order = [];
       ['todo', 'buy', 'bring'].forEach(function (k) { order.push(k); });
       Object.keys(byId).forEach(function (k) {
+        if (k === 'personal') return;
         if (order.indexOf(k) < 0) order.push(k);
       });
       if (Array.isArray(n.columnOrder)) {
         n.columnOrder.forEach(function (k) {
           k = String(k);
+          if (k === 'personal') return;
           if (byId[k] && order.indexOf(k) < 0) order.push(k);
         });
       }
+      if (n.eventId && byId.personal) order.push('personal');
 
       n.columns = order.map(function (k) { return byId[k]; }).filter(Boolean);
       n.buckets = {};
@@ -1321,7 +1342,44 @@
     if (k === 'buy') return 'To buy';
     if (k === 'bring') return 'To bring';
     if (k === 'todo') return 'To do';
+    if (k === 'personal') return 'Personal';
     return 'New list';
+  }
+
+  /** True when left chrome is fully minimized — only then show Back on the right */
+  function leftSideFullyMinimized() {
+    try {
+      if (isMobileLayout()) return true;
+    } catch (e) {}
+    // Calendar collapsed + map tucked away as a button
+    return !!state.calCollapsed && state.mapMode === 'button';
+  }
+  function updateBackButtonsVisibility() {
+    var show = leftSideFullyMinimized();
+    if ($('btn-lists-back')) $('btn-lists-back').style.display = show ? '' : 'none';
+    if ($('ev-back')) $('ev-back').style.display = show ? '' : 'none';
+  }
+
+  /** Items I’ve claimed (qty > 0) — used for event list “Personal” box (what I’m bringing) */
+  function collectMyClaimedItems(list) {
+    var me = String(myId() || 'local');
+    var seen = {};
+    var out = [];
+    if (!list) return out;
+    try { sanitizeNamedList(list); } catch (e) {}
+    (list.columns || []).forEach(function (c) {
+      if (!c || String(c.id) === 'personal') return;
+      (c.items || []).forEach(function (it) {
+        if (!it || !it.id || seen[String(it.id)]) return;
+        var q = 0;
+        try { q = Number((it.claims || {})[me] || 0); } catch (eQ) { q = 0; }
+        if (q > 0) {
+          seen[String(it.id)] = true;
+          out.push(it);
+        }
+      });
+    });
+    return out;
   }
   function getListColumn(list, colId) {
     if (!list) return null;
@@ -2954,6 +3012,9 @@
     state.moveItemId = null;
     state.noteItemId = null;
     state.filterQualifier = 'all';
+    state.membersDrawerKey = 'event:' + String(id);
+    state.membersAddOpenKey = null;
+    state._skipMembersCollapseOnce = true;
     state._mapFollowedEvent = null;
     state._linkedMapOverlay = null;
     var pe = (loadPersonalBoard().events || []).find(function (e) { return String(e.id) === String(id); });
@@ -3131,6 +3192,11 @@
     state.listTab = (nl.columns && nl.columns[0] && nl.columns[0].id) || 'todo';
     state.expandedItemId = null;
     state.filterQualifier = 'all';
+    state.membersDrawerKey = nl.eventId
+      ? ('event:' + String(nl.eventId))
+      : ('list:' + String(nl.id));
+    state.membersAddOpenKey = null;
+    state._skipMembersCollapseOnce = true;
     // Keep whichever left tab the user is on (My lists OR My events both open the pack)
     if (opts.leftTab) state.leftTab = opts.leftTab;
     // Do NOT force switch to My events when opening an event-linked pack from My lists
@@ -4068,6 +4134,10 @@
         var colors = col.colors || DEFAULT_COL_COLORS;
         var mini = !!col.minimized;
         var colItems = Array.isArray(col.items) ? col.items.filter(function (it) { return it && typeof it === 'object'; }) : [];
+        // Event list “Personal” box = live view of everything I’ve claimed to bring
+        if (String(cid) === 'personal' && list.eventId) {
+          colItems = collectMyClaimedItems(list);
+        }
         var sectionDone = false;
         try {
           sectionDone = colItems.length > 0 && colItems.every(function (it) { return isItemAccounted(it); });
@@ -4104,24 +4174,29 @@
                 esc(col.name || listKindLabel(cid)) +
               '</button>' +
               '<div class="list-col-head-actions">' +
-                (canEdit
+                (canEdit && String(cid) !== 'personal'
                   ? '<button type="button" class="btn-icon list-col-opt" data-col-options="' + esc(cid) + '" title="Options">⚙</button>'
                   : '') +
-                '<button type="button" class="btn-icon list-share-ico" data-col-share="' + esc(cid) + '" title="Share this section">' +
-                  shareIconSvg() + '</button>' +
+                (String(cid) !== 'personal'
+                  ? '<button type="button" class="btn-icon list-share-ico" data-col-share="' + esc(cid) + '" title="Share this section">' +
+                    shareIconSvg() + '</button>'
+                  : '') +
                 '<button type="button" class="btn-icon" data-col-minimize="' + esc(cid) + '" title="Minimize">−</button>' +
               '</div>' +
             '</div>' +
             '<div class="list-col-body" data-col-body="' + esc(cid) + '" data-col-focus-add="' + esc(cid) + '" ' +
-              'style="background:' + esc(colors.bg) + ';color:' + esc(colors.font) + ';" title="Click here to type an item">' +
+              'style="background:' + esc(colors.bg) + ';color:' + esc(colors.font) + ';" title="' +
+              (String(cid) === 'personal' ? 'Items you’ve claimed' : 'Click here to type an item') + '">' +
               body +
             '</div>' +
-            '<div class="list-col-add">' +
-              '<input type="text" class="list-col-add-input" data-col-add-input="' + esc(cid) + '" placeholder="Type item, press Enter…" autocomplete="off" style="text-transform:capitalize" />' +
-              '<button type="button" class="btn btn-icon list-ocr-cam" data-ocr-list="' + esc(cid) +
-                '" title="Photo of handwritten list → items"><img src="icons/pins/camera.png" alt="" width="18" height="18" /></button>' +
-              '<button type="button" class="btn btn-primary list-col-add-btn" data-col-add="' + esc(cid) + '">Add</button>' +
-            '</div>' +
+            (String(cid) === 'personal'
+              ? '<div class="list-col-add" style="justify-content:center"><span class="muted" style="font-size:11px;padding:6px 4px">Items you’ve claimed · Got it! on other lists</span></div>'
+              : ('<div class="list-col-add">' +
+                  '<input type="text" class="list-col-add-input" data-col-add-input="' + esc(cid) + '" placeholder="Type item, press Enter…" autocomplete="off" style="text-transform:capitalize" />' +
+                  '<button type="button" class="btn btn-icon list-ocr-cam" data-ocr-list="' + esc(cid) +
+                    '" title="Photo of handwritten list → items"><img src="icons/pins/camera.png" alt="" width="18" height="18" /></button>' +
+                  '<button type="button" class="btn btn-primary list-col-add-btn" data-col-add="' + esc(cid) + '">Add</button>' +
+                '</div>')) +
           '</div>';
       } catch (eCol) {
         console.warn('render column', eCol);
@@ -4183,34 +4258,19 @@
     var box = $('qualifier-filters');
     if (!box) return;
     if (!ev && !freeList) { box.innerHTML = ''; return; }
+    // Show every permanent category at the top (recent/frequency order), not only used ones
     var qs = orderedQualifiersForSelect(ev, freeList);
-    var items = itemsForQualifierScan(ev, freeList);
-    var used = {};
-    items.forEach(function (it) {
-      if (!it) return;
-      used[it.qualifier || 'other'] = true;
-    });
-    // Always show categories currently used on items, plus active filter, plus last 3 used
-    var usage = getCatUsage(catUsageScopeKey(ev, freeList));
-    (usage.recent || []).slice(0, 3).forEach(function (id) { used[id] = true; });
-    if (state.filterQualifier && state.filterQualifier !== 'all' && state.filterQualifier !== '__sort') {
-      used[state.filterQualifier] = true;
-    }
-    // Preserve permanent order from orderedQualifiers (recent first), only filter to known chips
-    var usedQs = qs.filter(function (q) { return q && used[q.id] && q.id !== 'other'; });
-    // "other" only if used
-    var otherQ = qs.find(function (q) { return q && q.id === 'other'; });
-    if (otherQ && used.other) usedQs.push(otherQ);
+    var showQs = qs.filter(function (q) { return q && q.id; });
     // Far left: + Add section (named lists only) — keeps triad columns wider
     var html = '';
-    if (freeList && isNamedListOwner(freeList)) {
+    if (freeList && isNamedListOwner(freeList) && !(freeList.eventId && false)) {
       html += '<button type="button" class="btn btn-accent filter-chip" id="btn-add-list-column" title="Add another list box">+ Add section</button>';
     }
     html += '<button type="button" class="btn filter-chip' + (state.filterQualifier === 'all' ? ' is-active' : '') +
       '" data-filter-q="all">Show all</button>';
-    usedQs.forEach(function (q) {
+    showQs.forEach(function (q) {
       html += '<button type="button" class="btn filter-chip' + (state.filterQualifier === q.id ? ' is-active' : '') +
-        '" data-filter-q="' + esc(q.id) + '" style="color:' + q.color + ';border-color:' + q.color + '44">' +
+        '" data-filter-q="' + esc(q.id) + '" style="color:' + (q.color || 'var(--ink)') + ';border-color:' + (q.color || 'var(--border)') + '66">' +
         esc(q.name) + '</button>';
     });
     html += '<button type="button" class="btn filter-chip' + (state.sortByType ? ' is-active' : '') +
@@ -5185,16 +5245,29 @@
   }
 
   /* ---------- render ---------- */
-  function membersChipsHtml(members) {
+  function membersChipsHtml(members, opts) {
+    opts = opts || {};
     var list = (members || []).filter(Boolean);
     if (!list.length) {
       return '<span class="muted" style="font-size:11px">Just you</span>';
     }
+    var scope = opts.scope || 'event'; // event | list
+    var listId = opts.listId || '';
+    var canRemove = !!opts.canRemove;
     return list.map(function (m) {
-      return '<span class="member-chip" style="margin:2px 4px 2px 0;display:inline-flex">' +
+      var mid = m.user_id || m.id || m.display_name || '';
+      var isOwner = m.role === 'owner';
+      var clickable = canRemove && !isOwner && mid;
+      return '<button type="button" class="member-chip member-chip-sm' + (clickable ? ' is-clickable' : '') +
+        '" style="margin:2px 4px 2px 0;display:inline-flex" ' +
+        (clickable
+          ? ('data-member-chip="' + esc(String(mid)) + '" data-member-scope="' + esc(scope) +
+            '" data-member-list-id="' + esc(listId) + '" title="Tap for options / remove"')
+          : 'disabled') +
+        '>' +
         esc(m.display_name || m.username || 'Member') +
-        (m.role === 'owner' ? ' · owner' : (m.provisional ? ' · name' : '')) +
-        '</span>';
+        (isOwner ? ' · owner' : (m.provisional ? ' · name' : '')) +
+        '</button>';
     }).join('');
   }
 
@@ -5208,15 +5281,21 @@
     var active = String(n.id) === String(state.activeNamedListId) ? ' is-active' : '';
     var dates = listAssociatedDates(n);
     var cd = countdownHtml(dates.start, dates.end);
-    // Members only for shared lists, and only when this card is open
+    // Members drawer when this card is open (and drawer not collapsed by click-away)
     var membersBlock = '';
-    if (shared && active) {
-      var chips = membersChipsHtml(n.members || []);
+    var listDrawerKey = 'list:' + String(n.id);
+    var showListDrawer = !!active && state.membersDrawerKey !== '' &&
+      (state.membersDrawerKey == null || String(state.membersDrawerKey) === listDrawerKey);
+    if (active && showListDrawer) {
+      var chips = membersChipsHtml(n.members || [], {
+        scope: 'list', listId: n.id, canRemove: isNamedListOwner(n)
+      });
       membersBlock = '<div class="event-card-members" data-list-members="' + esc(n.id) + '">' +
         renderInlineAddMembersHtml({
           prefix: 'list-card',
           scope: 'list',
           listId: n.id,
+          drawerKey: listDrawerKey,
           canAdd: isNamedListOwner(n),
           membersHtml: chips
         }) + '</div>';
@@ -5230,7 +5309,7 @@
       ? '<div class="ec-meta">' + esc(metaBits.join(' · ')) + '</div>'
       : '';
     return (
-      '<div class="event-card-wrap list-card-wrap' + active + (shared && active ? ' has-members' : '') + '">' +
+      '<div class="event-card-wrap list-card-wrap' + active + (membersBlock ? ' has-members' : '') + '">' +
         '<div class="event-card' + active + '" data-open-list="' + esc(n.id) + '" role="button" tabindex="0">' +
           '<div class="ec-top">' +
             '<strong>' + esc(n.name || 'Untitled list') + '</strong>' +
@@ -5263,16 +5342,23 @@
     });
     var peopleN = Math.max(Object.keys(peopleIds).length, mems && mems.length ? mems.length : 1);
     var shared = peopleN > 1;
-    // Members only when shared AND selected
+    // Members drawer when event selected (names collapse on click-away)
     var membersBlock = '';
-    if (shared && active) {
-      var chips = membersChipsHtml(mems);
+    var evDrawerKey = 'event:' + String(e.id);
+    // membersDrawerKey: matching key = open; '' = collapsed; null = open for active card
+    var showEvDrawer = !!active && state.membersDrawerKey !== '' &&
+      (state.membersDrawerKey == null || String(state.membersDrawerKey) === evDrawerKey);
+    if (active && showEvDrawer) {
       var canAddL = isEventCreator(e) || String(e.owner_user_id) === String(myId()) || !myId();
+      var chips = membersChipsHtml(mems, {
+        scope: 'event', listId: '', canRemove: canAddL
+      });
       membersBlock = '<div class="event-card-members" data-event-members="' + esc(e.id) + '">' +
         renderInlineAddMembersHtml({
           prefix: 'event-card',
           scope: 'event',
           listId: '',
+          drawerKey: evDrawerKey,
           canAdd: canAddL,
           membersHtml: chips
         }) + '</div>';
@@ -5286,7 +5372,7 @@
       ? '<div class="ec-meta">' + esc(underBits.join(' · ')) + '</div>'
       : '';
     return (
-      '<div class="event-card-wrap' + active + (shared && active ? ' has-members' : '') + '">' +
+      '<div class="event-card-wrap' + active + (membersBlock ? ' has-members' : '') + '">' +
         '<div class="event-card' + active + '" data-open-event="' + esc(e.id) + '" role="button" tabindex="0">' +
           '<div class="ec-top">' +
             '<strong>' + esc(e.name) + '</strong>' +
@@ -5575,9 +5661,8 @@
     var showingEventDetail = !showingListDetail && showEv && ev && !ev._personalOnly;
 
     if (listsTitle) {
-      if (showingListDetail && state.activeEventId && ev) {
-        listsTitle.textContent = (ev.name || 'Event') + ' · lists';
-      } else if (showingListDetail) {
+      // One title only — list name or event name (no "Event · lists" + type duplicate)
+      if (showingListDetail) {
         listsTitle.textContent = openList.name || 'List';
       } else if (showingEventDetail) {
         listsTitle.textContent = ev.name || 'Event';
@@ -5586,22 +5671,21 @@
       }
     }
     if (headActions) headActions.style.display = (showingListDetail || showingEventDetail) ? '' : 'none';
+    try { updateBackButtonsVisibility(); } catch (eBk) {}
 
     if (showingListDetail) {
       setRightPanelMode('list');
       if ($('list-detail-bar')) $('list-detail-bar').style.display = '';
-      if ($('list-invite-code')) {
-        if (openList.invite_code) {
-          $('list-invite-code').style.display = '';
-          $('list-invite-code').textContent = 'Code: ' + openList.invite_code;
-        } else {
-          $('list-invite-code').style.display = 'none';
+      // Countdown for event-linked lists (dates only in Edit event)
+      try {
+        var barCd = $('list-bar-countdown');
+        if (barCd) {
+          var datesForList = listAssociatedDates(openList);
+          barCd.innerHTML = (datesForList && datesForList.start)
+            ? countdownHtml(datesForList.start, datesForList.end)
+            : '';
         }
-      }
-      if ($('btn-list-invite')) {
-        $('btn-list-invite').style.display = '';
-        $('btn-list-invite').textContent = isNamedListOwner(openList) ? 'Members / invite' : 'Invite / code';
-      }
+      } catch (eCd) {}
       // Compact member chips in the detail bar (never inside #ev-list — that crushed the triad)
       try {
         var barMem = $('list-bar-members');
@@ -5609,10 +5693,9 @@
           var sharedList = listIsShared(openList);
           if (sharedList) {
             barMem.style.display = '';
-            barMem.innerHTML = (openList.members || []).filter(Boolean).map(function (m) {
-              return '<span class="member-chip member-chip-sm">' +
-                esc(m.display_name || m.username || 'Member') + '</span>';
-            }).join('') || '';
+            barMem.innerHTML = membersChipsHtml(openList.members || [], {
+              scope: 'list', listId: openList.id, canRemove: isNamedListOwner(openList)
+            });
           } else {
             barMem.style.display = 'none';
             barMem.innerHTML = '';
@@ -5661,27 +5744,18 @@
       if ($('list-kind-tabs')) $('list-kind-tabs').style.display = 'none';
       if ($('event-add-bar')) $('event-add-bar').style.display = 'none';
       if ($('inbox-area')) $('inbox-area').innerHTML = '';
-      if ($('ev-title-side')) $('ev-title-side').textContent = ev.name || 'Event';
-      if ($('ev-type')) $('ev-type').textContent = ev.event_type || 'general';
-      updateEventDateDisplay(ev);
+      // Name/type/dates only in Edit event — keep countdown on the right
       if ($('ev-countdown')) {
         $('ev-countdown').innerHTML = ev.start_at
           ? countdownHtml(ev.start_at, ev.end_at)
-          : '<span class="muted">Start date TBD</span>';
-      }
-      if ($('ev-code')) {
-        $('ev-code').textContent = '';
-        $('ev-code').style.display = 'none';
+          : '<span class="muted">Start TBD</span>';
       }
       try {
-        // Compact members to the right of Back / Edit (not a tall block)
         if ($('ev-members')) {
-          var chips = (state.members || []).map(function (m) {
-            if (!m) return '';
-            return '<span class="member-chip member-chip-sm" data-member-chip="' + esc(m.user_id) + '">' +
-              esc(m.display_name || m.username || 'Member') + '</span>';
-          }).join('') || '<span class="muted" style="font-size:11px">Just you</span>';
-          $('ev-members').innerHTML = chips;
+          var canRemEv = isEventCreator(ev) || String(ev.owner_user_id) === String(myId()) || !myId();
+          $('ev-members').innerHTML = membersChipsHtml(state.members || [], {
+            scope: 'event', listId: '', canRemove: canRemEv
+          });
         }
         renderExpenses(ev);
         collectFriendsFromMembers();
@@ -5693,15 +5767,20 @@
           openList = linkedForEv[0];
           setRightPanelMode('list');
           if ($('list-detail-bar')) $('list-detail-bar').style.display = '';
-          if ($('btn-list-invite')) {
-            $('btn-list-invite').style.display = '';
-            $('btn-list-invite').textContent = isNamedListOwner(openList) ? 'Members / invite' : 'Invite / code';
-          }
+          try {
+            var barCd2 = $('list-bar-countdown');
+            if (barCd2) {
+              barCd2.innerHTML = ev.start_at ? countdownHtml(ev.start_at, ev.end_at) : '';
+            }
+          } catch (eCd2) {}
           if ($('ev-list')) {
             var qEv2 = { state: { qualifiers: DEFAULT_QUALIFIERS.map(function (q) { return Object.assign({}, q); }) } };
+            try {
+              if (ev.state && ev.state.qualifiers) qEv2.state.qualifiers = ev.state.qualifiers;
+            } catch (eQ) {}
             $('ev-list').innerHTML = renderListTriad(openList, qEv2);
             wireListColumnUi(openList);
-            renderQualifierFilters(qEv2, openList);
+            renderQualifierFilters(ev, openList);
           }
         } else if ($('ev-list')) {
           $('ev-list').innerHTML = renderEventTriad(ev);
@@ -6973,59 +7052,164 @@
     opts = opts || {};
     var idPrefix = opts.prefix || 'inline';
     var canAdd = opts.canAdd !== false;
+    var drawerKey = opts.drawerKey || '';
+    var addOpen = state.membersAddOpenKey && String(state.membersAddOpenKey) === String(drawerKey);
     if (!canAdd) {
-      return '<div class="inline-members-block">' +
+      return '<div class="inline-members-block" data-drawer-key="' + esc(drawerKey) + '">' +
         '<div class="section-label">Members</div>' +
         (opts.membersHtml || '<span class="muted" style="font-size:12px">Just you</span>') +
         '</div>';
     }
-    return '<div class="inline-members-block" data-inline-members="' + esc(opts.scope || 'list') + '" data-inline-list-id="' + esc(opts.listId || '') + '">' +
-      '<div class="section-label">Members</div>' +
+    return '<div class="inline-members-block" data-inline-members="' + esc(opts.scope || 'list') +
+      '" data-inline-list-id="' + esc(opts.listId || '') + '" data-drawer-key="' + esc(drawerKey) + '">' +
+      '<div class="section-label">Members <span class="muted" style="font-weight:600;text-transform:none">· tap to remove</span></div>' +
       '<div class="inline-members-chips">' + (opts.membersHtml || '<span class="muted" style="font-size:12px">Just you</span>') + '</div>' +
-      '<div class="section-label" style="margin-top:10px">Add members</div>' +
-      '<p class="muted" style="font-size:11px;margin:0 0 6px">Friends, nicknames, or type a new name</p>' +
-      '<div class="field" style="margin:0 0 6px">' +
-        '<input type="text" class="inline-member-search" id="' + esc(idPrefix) + '-member-search" ' +
-          'placeholder="Name, nickname, or username…" autocomplete="off" />' +
+      '<button type="button" class="btn btn-accent btn-inline-add-members" data-inline-add-toggle="' + esc(drawerKey) + '">' +
+        (addOpen ? 'Hide add' : 'Add members') + '</button>' +
+      '<div class="inline-add-members-form' + (addOpen ? ' is-open' : '') + '" id="' + esc(idPrefix) + '-add-form">' +
+        '<p class="muted" style="font-size:11px;margin:0 0 6px">Friends, nicknames, or type a new name</p>' +
+        '<div class="field" style="margin:0 0 6px">' +
+          '<input type="text" class="inline-member-search" id="' + esc(idPrefix) + '-member-search" ' +
+            'placeholder="Name, nickname, or username…" autocomplete="off" />' +
+        '</div>' +
+        '<div class="inline-member-pick" id="' + esc(idPrefix) + '-member-pick"></div>' +
       '</div>' +
-      '<div class="inline-member-pick" id="' + esc(idPrefix) + '-member-pick"></div>' +
       '</div>';
   }
 
   function wireInlineMemberSearch(prefix, listId, scope) {
     var search = $(prefix + '-member-search');
     var pick = $(prefix + '-member-pick');
-    if (!search || !pick || search._wiredInline) return;
-    search._wiredInline = true;
-    function refresh() {
-      fillMemberSharePick(pick, search.value);
-    }
-    search.addEventListener('input', refresh);
-    search.addEventListener('focus', refresh);
-    pick.addEventListener('click', function (e) {
-      var b = e.target.closest && e.target.closest('[data-share-to-member], [data-share-to-new]');
-      if (!b) return;
-      e.preventDefault();
-      e.stopPropagation();
-      var isNew = !!b.getAttribute('data-share-to-new');
-      var key = b.getAttribute('data-share-to-member') || b.getAttribute('data-share-to-new');
-      if (scope === 'list') {
-        var list = findNamedListById(listId || state.activeNamedListId);
-        if (!list || !isNamedListOwner(list)) {
-          appToast('Only the list creator can add members');
+    if (!search || !pick) return;
+    if (!search._wiredInline) {
+      search._wiredInline = true;
+      function refresh() {
+        fillMemberSharePick(pick, search.value);
+      }
+      search.addEventListener('input', refresh);
+      search.addEventListener('focus', refresh);
+      pick.addEventListener('click', function (e) {
+        var b = e.target.closest && e.target.closest('[data-share-to-member], [data-share-to-new]');
+        if (!b) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var isNew = !!b.getAttribute('data-share-to-new');
+        var key = b.getAttribute('data-share-to-member') || b.getAttribute('data-share-to-new');
+        if (scope === 'list') {
+          var list = findNamedListById(listId || state.activeNamedListId);
+          if (!list || !isNamedListOwner(list)) {
+            appToast('Only the list creator can add members');
+            return;
+          }
+          addListMemberFromPick(list, key, isNew);
+          search.value = '';
+          render();
           return;
         }
-        addListMemberFromPick(list, key, isNew);
-        search.value = '';
-        render();
-        return;
+        if (scope === 'event') {
+          addEventMemberFromPick(key, isNew);
+          search.value = '';
+          render();
+        }
+      });
+    }
+    // If form is open, seed suggestions
+    if (search.offsetParent !== null || (search.closest && search.closest('.inline-add-members-form.is-open'))) {
+      try { fillMemberSharePick(pick, search.value); } catch (eF) {}
+    }
+  }
+
+  async function removeEventMember(memberId) {
+    var ev = activeEvent();
+    if (!ev) return;
+    if (!isEventCreator(ev) && String(ev.owner_user_id) !== String(myId())) {
+      appToast('Only the host can remove members');
+      return;
+    }
+    if (String(memberId) === String(ev.owner_user_id) || String(memberId) === String(myId())) {
+      appToast('Can’t remove the host');
+      return;
+    }
+    var mem = (state.members || []).find(function (m) { return String(m.user_id) === String(memberId); });
+    var label = (mem && (mem.display_name || mem.username)) || 'this member';
+    var ok = await appConfirm('Remove ' + label + ' from this event?', 'Remove member');
+    if (!ok) return;
+    state.members = (state.members || []).filter(function (m) { return String(m.user_id) !== String(memberId); });
+    if (ev.state && Array.isArray(ev.state.localMembers)) {
+      ev.state.localMembers = ev.state.localMembers.filter(function (m) {
+        return String(m.user_id) !== String(memberId);
+      });
+    }
+    try { ev._cachedMembers = state.members.slice(); } catch (eC) {}
+    try {
+      var client = sb();
+      if (client && isUuidLike(ev.id) && isUuidLike(memberId) && !ev._localOnly) {
+        client.from('plan_event_members').delete()
+          .eq('event_id', ev.id).eq('user_id', memberId).then(function () {}).catch(function () {});
       }
-      if (scope === 'event') {
-        addEventMemberFromPick(key, isNew);
-        search.value = '';
-        render();
+    } catch (eCloud) {}
+    // Also drop from linked packing list
+    try {
+      var linked = listsForEvent(ev.id);
+      if (linked[0] && Array.isArray(linked[0].members)) {
+        linked[0].members = linked[0].members.filter(function (m) {
+          return String(m.user_id) !== String(memberId);
+        });
+        saveNamedList(linked[0]);
       }
-    });
+    } catch (eL) {}
+    try { saveActiveEvent(); } catch (eS) { persistLocal(); }
+    appToast('Removed ' + label);
+    render();
+  }
+
+  async function removeListMember(list, memberId) {
+    if (!list) return;
+    if (!isNamedListOwner(list)) {
+      appToast('Only the list creator can remove members');
+      return;
+    }
+    if (String(memberId) === String(list.owner_id)) {
+      appToast('Can’t remove the list owner');
+      return;
+    }
+    normalizeNamedList(list);
+    var mem = (list.members || []).find(function (m) { return String(m.user_id) === String(memberId); });
+    var label = (mem && (mem.display_name || mem.username)) || 'this member';
+    var ok = await appConfirm('Remove ' + label + ' from this list?', 'Remove member');
+    if (!ok) return;
+    list.members = (list.members || []).filter(function (m) { return String(m.user_id) !== String(memberId); });
+    saveNamedList(list);
+    // Quietly drop from linked event localMembers / state.members if present
+    if (list.eventId) {
+      try {
+        var evL = findEventById(list.eventId);
+        if (evL && evL.state && Array.isArray(evL.state.localMembers)) {
+          evL.state.localMembers = evL.state.localMembers.filter(function (m) {
+            return String(m.user_id) !== String(memberId);
+          });
+        }
+        if (String(state.activeEventId) === String(list.eventId)) {
+          state.members = (state.members || []).filter(function (m) {
+            return String(m.user_id) !== String(memberId);
+          });
+        }
+        if (evL) {
+          try { saveActiveEvent(); } catch (eS2) {
+            // saveActiveEvent needs active event — force persist via dual path
+            try {
+              if (String(state.activeEventId) !== String(list.eventId)) {
+                // temporary
+              }
+              persistLocal();
+              cloudSaveEvent(evL);
+            } catch (eP) {}
+          }
+        }
+      } catch (eE) {}
+    }
+    appToast('Removed ' + label);
+    render();
   }
 
   function addEventMemberFromPick(friendKey, isNewName) {
@@ -9027,6 +9211,21 @@
         clearItemDetailEditState();
         render();
       }, false);
+      // Click away from an open event/list card → collapse members names drawer
+      document.addEventListener('click', function (e) {
+        if (state._skipMembersCollapseOnce) {
+          state._skipMembersCollapseOnce = false;
+          return;
+        }
+        if (state.membersDrawerKey === '') return;
+        if (!state.activeEventId && !state.activeNamedListId) return;
+        if (e.target.closest && e.target.closest('.event-card-wrap.is-active, .member-pop, .modal-overlay.is-open, [data-member-chip], [data-inline-add-toggle]')) return;
+        // Keep drawer if interacting with right-side edit that needs members
+        if (e.target.closest && e.target.closest('#edit-event-modal, #share-people-chooser, #share-people-members')) return;
+        state.membersDrawerKey = '';
+        state.membersAddOpenKey = null;
+        render();
+      }, false);
       // Live auto-save when changing options inside an expanded item (no Save required)
       document.addEventListener('change', function (e) {
         var t = e.target;
@@ -9170,6 +9369,10 @@
     click('col-opt-delete', function () {
       var list = findNamedListById(_colOpts.listId);
       if (!list || !isNamedListOwner(list)) return;
+      if (String(_colOpts.colId) === 'personal') {
+        appToast('Personal (claimed items) can’t be deleted');
+        return;
+      }
       appConfirm('Delete this section and all of its items?', 'Delete section').then(function (ok) {
         if (!ok) return;
         if (!deleteListColumn(list, _colOpts.colId)) {
@@ -9382,6 +9585,10 @@
     try {
       state.calCollapsed = localStorage.getItem(LOCAL_CAL_COLLAPSED_KEY) === '1';
     } catch (eC0) { state.calCollapsed = false; }
+    // Keep Back visibility in sync when calendar min/max changes
+    function refreshBackAfterLayout() {
+      try { updateBackButtonsVisibility(); } catch (e) {}
+    }
     click('side-cal-collapse', function () {
       state.calCollapsed = true;
       try { localStorage.setItem(LOCAL_CAL_COLLAPSED_KEY, '1'); } catch (e) {}
@@ -10254,17 +10461,33 @@
       var memChip = ev.target.closest('[data-member-chip]');
       if (memChip) {
         var chipId = memChip.getAttribute('data-member-chip');
-        // reuse member pop (defined below only for list rows) — open simplified chip pop
-        (function showChipMemberPop(mid, anchor) {
+        var chipScope = memChip.getAttribute('data-member-scope') || 'event';
+        var chipListId = memChip.getAttribute('data-member-list-id') || '';
+        (function showChipMemberPop(mid, anchor, scope, listId) {
           var old = document.querySelector('.member-pop');
           if (old) old.remove();
-          var items = itemsClaimedByMember(mid);
+          var items = [];
+          try { items = itemsClaimedByMember(mid); } catch (eI) { items = []; }
           var pop = document.createElement('div');
           pop.className = 'member-pop';
           var aev = activeEvent();
-          var mem = (state.members || []).find(function (x) { return String(x.user_id) === String(mid); });
+          var mem = null;
+          if (scope === 'list') {
+            var lst = findNamedListById(listId);
+            mem = ((lst && lst.members) || []).find(function (x) { return String(x.user_id) === String(mid); });
+          } else {
+            mem = (state.members || []).find(function (x) { return String(x.user_id) === String(mid); });
+          }
           var isCreatorAlready = mem && (mem.role === 'owner' || mem.role === 'creator');
-          var canGrant = aev && !aev._personalOnly && isEventCreator(aev) && String(mid) !== String(myId());
+          var canGrant = scope === 'event' && aev && !aev._personalOnly && isEventCreator(aev) && String(mid) !== String(myId());
+          var canRemove = false;
+          if (scope === 'event') {
+            canRemove = aev && (isEventCreator(aev) || String(aev.owner_user_id) === String(myId())) &&
+              !isCreatorAlready && String(mid) !== String(myId());
+          } else {
+            var lst2 = findNamedListById(listId);
+            canRemove = lst2 && isNamedListOwner(lst2) && mem && mem.role !== 'owner';
+          }
           var actions = '';
           if (canGrant) {
             if (isCreatorAlready && mem.role === 'creator') {
@@ -10273,7 +10496,13 @@
               actions += '<button type="button" class="btn btn-primary" data-mem-act="grant-creator" data-mid="' + esc(mid) + '" style="width:100%;margin-top:8px;font-size:11px">Grant creator privileges</button>';
             }
           }
-          pop.innerHTML = '<h5 style="color:' + memberColor(mid) + '">' + esc(memberLabel(mid)) +
+          if (canRemove) {
+            actions += '<button type="button" class="btn" data-mem-act="remove-member" data-mid="' + esc(mid) +
+              '" data-scope="' + esc(scope) + '" data-list-id="' + esc(listId || '') +
+              '" style="width:100%;margin-top:8px;font-size:11px;color:#fca5a5;border-color:rgba(252,165,165,0.4)">Remove from ' +
+              (scope === 'list' ? 'list' : 'event') + '</button>';
+          }
+          pop.innerHTML = '<h5 style="color:' + memberColor(mid) + '">' + esc(memberLabel(mid) || (mem && mem.display_name) || 'Member') +
             (isCreatorAlready ? (mem.role === 'owner' ? ' · host' : ' · creator') : '') + '</h5>' +
             '<p class="muted" style="margin:0 0 6px;font-size:11px">Claimed / bringing</p>' +
             (items.length
@@ -10294,6 +10523,12 @@
               pop.remove();
               if (a === 'grant-creator') grantEventCreatorRole(id);
               else if (a === 'revoke-creator') revokeEventCreatorRole(id);
+              else if (a === 'remove-member') {
+                var sc = b.getAttribute('data-scope') || 'event';
+                var lid = b.getAttribute('data-list-id') || '';
+                if (sc === 'list') removeListMember(findNamedListById(lid), id);
+                else removeEventMember(id);
+              }
             });
           });
           setTimeout(function () {
@@ -10304,7 +10539,22 @@
             }
             document.addEventListener('click', closePop, true);
           }, 0);
-        })(chipId, memChip);
+        })(chipId, memChip, chipScope, chipListId);
+        return;
+      }
+
+      var addToggle = ev.target.closest && ev.target.closest('[data-inline-add-toggle]');
+      if (addToggle) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        var dk = addToggle.getAttribute('data-inline-add-toggle');
+        if (state.membersAddOpenKey && String(state.membersAddOpenKey) === String(dk)) {
+          state.membersAddOpenKey = null;
+        } else {
+          state.membersAddOpenKey = dk;
+          state.membersDrawerKey = dk;
+        }
+        render();
         return;
       }
 

@@ -1,0 +1,21 @@
+PlanSlayer V1.3.16 — Event header cleanup, members, Personal column
+
+Right panel / event lists
+- No duplicate event name + type at top of lists
+- Dates only in Edit event (removed top TBD date controls)
+- Countdown kept, centered and not covered by buttons
+- Removed top Copy invite / invite code bar
+- Back only when left side is fully minimized (calendar collapsed + map button, or phone layout)
+- Category chips: show all permanent types above the lists (not only used ones)
+- Show all / filters get clear space and higher z-index
+
+Members (trips & events)
+- Tap a member chip → options including Remove from event/list
+- Add members is a button; search box only appears after you tap it
+- Click away from the event card collapses the members names drawer
+
+Event packing lists
+- Same as personal lists (To do / To buy / To bring + sections)
+- Extra **Personal** column: live list of everything you’ve claimed (Got it!)
+
+Shell: plan-slayer-shell-v49

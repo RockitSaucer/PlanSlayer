@@ -9,7 +9,7 @@ Map/calendar fixes shared with Hunt/Reg unless noted. **Other ways to slay** →
 ### Report an issue (site → GitHub)
 - UI: header **Report an issue** → modal → `POST /api/report-issue`
 - API: `api/report-issue.js` (Vercel; env `GITHUB_ISSUE_TOKEN`)
-- Issues: **RockitSaucer/PlanSlayer** · labels `from-site` + `from-planslayer`
+- Issues: **RockitSaucer/Hunt-Slayer** (shared inbox) · labels `from-site` + `from-planslayer` · code still PlanSlayer only
 - Workflow: `docs/SITE_ISSUE_REPORTS.md` (plan → `ready-for-review` → Rockit `ready-to-commit` / `revised-changes`)
 - **Skill / kit:** Grok skill **`report-site-issue`** · playbook `Desktop/HuntApp/reusable-kits/report-issue/MY_REPORT_ISSUE.md` · phrase **my report issue**
 - **Do not push** until Rockit asks; when shipping fixes from issues, push **PlanSlayer only**

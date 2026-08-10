@@ -4,13 +4,13 @@
  * Never embed a token in client JS.
  *
  * POST JSON: { message, title?, contact?, site?: 'plan', appVersion? }
- * Creates issue on RockitSaucer/PlanSlayer with labels from-site + from-planslayer.
+ * Creates issue on RockitSaucer/Hunt-Slayer (shared inbox) with labels from-site + from-planslayer.
  *
  * Workflow (same as Hunt):
  *   agent plans → ready-for-review → Rockit marks ready-to-commit or revised-changes
  */
 
-const REPO = process.env.GITHUB_ISSUE_REPO || 'RockitSaucer/PlanSlayer';
+const REPO = process.env.GITHUB_ISSUE_REPO || 'RockitSaucer/Hunt-Slayer';
 const MAX_MSG = 4000;
 const MAX_TITLE = 120;
 

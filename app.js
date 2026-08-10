@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.5';
+  var APP_VERSION = '1.3.6';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -72,7 +72,7 @@
     filterQualifier: 'all',
     sortByType: false,
     sideCal: { y: 0, m: 0, selectedDay: null },
-    createCal: { y: 0, m: 0, selected: null },
+    createCal: { y: 0, m: 0, selected: null, endSelected: null },
     gotItem: null,
     expenseItem: null,
     friendsSearch: '',
@@ -2156,6 +2156,8 @@
             '<div class="list-col-add">' +
               '<input type="text" class="list-col-add-input" data-col-add-input="' + esc(col.id) +
                 '" placeholder="Type item, press Enter…" autocomplete="off" style="text-transform:capitalize" />' +
+              '<button type="button" class="btn btn-icon list-ocr-cam" data-ocr-list="' + esc(col.id) +
+                '" title="Photo of handwritten list → items"><img src="icons/pins/camera.png" alt="" width="18" height="18" /></button>' +
               '<button type="button" class="btn btn-primary list-col-add-btn" data-col-add="' + esc(col.id) + '">Add</button>' +
             '</div>' +
           '</div>' +
@@ -2992,7 +2994,11 @@
               '</select></div>' +
           '</div>' +
           '<div class="field" style="margin-top:8px"><label>' + (note ? 'Edit note' : 'Add note') + '</label>' +
-            '<textarea data-f="note_text" placeholder="Add a note…">' + esc(note ? note.text : '') + '</textarea>' +
+            '<div class="note-ocr-row">' +
+              '<textarea data-f="note_text" placeholder="Add a note…">' + esc(note ? note.text : '') + '</textarea>' +
+              '<button type="button" class="btn btn-icon list-ocr-cam" data-ocr-note="1" title="Photo of handwriting → note text">' +
+                '<img src="icons/pins/camera.png" alt="" width="18" height="18" /></button>' +
+            '</div>' +
             (note ? '<div class="note-meta" style="margin-top:4px">Last: ' + esc(note.byName || 'Member') + ' · ' +
               esc(note.at ? new Date(note.at).toLocaleString() : '') + '</div>' : '') +
           '</div>' +
@@ -3181,6 +3187,8 @@
             '</div>' +
             '<div class="list-col-add">' +
               '<input type="text" class="list-col-add-input" data-col-add-input="' + esc(cid) + '" placeholder="Type item, press Enter…" autocomplete="off" style="text-transform:capitalize" />' +
+              '<button type="button" class="btn btn-icon list-ocr-cam" data-ocr-list="' + esc(cid) +
+                '" title="Photo of handwritten list → items"><img src="icons/pins/camera.png" alt="" width="18" height="18" /></button>' +
               '<button type="button" class="btn btn-primary list-col-add-btn" data-col-add="' + esc(cid) + '">Add</button>' +
             '</div>' +
           '</div>';
@@ -3211,6 +3219,8 @@
           '<div class="list-col-body" data-col-body="' + esc(kind) + '">' + body + '</div>' +
           '<div class="list-col-add">' +
             '<input type="text" class="list-col-add-input" data-event-col-add-input="' + esc(kind) + '" placeholder="Add item…" autocomplete="off" style="text-transform:capitalize" />' +
+            '<button type="button" class="btn btn-icon list-ocr-cam" data-ocr-list="' + esc(kind) +
+              '" data-ocr-event="1" title="Photo of handwritten list → items"><img src="icons/pins/camera.png" alt="" width="18" height="18" /></button>' +
             '<button type="button" class="btn btn-primary" data-event-col-add="' + esc(kind) + '">Add</button>' +
           '</div>' +
         '</div>';
@@ -4661,6 +4671,8 @@
                 '<div class="list-col-body" data-col-body="' + k + '" data-col-focus-add="' + k + '"><p class="empty">Nothing here yet.</p></div>' +
                 '<div class="list-col-add">' +
                   '<input type="text" class="list-col-add-input" data-col-add-input="' + k + '" placeholder="Type item, press Enter…" />' +
+                  '<button type="button" class="btn btn-icon list-ocr-cam" data-ocr-list="' + k +
+                    '" title="Photo → items"><img src="icons/pins/camera.png" alt="" width="18" height="18" /></button>' +
                   '<button type="button" class="btn btn-primary list-col-add-btn" data-col-add="' + k + '">Add</button>' +
                 '</div></div>';
             }).join('') + '</div>';
@@ -5337,9 +5349,22 @@
   function openCreateModal() {
     state.leftTab = 'events';
     var now = new Date();
-    state.createCal.y = now.getFullYear();
-    state.createCal.m = now.getMonth();
-    state.createCal.selected = null;
+    // Default start = side calendar selected day (else today) (#37)
+    var seed = state.sideCal && state.sideCal.selectedDay
+      ? String(state.sideCal.selectedDay)
+      : (now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' +
+        String(now.getDate()).padStart(2, '0'));
+    var parts = seed.split('-').map(Number);
+    if (parts.length === 3 && parts[0] && parts[1]) {
+      state.createCal.y = parts[0];
+      state.createCal.m = parts[1] - 1;
+      state.createCal.selected = seed;
+    } else {
+      state.createCal.y = now.getFullYear();
+      state.createCal.m = now.getMonth();
+      state.createCal.selected = null;
+    }
+    state.createCal.endSelected = null;
     if ($('create-name')) $('create-name').value = '';
     if ($('create-type')) $('create-type').value = 'camping';
     if ($('create-template')) $('create-template').checked = true;
@@ -5347,11 +5372,27 @@
     if ($('create-end-time')) $('create-end-time').value = '17:00';
     if ($('create-end-next-day')) $('create-end-next-day').checked = false;
     if ($('create-personal-only')) $('create-personal-only').checked = state.mode === 'personal';
-    if ($('cal-selected')) $('cal-selected').textContent = 'None (optional) · TBD if unset';
+    updateCreateCalSelectedLabel();
     renderCalGrid();
     if ($('create-modal')) {
       $('create-modal').classList.add('is-open');
       $('create-modal').setAttribute('aria-hidden', 'false');
+    }
+  }
+
+  function updateCreateCalSelectedLabel() {
+    var start = state.createCal.selected;
+    var end = state.createCal.endSelected;
+    var el = $('cal-selected');
+    if (!el) return;
+    if (!start) {
+      el.textContent = 'None (optional) · TBD if unset · tap a day for start, another for end';
+      return;
+    }
+    if (end && end !== start) {
+      el.textContent = start + ' → ' + end;
+    } else {
+      el.textContent = start + ' (tap another day for end date)';
     }
   }
   function closeCreateModal() {
@@ -6089,6 +6130,146 @@
     appToast('Added ' + name);
   }
 
+  /** Load Tesseract.js once (CDN) for photo → text (#35) */
+  function loadTesseractLib() {
+    return new Promise(function (resolve, reject) {
+      if (window.Tesseract) return resolve(window.Tesseract);
+      var existing = document.querySelector('script[data-tesseract]');
+      if (existing) {
+        existing.addEventListener('load', function () { resolve(window.Tesseract); });
+        existing.addEventListener('error', function () { reject(new Error('OCR load failed')); });
+        return;
+      }
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+      s.async = true;
+      s.setAttribute('data-tesseract', '1');
+      s.onload = function () {
+        if (window.Tesseract) resolve(window.Tesseract);
+        else reject(new Error('OCR not available'));
+      };
+      s.onerror = function () { reject(new Error('OCR library failed to load (need network once)')); };
+      document.head.appendChild(s);
+    });
+  }
+
+  function ensureOcrFileInput() {
+    var inp = $('list-ocr-file-input');
+    if (inp) return inp;
+    inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/*';
+    try { inp.setAttribute('capture', 'environment'); } catch (eC) {}
+    inp.id = 'list-ocr-file-input';
+    inp.style.display = 'none';
+    document.body.appendChild(inp);
+    return inp;
+  }
+
+  function splitOcrToListItems(text) {
+    text = String(text || '').replace(/\r/g, '\n');
+    var lines = text.split(/\n+/).map(function (l) {
+      return l.replace(/^[\s•\-\*\u2022\d\.\)\(]+/, '').trim();
+    }).filter(Boolean);
+    var items = [];
+    lines.forEach(function (line) {
+      if (/;|\s{2,}/.test(line)) {
+        line.split(/;|\s{2,}/).forEach(function (p) {
+          p = String(p || '').trim();
+          if (p.length >= 2) items.push(p);
+        });
+      } else if (line.length >= 2) {
+        items.push(line);
+      }
+    });
+    return items;
+  }
+
+  function runListPhotoOcr(opts) {
+    opts = opts || {};
+    var mode = opts.mode || 'items'; // items | note
+    var colId = opts.colId || null;
+    var isEvent = !!opts.isEvent;
+    var inp = ensureOcrFileInput();
+    inp.onchange = function () {
+      var file = inp.files && inp.files[0];
+      try { inp.value = ''; } catch (eV) {}
+      if (!file) return;
+      appToast('Reading photo…');
+      var url = URL.createObjectURL(file);
+      loadTesseractLib().then(function (T) {
+        return T.recognize(url, 'eng');
+      }).then(function (result) {
+        try { URL.revokeObjectURL(url); } catch (eU) {}
+        var text = result && result.data && result.data.text;
+        if (!text || !String(text).trim()) {
+          appToast('No words found — try better light / closer photo');
+          return;
+        }
+        if (mode === 'note') {
+          var ta = document.querySelector('.list-item.is-expanded .li-detail textarea[data-f="note_text"]') ||
+            document.querySelector('.li-detail textarea[data-f="note_text"]');
+          if (!ta) {
+            appToast('Open an item’s note first');
+            return;
+          }
+          var cur = ta.value || '';
+          var chunk = String(text).trim();
+          ta.value = cur ? (cur.replace(/\s+$/, '') + '\n' + chunk) : chunk;
+          try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch (eI) {}
+          appToast('Note text added from photo');
+          return;
+        }
+        var items = splitOcrToListItems(text);
+        if (!items.length) {
+          appToast('No list lines found in photo');
+          return;
+        }
+        var added = 0;
+        var list = findNamedListById(state.activeNamedListId);
+        if (!list) {
+          try {
+            var triad = document.getElementById('list-triad');
+            if (triad && triad.getAttribute('data-list-id')) {
+              list = findNamedListById(triad.getAttribute('data-list-id'));
+            }
+          } catch (eL) {}
+        }
+        items.forEach(function (title) {
+          title = autoCap(String(title || '').trim());
+          if (!title) return;
+          if (list && colId && !isEvent) {
+            if (addItemToListColumn(list, colId, title)) added++;
+          } else if (colId) {
+            var ev = activeEvent();
+            if (ev) {
+              try {
+                getListBucket(ev, colId, 'group').push(newItem(title));
+                added++;
+              } catch (eA) {}
+            } else if (list && addItemToListColumn(list, colId, title)) {
+              added++;
+            }
+          }
+        });
+        if (list) {
+          try { saveNamedList(list); } catch (eS) {}
+        } else if (activeEvent()) {
+          try { saveActiveEvent(); } catch (eS2) {}
+        }
+        try { render(); } catch (eR) {}
+        appToast(added ? ('Added ' + added + ' item' + (added === 1 ? '' : 's') + ' from photo') : 'Could not add items');
+      }).catch(function (err) {
+        try { URL.revokeObjectURL(url); } catch (eU2) {}
+        console.warn('OCR', err);
+        appToast((err && err.message) || 'Could not read photo');
+      });
+    };
+    try { inp.click(); } catch (eClick) {
+      appToast('Camera / file picker not available');
+    }
+  }
+
   function wireListColumnUi(list) {
     var root = $('list-triad');
     if (!root || !list) return;
@@ -6229,7 +6410,7 @@
   function renderCalGrid() {
     var y = state.createCal.y, m = state.createCal.m;
     var label = new Date(y, m, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' });
-    $('cal-label').textContent = label;
+    if ($('cal-label')) $('cal-label').textContent = label;
     var first = new Date(y, m, 1);
     var startPad = first.getDay();
     var daysInMonth = new Date(y, m + 1, 0).getDate();
@@ -6237,15 +6418,27 @@
       return '<div class="dow">' + d + '</div>';
     }).join('');
     var today = new Date();
+    var startIso = state.createCal.selected;
+    var endIso = state.createCal.endSelected;
+    // Normalize range so start <= end for highlight
+    var rangeA = startIso, rangeB = endIso;
+    if (rangeA && rangeB && rangeB < rangeA) {
+      var tmp = rangeA; rangeA = rangeB; rangeB = tmp;
+    }
     for (var i = 0; i < startPad; i++) html += '<button type="button" class="cal-day-btn" disabled></button>';
     for (var d = 1; d <= daysInMonth; d++) {
       var iso = y + '-' + String(m + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
-      var isSel = state.createCal.selected === iso;
+      var isStart = startIso === iso;
+      var isEnd = endIso === iso;
+      var inRange = !!(rangeA && rangeB && iso >= rangeA && iso <= rangeB);
       var isToday = today.getFullYear() === y && today.getMonth() === m && today.getDate() === d;
-      html += '<button type="button" class="cal-day-btn' + (isSel ? ' is-selected' : '') + (isToday ? ' is-today' : '') +
-        '" data-cal-day="' + iso + '">' + d + '</button>';
+      var cls = 'cal-day-btn';
+      if (isStart || isEnd) cls += ' is-selected';
+      else if (inRange) cls += ' is-in-range';
+      if (isToday) cls += ' is-today';
+      html += '<button type="button" class="' + cls + '" data-cal-day="' + iso + '">' + d + '</button>';
     }
-    $('cal-grid').innerHTML = html;
+    if ($('cal-grid')) $('cal-grid').innerHTML = html;
   }
 
   function addItemFromInputs() {
@@ -7034,6 +7227,23 @@
         }
       }
 
+      // Photo OCR → list items / note (#35)
+      var ocrList = e.target.closest && e.target.closest('[data-ocr-list]');
+      if (ocrList) {
+        e.preventDefault(); e.stopPropagation();
+        runListPhotoOcr({
+          mode: 'items',
+          colId: ocrList.getAttribute('data-ocr-list'),
+          isEvent: ocrList.getAttribute('data-ocr-event') === '1'
+        });
+        return;
+      }
+      var ocrNote = e.target.closest && e.target.closest('[data-ocr-note]');
+      if (ocrNote) {
+        e.preventDefault(); e.stopPropagation();
+        runListPhotoOcr({ mode: 'note' });
+        return;
+      }
       // Add item (button) — shared submit path
       var addBtn = e.target.closest && e.target.closest('[data-col-add], [data-event-col-add]');
       if (addBtn) {
@@ -7116,6 +7326,23 @@
     if (!document._psColAddWired) {
       document._psColAddWired = true;
       document.addEventListener('click', function (e) {
+        var ocrBtn = e.target && e.target.closest && e.target.closest('[data-ocr-list], [data-ocr-note]');
+        if (ocrBtn) {
+          if (!ocrBtn.closest('#ev-list') && !ocrBtn.closest('#lists-active') && !ocrBtn.closest('#mobile-list-sheet') &&
+              !ocrBtn.closest('.li-detail')) return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (ocrBtn.getAttribute('data-ocr-note')) {
+            runListPhotoOcr({ mode: 'note' });
+          } else {
+            runListPhotoOcr({
+              mode: 'items',
+              colId: ocrBtn.getAttribute('data-ocr-list'),
+              isEvent: ocrBtn.getAttribute('data-ocr-event') === '1'
+            });
+          }
+          return;
+        }
         var addBtn = e.target && e.target.closest && e.target.closest('[data-col-add], [data-event-col-add]');
         if (!addBtn) return;
         if (!addBtn.closest('#ev-list') && !addBtn.closest('#lists-active') && !addBtn.closest('#mobile-list-sheet')) return;
@@ -7398,8 +7625,23 @@
     on('cal-grid', 'click', function (e) {
       var b = e.target.closest('[data-cal-day]');
       if (!b) return;
-      state.createCal.selected = b.getAttribute('data-cal-day');
-      if ($('cal-selected')) $('cal-selected').textContent = state.createCal.selected;
+      var day = b.getAttribute('data-cal-day');
+      // First tap = start; second tap = end (or reset start if same day twice) (#37)
+      if (!state.createCal.selected || (state.createCal.selected && state.createCal.endSelected)) {
+        state.createCal.selected = day;
+        state.createCal.endSelected = null;
+      } else if (day === state.createCal.selected) {
+        state.createCal.endSelected = null;
+      } else {
+        state.createCal.endSelected = day;
+        // Keep chronological start/end
+        if (state.createCal.endSelected < state.createCal.selected) {
+          var sw = state.createCal.selected;
+          state.createCal.selected = state.createCal.endSelected;
+          state.createCal.endSelected = sw;
+        }
+      }
+      updateCreateCalSelectedLabel();
       renderCalGrid();
     });
     click('create-submit', function () {
@@ -7414,8 +7656,8 @@
         var d = new Date(state.createCal.selected + 'T' + t + ':00');
         if (!isNaN(d.getTime())) startAt = d.toISOString();
         var et = ($('create-end-time') && $('create-end-time').value) || '17:00';
-        var endDate = state.createCal.selected;
-        if ($('create-end-next-day') && $('create-end-next-day').checked) {
+        var endDate = state.createCal.endSelected || state.createCal.selected;
+        if (!state.createCal.endSelected && $('create-end-next-day') && $('create-end-next-day').checked) {
           var nd = new Date(state.createCal.selected + 'T12:00:00');
           nd.setDate(nd.getDate() + 1);
           endDate = nd.getFullYear() + '-' + String(nd.getMonth() + 1).padStart(2, '0') + '-' +

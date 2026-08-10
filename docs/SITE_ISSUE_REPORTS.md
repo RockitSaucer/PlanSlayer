@@ -1,21 +1,20 @@
-# PlanSlayer — “Report an issue” + agent workflow
+# PlanSlayer — "Report an issue" + agent workflow
 
-Same pattern as Hunt/Reg (`Desktop/HuntApp/docs/SITE_ISSUE_REPORTS.md`), but issues land on **this** product’s repo.
+Same pattern as Hunt/Reg (`Desktop/HuntApp/docs/SITE_ISSUE_REPORTS.md`).
 
 ## User-facing
 - Header **Report an issue** on the PlanSlayer deploy.
-- Popup → submit → GitHub Issue on **RockitSaucer/PlanSlayer**.
+- Popup → submit → GitHub Issue on **RockitSaucer/Hunt-Slayer** (shared inbox with Hunt/Reg reports).
 - Labels auto-applied: `from-site` + `from-planslayer`.
+- **Code still ships only from** `Desktop/PlanSlayer/` → **RockitSaucer/PlanSlayer** unless Rockit says the issue affects all sites.
 
 ## Security
 - Client never holds a GitHub token.
 - `POST /api/report-issue` (Vercel serverless in `api/report-issue.js`) uses env **`GITHUB_ISSUE_TOKEN`**.
-- Token needs `issues: write` on **RockitSaucer/PlanSlayer** (fine-grained PAT recommended).
-- Optional env **`GITHUB_ISSUE_REPO`** (default `RockitSaucer/PlanSlayer`).
+- Token needs `issues: write` on **RockitSaucer/Hunt-Slayer** (shared inbox).
+- Optional env **`GITHUB_ISSUE_REPO`** (default `RockitSaucer/Hunt-Slayer`).
 
-## One-time GitHub setup (before first live report)
-On **RockitSaucer/PlanSlayer** create labels (colors optional):
-
+## Labels (on Hunt-Slayer)
 | Label | Who | Meaning |
 |-------|-----|---------|
 | `from-site` | API | From in-app form |
@@ -24,29 +23,10 @@ On **RockitSaucer/PlanSlayer** create labels (colors optional):
 | `ready-to-commit` | Rockit | Agent may implement |
 | `revised-changes` | Rockit | Agent revises plan only |
 
-If labels are missing, the API still files the issue (without labels) so reports are not lost.
+## Agent rules
+**Idle gate:** Only auto-check if Rockit has not talked to Grok on this machine for **45+ minutes**.
 
-## Vercel setup (when you push this build)
-1. Deploy this folder to the PlanSlayer Vercel project (GitHub `RockitSaucer/PlanSlayer`).
-2. Project → Settings → Environment Variables → add **`GITHUB_ISSUE_TOKEN`** (Production + Preview if you want previews to work).
-3. Redeploy so the serverless function picks up the env.
-
-Local `npx serve` has **no** `/api` — report button will explain that. Use Vercel (or `vercel dev`) to test filing.
-
-## Agent rules (same as Hunt idle gate)
-**Idle gate:** Only auto-check if Rockit has not talked to Grok on this machine for **45+ minutes**. Active chat → skip.
-
-1. Pass idle gate + time window (5am–9pm CT during trial) if using the hourly agent.
-2. List open issues on **RockitSaucer/PlanSlayer** with `from-site` (or `from-planslayer`).
-3. **Never implement** unless labeled `ready-to-commit`.
-4. New / needs plan → plan comment → `ready-for-review`.
-5. `revised-changes` → revise plan, re-`ready-for-review`.
-6. `ready-to-commit` → implement in **`Desktop/PlanSlayer/`**, commit/push **PlanSlayer only** (not Hunt/Reg), comment, clear `ready-to-commit`.
-
-## Rockit at work (no Grok file access)
-1. Open [PlanSlayer issues](https://github.com/RockitSaucer/PlanSlayer/issues) (or create one manually).
-2. Review agent plan when present.
-3. Add **`ready-to-commit`** to approve implementation, or **`revised-changes`** to request a new plan.
-4. Home PC + agent (when idle rules allow) ships the fix.
-
-You can also use the in-app **Report an issue** button on the live site after deploy.
+1. List open `from-site` issues on **Hunt-Slayer** (includes `from-planslayer`) and PlanSlayer repo (legacy).
+2. Origin label decides **code path**: `from-planslayer` → `Desktop/PlanSlayer/` only.
+3. Never implement without `ready-to-commit`.
+4. Kits/skills still update all consumers unless Rockit says otherwise.

@@ -1,0 +1,6 @@
+﻿V1.3.6 — site issues #35 #37
+
+- #35 Camera icon on list Add (+ notes): photo OCR → list items / note text (Tesseract.js CDN)
+- #37 Create event defaults to side-cal selected day; second calendar tap = end date
+- Report an issue → RockitSaucer/Hunt-Slayer inbox with from-planslayer (code still PlanSlayer only)
+- shell v38

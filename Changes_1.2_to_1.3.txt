@@ -1,0 +1,14 @@
+PlanSlayer V1.2.x → V1.3.0 (live testing)
+
+Major UX / features since 1.2:
+- My lists | My events parity; open event packs from either tab
+- Share list generates/reuses invite codes (no create-time checkbox)
+- Unified list item buttons (todo / buy / bring / custom)
+- Item expand options, highlight pulse (red/yellow/green), $ expense split UX
+- Got it on To buy also adds to To bring (stays claimed on buy)
+- User settings: nickname + My Color (claim fill)
+- Map max/min placement; countdown on cards
+- Header: username with Other ways to slay + Report an issue stacked under it
+- Report-issue API kit; Hunt map kits (plan-map.js)
+
+Version: APP_VERSION 1.3.0 · badge V1.3 · shell cache plan-slayer-shell-v32

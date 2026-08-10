@@ -1,20 +1,29 @@
-# PlanSlayer V1.0
+# PlanSlayer V1.2
 
-Group event planning: shared + personal to-do / to-buy / to-bring lists, invites, expense settle-up, countdown, and a simple satellite map.
+Group event planning: My lists, invites, expense settle-up, countdown, and **Hunt Slayer kit** map + calendar (no deer zones).
+
+**Hunt kit source pin:** `7.0.50-beta` (`Desktop/HuntApp/reusable-kits/`).
+
+## What’s in V1.2
+
+- Full dark design + **no gray scrollbars** (hard rules)
+- In-app dialogs only (including sign-out + Quick Load)
+- Multi-day calendar dots, Quick Load modal, map pin filter banner
+- PlanMap: measure/draw, GPS, share location, radar, layers (incl. **LiDAR**), pin editor, weather card, offline packs
+- Map context bar: Auto · Personal · per-event shared pins (party-style)
+- Same Supabase auth/usernames as Hunt/Reg
 
 ## Login
 
-Uses the **same Supabase project and username scheme** as Hunt Slayer / Reg Slayer (`users.regslayer.local`). One account works on all three sites.
+Same Supabase project and username scheme as Hunt Slayer / Reg Slayer. One account works across sites.
 
 ## Stack
 
 - Static multi-file app (HTML/JS/CSS) + Leaflet
-- Supabase Auth + `plan_*` tables (see `supabase/migrations/`)
+- Supabase Auth + `plan_*` tables (`supabase/migrations/`)
 - Vercel static deploy
 
 ## Local
-
-Serve the folder over HTTP (not `file://`):
 
 ```bash
 npx serve .
@@ -22,18 +31,14 @@ npx serve .
 
 ## Deploy
 
-GitHub: `RockitSaucer/PlanSlayer` → Vercel project (static, no build).
+GitHub: `RockitSaucer/PlanSlayer` → Vercel (static + `api/report-issue.js`). Apply SQL migration before cloud create/join.
 
-Apply migration on Supabase (SQL editor or CLI) before cloud create/join:
+### Report an issue
+- In-app header button posts to `/api/report-issue` (token **only** on Vercel as `GITHUB_ISSUE_TOKEN`).
+- Creates GitHub issues on this repo with `from-site` + `from-planslayer`.
+- Labels for agent workflow: `ready-for-review`, `ready-to-commit`, `revised-changes`.
+- Full notes: `docs/SITE_ISSUE_REPORTS.md`.
 
-`supabase/migrations/20260810010000_plan_slayer.sql`
+## Kit consumers
 
-Without migration, the app still works **local-first** (device storage) for solo testing.
-
-## Hunt / Reg calendar
-
-Events are stored so Hunt/Reg *can* show them later. **V1 does not modify Hunt or Reg.** Cross-app calendar appears only after a future Hunt/Reg patch that reads `plan_events`.
-
-## Invite
-
-Same idea as shared maps: **6-digit code** + link `?join=123456`.
+Registered in `Desktop/HuntApp/reusable-kits/CONSUMERS.md`. Changing Hunt map/calendar requires **user OK** before fan-out here.

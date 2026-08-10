@@ -187,9 +187,18 @@
         showAuthPanel(a.getAttribute('data-auth-goto') || 'signin');
       });
     });
+    // Sign out lives in user settings (username chip). Keep legacy #btn-signout if present.
     var so = $('btn-signout');
     if (so) so.onclick = function () {
-      if (confirm('Sign out on this device?')) signOut().catch(function () {});
+      // Hunt hard rule: never browser confirm — use PlanSlayer in-app dialog when ready
+      var confirmFn = window.PlanSlayerApp && window.PlanSlayerApp.confirm;
+      if (typeof confirmFn === 'function') {
+        confirmFn('Sign out on this device?', 'Sign out').then(function (ok) {
+          if (ok) signOut().catch(function () {});
+        });
+      } else {
+        signOut().catch(function () {});
+      }
     };
   }
 

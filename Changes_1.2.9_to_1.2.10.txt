@@ -1,0 +1,18 @@
+PlanSlayer V1.2.9 → V1.2.10 (+ follow-on 1.2.11 local)
+
+Report an issue (Hunt parity — not pushed until you deploy this build)
+- Header button “Report an issue” + modal (title, message, optional contact)
+- POST /api/report-issue (api/report-issue.js) — GitHub token only on Vercel
+- Issues on RockitSaucer/PlanSlayer with labels from-site + from-planslayer
+- Workflow labels: ready-for-review, ready-to-commit, revised-changes
+- Docs: docs/SITE_ISSUE_REPORTS.md
+
+Also
+- SW shell cache → plan-slayer-shell-v15
+- APP_VERSION / badge → 1.2.10
+
+Deploy checklist (when you push)
+1. Push Desktop/PlanSlayer to RockitSaucer/PlanSlayer
+2. Vercel env GITHUB_ISSUE_TOKEN (issues:write on PlanSlayer)
+3. Create GitHub labels on PlanSlayer if missing
+4. Hard-refresh live site; test Report an issue

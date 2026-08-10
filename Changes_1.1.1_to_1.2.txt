@@ -1,0 +1,31 @@
+PlanSlayer V1.2 — Hunt reusable kits parity
+============================================
+Source pin: Hunt Slayer APP_VERSION 7.0.50-beta (kits SOURCE_OF_TRUTH).
+Does not modify Hunt/Reg production push folders.
+
+Kits applied
+------------
+- my design / my scrollbars: --bg #0a0c09; full dark thin scrollbars, no arrow buttons
+- my hard rules: local Y-M-D calendar days; no browser alert/confirm/prompt
+- my dialogs: sign-out uses in-app confirm; Quick Load modal in-app
+- my calendar: multi-day event dots (start–end span + colors); month nav 180ms lock;
+  Quick Load (pins / location / both / open lists); event pin filter banner
+- my map: LiDAR basemap option; solid map chrome retained; PlanMap host hooks expanded
+- my pins / my weather / my offline: existing PlanMap pin editor + weather card + offline packs
+- my auth: existing Supabase shared login; confirm path fixed
+- my party maps: map context bar (Auto / Personal / per-event shared map pins)
+
+Version
+-------
+- APP_VERSION 1.2 · badge V1.2 · SHELL_CACHE plan-slayer-shell-v5
+
+Follow-ups (same V1.2 line)
+---------------------------
+- Toolbar click fix + yellow measure / blue draw icons
+- Measure/draw: crosshair cursor while active
+- Share location: pulse when on
+- Map-dot: free click places orange only; tap dot for “What do you want to do?”
+- Calendar nav: “< Prev” / “Next >” Hunt green buttons
+- Layout: narrow left (calendar width), events then Map button, map not open by default
+- Add list → To do + To buy + To bring columns; tap tab to move column furthest left
+- my map kit + hunt-reusable-kits skill updated with map rules

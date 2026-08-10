@@ -1,0 +1,18 @@
+PlanSlayer V1.3.4 → V1.3.5
+===========================
+
+Fix: deleted lists (e.g. “Texas NXL”) coming back after delete.
+
+Cause: event-linked list packs were recreated on every load by
+ensureAssociatedListForEvent() because only the list id was tombstoned,
+and a brand-new pack (new id) was spun up for the event.
+
+Fix:
+- Tombstone eventList:<eventId> when deleting a list pack linked to an event
+- ensureAssociatedListForEvent skips tombstoned event packs
+- loadFreeListsStore filters out packs for tombstoned eventList ids
+- saveNamedList refuses to re-save tombstoned list ids
+- Explicit create/link to an event clears the eventList tombstone (opt back in)
+- Tombstones kept 90 days
+
+Version: APP_VERSION 1.3.5 · badge V1.3.5 · shell cache plan-slayer-shell-v37

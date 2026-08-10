@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.4';
+  var APP_VERSION = '1.3.5';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -448,31 +448,93 @@
   }
 
   /* ---------- Cross-tab / device sync (deletes show up faster) ---------- */
+  /**
+   * Tombstones:
+   *  - events: deleted event ids
+   *  - lists: deleted list ids (block re-save)
+   *  - eventLists: event ids whose packing list pack was deleted by the user
+   *    (blocks ensureAssociatedListForEvent from recreating “Texas NXL · lists” etc.)
+   */
   function loadTombstones() {
-    var t = loadJson(LOCAL_TOMBSTONES_KEY, null) || { events: {}, lists: {} };
+    var t = loadJson(LOCAL_TOMBSTONES_KEY, null) || { events: {}, lists: {}, eventLists: {} };
     if (!t.events || typeof t.events !== 'object') t.events = {};
     if (!t.lists || typeof t.lists !== 'object') t.lists = {};
-    // Drop entries older than 14 days
-    var cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
-    ['events', 'lists'].forEach(function (k) {
+    if (!t.eventLists || typeof t.eventLists !== 'object') t.eventLists = {};
+    // Drop entries older than 90 days (list/event deletes should stick longer than 14d)
+    var cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+    ['events', 'lists', 'eventLists'].forEach(function (k) {
       Object.keys(t[k]).forEach(function (id) {
         if (Number(t[k][id]) < cutoff) delete t[k][id];
       });
     });
     return t;
   }
+  function tombstoneBag(t, kind) {
+    if (kind === 'event') return t.events;
+    if (kind === 'eventList' || kind === 'event-list' || kind === 'event_list') return t.eventLists;
+    return t.lists;
+  }
   function markTombstone(kind, id) {
     if (id == null || id === '') return;
     var t = loadTombstones();
-    var bag = kind === 'event' ? t.events : t.lists;
-    bag[String(id)] = Date.now();
+    tombstoneBag(t, kind)[String(id)] = Date.now();
     saveJson(LOCAL_TOMBSTONES_KEY, t);
+  }
+  function clearTombstone(kind, id) {
+    if (id == null || id === '') return;
+    var t = loadTombstones();
+    var bag = tombstoneBag(t, kind);
+    if (bag[String(id)]) {
+      delete bag[String(id)];
+      saveJson(LOCAL_TOMBSTONES_KEY, t);
+    }
   }
   function isTombstoned(kind, id) {
     if (id == null || id === '') return false;
     var t = loadTombstones();
-    var bag = kind === 'event' ? t.events : t.lists;
-    return !!bag[String(id)];
+    return !!tombstoneBag(t, kind)[String(id)];
+  }
+  /** Permanently remove a named list from storage + tombstone (and its event pack slot). */
+  function permanentlyDeleteNamedList(listOrId, opts) {
+    opts = opts || {};
+    var list = null;
+    var lid = null;
+    if (listOrId && typeof listOrId === 'object') {
+      list = listOrId;
+      lid = String(list.id || '');
+    } else {
+      lid = String(listOrId || '');
+      try { list = findNamedListById(lid); } catch (eF) { list = null; }
+    }
+    if (!lid) return false;
+    var eventId = list && list.eventId ? String(list.eventId) : (opts.eventId ? String(opts.eventId) : null);
+    markTombstone('list', lid);
+    if (eventId) markTombstone('eventList', eventId);
+    try {
+      var store = loadFreeListsStoreRaw();
+      store.named = (store.named || []).filter(function (n) { return String(n && n.id) !== lid; });
+      // Also drop any other packs still linked to this event if opts.stripEventPacks
+      if (opts.stripEventPacks && eventId) {
+        store.named = store.named.filter(function (n) {
+          if (!n) return false;
+          if (String(n.id) === lid) return false;
+          if (n.eventId && String(n.eventId) === eventId) {
+            markTombstone('list', n.id);
+            return false;
+          }
+          return true;
+        });
+      }
+      saveJson(LOCAL_FREE_LISTS_KEY, store);
+    } catch (eS) {
+      console.warn('permanentlyDeleteNamedList', eS);
+      return false;
+    }
+    if (String(state.activeNamedListId) === lid) {
+      state.activeNamedListId = null;
+      state.mobileSheetOpen = false;
+    }
+    return true;
   }
   function broadcastSync(payload) {
     payload = payload || {};
@@ -511,9 +573,19 @@
       }
       if (payload.type === 'delete-list' && payload.id) {
         markTombstone('list', payload.id);
+        if (payload.eventId) markTombstone('eventList', payload.eventId);
         try {
           var store = loadFreeListsStoreRaw();
-          store.named = (store.named || []).filter(function (n) { return String(n.id) !== String(payload.id); });
+          store.named = (store.named || []).filter(function (n) {
+            if (!n) return false;
+            if (String(n.id) === String(payload.id)) return false;
+            // Drop packs for the same event so they can't reappear under My lists
+            if (payload.eventId && n.eventId && String(n.eventId) === String(payload.eventId)) {
+              markTombstone('list', n.id);
+              return false;
+            }
+            return true;
+          });
           saveJson(LOCAL_FREE_LISTS_KEY, store);
         } catch (eL) {}
         if (String(state.activeNamedListId) === String(payload.id)) {
@@ -1083,11 +1155,17 @@
       try { saveJson(LOCAL_FREE_LISTS_KEY, s); } catch (eM) {}
     }
     // Always heal every list so open never sticks on "Could not render"
-    var deadLists = loadTombstones().lists;
+    var tombs = loadTombstones();
+    var deadLists = tombs.lists || {};
+    var deadEventLists = tombs.eventLists || {};
     s.named = (s.named || []).map(function (n) {
       return sanitizeNamedList(n);
     }).filter(function (n) {
-      return n && n.id && !deadLists[String(n.id)];
+      if (!n || !n.id) return false;
+      if (deadLists[String(n.id)]) return false;
+      // User deleted this event's packing list pack — keep it gone
+      if (n.eventId && deadEventLists[String(n.eventId)]) return false;
+      return true;
     });
     return s;
   }
@@ -1200,6 +1278,14 @@
     if (!list) return false;
     try {
       sanitizeNamedList(list);
+      // Never re-save a deleted list (or a pack for an event whose list was deleted)
+      if (isTombstoned('list', list.id)) {
+        console.info('[PlanSlayer] skip saveNamedList — list tombstoned', list.id);
+        return false;
+      }
+      if (list.eventId && isTombstoned('eventList', list.eventId) && isTombstoned('list', list.id)) {
+        return false;
+      }
       list.updated_at = new Date().toISOString();
       // Clone through JSON so we never store live shared refs
       var snapshot;
@@ -1229,14 +1315,23 @@
           updated_at: list.updated_at
         });
       }
+      if (isTombstoned('list', snapshot.id)) return false;
       var store = loadFreeListsStoreRaw();
+      var deadLists = loadTombstones().lists;
+      var deadEventLists = loadTombstones().eventLists;
       var idx = (store.named || []).findIndex(function (n) { return n && String(n.id) === String(snapshot.id); });
       if (idx >= 0) store.named[idx] = snapshot;
       else store.named.push(snapshot);
       // Heal every other list too so store can't stay permanently broken
       store.named = store.named.map(function (n) {
         try { return sanitizeNamedList(n); } catch (e) { return n; }
-      }).filter(function (n) { return n && n.id; });
+      }).filter(function (n) {
+        if (!n || !n.id) return false;
+        if (deadLists[String(n.id)]) return false;
+        // Drop auto-packs for events whose list pack was intentionally deleted
+        // (only when this save isn't an explicit user re-link of a non-tombstoned list)
+        return true;
+      });
       return saveJson(LOCAL_FREE_LISTS_KEY, store);
     } catch (eS) {
       console.warn('saveNamedList', eS);
@@ -1731,12 +1826,24 @@
     });
   }
 
-  /** Every event gets a linked To do / To buy / To bring list pack */
+  /** Every event gets a linked To do / To buy / To bring list pack — unless user deleted that pack */
   function ensureAssociatedListForEvent(ev) {
     if (!ev || !ev.id) return null;
-    var existing = listsForEvent(ev.id);
+    var eid = String(ev.id);
+    // User deleted the event or its list pack — do not resurrect
+    if (isTombstoned('event', eid) || isTombstoned('eventList', eid)) {
+      return null;
+    }
+    var existing = listsForEvent(eid).filter(function (n) {
+      return n && !isTombstoned('list', n.id);
+    });
     if (existing.length) return existing[0];
     var store = loadFreeListsStore();
+    // Double-check store after tombstone filter
+    var still = (store.named || []).filter(function (n) {
+      return n && n.eventId && String(n.eventId) === eid && !isTombstoned('list', n.id);
+    });
+    if (still.length) return still[0];
     var nl = normalizeNamedList({
       id: uid(),
       name: (ev.name || 'Event') + ' · lists',
@@ -1744,7 +1851,7 @@
       items: [],
       buckets: { todo: [], buy: [], bring: [] },
       columnOrder: ['todo', 'buy', 'bring'],
-      eventId: String(ev.id),
+      eventId: eid,
       owner_id: myId() || 'local',
       creators: [],
       members: [{
@@ -1784,6 +1891,9 @@
     var ev = (state.events || []).find(function (e) { return String(e.id) === String(eventId); });
     if (!list || !ev) return false;
     normalizeNamedList(list);
+    // User is explicitly linking — allow a pack for this event again
+    clearTombstone('eventList', ev.id);
+    clearTombstone('list', list.id);
     list.eventId = String(ev.id);
     if (!list.name || list.name === 'Untitled list') list.name = (ev.name || 'Event') + ' · lists';
     saveNamedList(list);
@@ -6546,6 +6656,8 @@
       var name = autoCap(($('list-name') && $('list-name').value || '').trim());
       if (!name) { appToast('Enter a list name'); return; }
       var linkEv = ($('list-link-event') && $('list-link-event').value) || '';
+      // Explicit create linked to event — allow packing pack again
+      if (linkEv) clearTombstone('eventList', linkEv);
       var store = loadFreeListsStore();
       // Every pack automatically includes To do, To buy, and To bring columns
       // Invite code is generated later when user taps Share list
@@ -6771,32 +6883,38 @@
       list.name = name;
       var linkEv = ($('edit-list-link-event') && $('edit-list-link-event').value) || '';
       list.eventId = linkEv || null;
+      // Explicit re-link means user wants a pack for this event again
+      if (linkEv) {
+        clearTombstone('eventList', linkEv);
+        clearTombstone('list', list.id);
+      }
       saveNamedList(list);
       closeEditListModal();
       appToast('List saved');
       openNamedListById(list.id);
     });
-    // Delete list: immediate confirm — no Save required
+    // Delete list: immediate confirm — no Save required; stay deleted (no event pack recreate)
     click('edit-list-delete', async function () {
       var list = findNamedListById(state.activeNamedListId);
       if (!list) { closeEditListModal(); return; }
+      var linkedNote = list.eventId
+        ? ' It will not come back when the linked event reloads.'
+        : '';
       var ok = await appConfirm(
-        'Delete list “' + (list.name || 'List') + '”? This cannot be undone.',
+        'Delete list “' + (list.name || 'List') + '”? This cannot be undone.' + linkedNote,
         'Delete list'
       );
       if (!ok) return;
       var lid = String(list.id);
-      markTombstone('list', lid);
-      var store = loadFreeListsStoreRaw();
-      store.named = (store.named || []).filter(function (n) { return String(n && n.id) !== lid; });
-      saveJson(LOCAL_FREE_LISTS_KEY, store);
+      var eid = list.eventId ? String(list.eventId) : null;
+      permanentlyDeleteNamedList(list, { stripEventPacks: true });
       if (String(state.activeNamedListId) === lid) {
         state.activeNamedListId = null;
         state.mobileSheetOpen = false;
         setRightPanelMode('empty');
       }
       closeEditListModal();
-      broadcastSync({ type: 'delete-list', id: lid });
+      broadcastSync({ type: 'delete-list', id: lid, eventId: eid });
       appToast('List deleted');
       render();
       closeMobileListSheet(true);
@@ -7161,6 +7279,10 @@
       if (!list) return;
       var v = e.target.value || null;
       list.eventId = v;
+      if (v) {
+        clearTombstone('eventList', v);
+        clearTombstone('list', list.id);
+      }
       saveNamedList(list);
       state.leftTab = v ? 'events' : 'lists';
       appToast(v ? 'List linked to event' : 'List is personal again');

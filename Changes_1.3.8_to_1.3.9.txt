@@ -1,0 +1,6 @@
+﻿V1.3.9 — #40 OCR modal above list + stricter lines
+
+- #ocr-review-modal z-index 32000 (above mobile list sheet 20000)
+- Stronger junk filter; prefer strong lines; weak unchecked by default
+- shell v41
+- vercel.json security headers (trusted-site hygiene #42)

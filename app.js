@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.8';
+  var APP_VERSION = '1.3.9';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -6319,17 +6319,35 @@
   function ocrLineLooksReal(line) {
     line = String(line || '').trim();
     if (line.length < 2) return false;
-    if (line.length > 120) return false;
+    if (line.length > 80) return false;
     // Mostly letters / numbers / basic punctuation
     var letters = (line.match(/[A-Za-z0-9]/g) || []).length;
+    var alpha = (line.match(/[A-Za-z]/g) || []).length;
     var ratio = letters / line.length;
-    if (ratio < 0.45) return false;
+    if (ratio < 0.55) return false;
+    // Prefer lines with at least 2 letters (handwritten list words)
+    if (alpha < 2) return false;
     // Reject pure symbol noise
     if (/^[^\w\s]+$/.test(line)) return false;
-    // Common Tesseract garbage
-    if (/^[|Il1\-~_=+*#@%&]+$/.test(line)) return false;
-    if (/(.)\1{5,}/.test(line)) return false; // aaaaaa
+    // Common Tesseract garbage / code-like
+    if (/^[|Il1\-~_=+*#@%&\/\\{}[\]<>]+$/.test(line)) return false;
+    if (/(.)\1{4,}/.test(line)) return false;
+    if (/[{}[\]<>\\\/]{2,}/.test(line)) return false;
+    if (/function|const |var |return |https?:|www\./i.test(line)) return false;
+    // Single short tokens of only ambiguous OCR chars
+    if (/^[ilIL|0Oo]{2,6}$/.test(line)) return false;
     return true;
+  }
+
+  /** Stronger lines default-checked; weak/junk start unchecked (#40). */
+  function ocrLineIsStrong(line) {
+    line = String(line || '').trim();
+    if (!ocrLineLooksReal(line)) return false;
+    var alpha = (line.match(/[A-Za-z]/g) || []).length;
+    var words = line.split(/\s+/).filter(Boolean);
+    if (alpha >= 3 && words.length <= 6) return true;
+    if (words.length >= 2 && alpha >= 4) return true;
+    return false;
   }
 
   function splitOcrToListItems(text) {
@@ -6388,8 +6406,9 @@
       return;
     }
     listEl.innerHTML = lines.map(function (line, idx) {
+      var strong = ocrLineIsStrong(line);
       return '<li class="ocr-review-row" data-ocr-idx="' + idx + '">' +
-        '<input type="checkbox" class="ocr-ck" checked />' +
+        '<input type="checkbox" class="ocr-ck"' + (strong ? ' checked' : '') + ' />' +
         '<input type="text" class="ocr-txt" value="' + esc(line) + '" />' +
         '<button type="button" class="ocr-rm" title="Remove" aria-label="Remove">×</button>' +
         '</li>';
@@ -6626,6 +6645,12 @@
           appToast('No clear list lines found — try flatter paper / better light');
           return;
         }
+        // If OCR produced lots of junk vs a few strong words, keep strong only for review (#40)
+        var strongOnly = items.filter(ocrLineIsStrong);
+        if (strongOnly.length >= 1 && items.length > Math.max(6, strongOnly.length * 2)) {
+          items = strongOnly;
+        }
+        if (items.length > 20) items = items.slice(0, 20);
         appToast('Review ' + items.length + ' line' + (items.length === 1 ? '' : 's') + '…');
         wireOcrReviewModal();
         openOcrReviewModal(items, { mode: mode, colId: colId, isEvent: isEvent });

@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.2';
+  var APP_VERSION = '1.3.3';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -67,6 +67,8 @@
     moveItemId: null,
     noteItemId: null,
     minimizedItems: {},
+    itemDetailSnapshot: null,
+    itemDetailMeta: null,
     filterQualifier: 'all',
     sortByType: false,
     sideCal: { y: 0, m: 0, selectedDay: null },
@@ -2863,7 +2865,7 @@
             '<button type="button" class="btn btn-got' + (mine > 0 ? ' is-on' : '') + '" data-act="got">Got it!</button>' +
             '<button type="button" class="btn btn-expense' + (item.shared_expense ? ' is-on' : '') +
               '" data-act="expense" title="Shared expense">$</button>' +
-            '<button type="button" class="btn btn-icon drag-handle" data-act="drag" title="Drag to reorder" aria-label="Drag to reorder">⋮⋮</button>' +
+            '<button type="button" class="btn btn-icon drag-handle" data-act="drag" title="Hold and drag to reorder" aria-label="Hold and drag to reorder">⋮⋮</button>' +
           '</div>' +
         '</div>' +
         '<div class="li-detail">' +
@@ -2912,16 +2914,18 @@
               '</select></div>' +
             '<div class="field" style="flex:0 0 100px"><label>Days before</label><input data-f="due_days" type="number" min="0" value="' + (item.due_days || 0) + '"' + lockAttr + ' /></div>' +
           '</div>' +
-          '<div class="field-row" style="margin-top:12px;gap:8px;flex-wrap:wrap">' +
-            '<button type="button" class="btn btn-primary" data-act="save-detail">Save</button>' +
+          '<div class="field-row" style="margin-top:12px;gap:8px;flex-wrap:wrap;align-items:center">' +
+            '<button type="button" class="btn btn-item-del" data-act="del" title="Delete item"' +
+              (canEditSettings ? '' : ' disabled') + '>Delete</button>' +
+            '<button type="button" class="btn" data-act="cancel-detail" title="Discard option changes">Cancel</button>' +
             (showDelegate
               ? '<button type="button" class="btn" data-act="delegate" title="Delegate to a member’s To bring">Delegate</button>'
               : '') +
             '<button type="button" class="btn" data-act="share-item" title="Share item">Copy / share item</button>' +
             '<button type="button" class="btn" data-act="save-item-template" title="Save this item’s settings as a template">Save item template</button>' +
-            '<button type="button" class="btn" style="color:#fca5a5;border-color:rgba(252,165,165,0.4)" data-act="del"' +
-              (canEditSettings ? '' : ' disabled') + '>Delete item</button>' +
+            '<button type="button" class="btn btn-primary" data-act="save-detail" title="Save and close">Done</button>' +
           '</div>' +
+          '<p class="muted" style="font-size:10px;margin:8px 0 0">Changes save when you click away. Cancel discards.</p>' +
         '</div>' +
       '</div>'
     );
@@ -4641,14 +4645,18 @@
     }
   }
 
-  /** Drag-and-drop reorder for list items (desktop drag + mobile press-hold). */
+  /**
+   * Drag-and-drop reorder via the ⋮⋮ handle (desktop + mobile).
+   * Starts immediately on handle press (touch-action:none so scroll won't steal).
+   * Drop target = sibling under finger by Y, not only elementFromPoint.
+   */
   var _dragState = null;
   function wireListDrag() {
-    var listRoot = $('ev-list');
-    if (!listRoot || listRoot._dragWired) return;
-    listRoot._dragWired = true;
+    if (document._psListDragWired) return;
+    document._psListDragWired = true;
 
     function bucketForRow(row) {
+      if (!row) return null;
       var kind = row.getAttribute('data-kind');
       var scope = row.getAttribute('data-scope');
       var id = row.getAttribute('data-item-id');
@@ -4657,8 +4665,8 @@
         if (!ev) return null;
         return { bucket: getListBucket(ev, kind, 'group'), kind: kind, scope: scope, id: id, save: function () { saveActiveEvent(); } };
       }
-      if (scope === 'free-list') {
-        var nlist = resolveOpenNamedList(row);
+      if (scope === 'free-list' || scope === 'personal-board') {
+        var nlist = resolveOpenNamedList(row) || findNamedListById(state.activeNamedListId);
         var hit = nlist ? findInNamedListColumn(nlist, kind, id) : null;
         if (hit) {
           return {
@@ -4678,74 +4686,207 @@
       };
     }
 
-    function reorderInBucket(bucket, fromId, toId, placeAfter) {
-      if (!bucket || fromId === toId) return false;
-      var fromIdx = bucket.findIndex(function (x) { return String(x.id) === String(fromId); });
-      var toIdx = bucket.findIndex(function (x) { return String(x.id) === String(toId); });
+    /** Reliable reorder: remove then insert relative to target id. */
+    function reorderInBucketSafe(bucket, fromId, toId, placeAfter) {
+      if (!bucket || String(fromId) === String(toId)) return false;
+      var fromIdx = -1;
+      var toIdx = -1;
+      var i;
+      for (i = 0; i < bucket.length; i++) {
+        if (String(bucket[i].id) === String(fromId)) fromIdx = i;
+        if (String(bucket[i].id) === String(toId)) toIdx = i;
+      }
       if (fromIdx < 0 || toIdx < 0) return false;
       var item = bucket.splice(fromIdx, 1)[0];
-      toIdx = bucket.findIndex(function (x) { return String(x.id) === String(toId); });
+      // Target index may have shifted after removal
+      toIdx = -1;
+      for (i = 0; i < bucket.length; i++) {
+        if (String(bucket[i].id) === String(toId)) { toIdx = i; break; }
+      }
       if (toIdx < 0) { bucket.push(item); return true; }
       var insertAt = placeAfter ? toIdx + 1 : toIdx;
+      if (insertAt < 0) insertAt = 0;
       if (insertAt > bucket.length) insertAt = bucket.length;
       bucket.splice(insertAt, 0, item);
       return true;
     }
 
+    function listItemsInSameColumn(row) {
+      var kind = row.getAttribute('data-kind');
+      var root = row.closest('.list-col-body') ||
+        row.closest('#mls-body') ||
+        row.closest('.list-col') ||
+        row.parentElement;
+      if (!root) return [];
+      return Array.prototype.slice.call(root.querySelectorAll('.list-item')).filter(function (el) {
+        return el.getAttribute('data-kind') === kind;
+      });
+    }
+
+    /** Pick drop target by finger Y among sibling items (works when elementFromPoint fails on mobile). */
+    function findDropByY(row, y) {
+      var items = listItemsInSameColumn(row);
+      var best = null;
+      var placeAfter = false;
+      var i;
+      for (i = 0; i < items.length; i++) {
+        var el = items[i];
+        if (el === row) continue;
+        var rect = el.getBoundingClientRect();
+        var mid = rect.top + rect.height / 2;
+        if (y >= rect.top && y <= rect.bottom) {
+          best = el;
+          placeAfter = y > mid;
+          break;
+        }
+        // Between items: if y is above this item's top and past previous, snap to this (before)
+        if (y < rect.top) {
+          best = el;
+          placeAfter = false;
+          break;
+        }
+        // Past last item bottom
+        if (i === items.length - 1 && y > rect.bottom) {
+          best = el;
+          placeAfter = true;
+        } else if (y > rect.bottom) {
+          best = el;
+          placeAfter = true;
+        }
+      }
+      return best ? { el: best, placeAfter: placeAfter } : null;
+    }
+
+    function clearDragVisuals() {
+      document.querySelectorAll('.list-item.is-dragging, .list-item.drag-over').forEach(function (n) {
+        n.classList.remove('is-dragging');
+        n.classList.remove('drag-over');
+      });
+      try { document.body.classList.remove('ps-list-dragging'); } catch (eB) {}
+    }
+
+    function clientXY(e) {
+      var y = e.clientY;
+      var x = e.clientX;
+      if ((y == null || x == null) && e.touches && e.touches[0]) {
+        y = e.touches[0].clientY;
+        x = e.touches[0].clientX;
+      }
+      if ((y == null || x == null) && e.changedTouches && e.changedTouches[0]) {
+        y = e.changedTouches[0].clientY;
+        x = e.changedTouches[0].clientX;
+      }
+      return { x: x, y: y };
+    }
+
+    function updateDropTarget(st, x, y) {
+      document.querySelectorAll('.list-item.drag-over').forEach(function (n) { n.classList.remove('drag-over'); });
+      var hit = findDropByY(st.row, y);
+      if (!hit) {
+        // Fallback: elementFromPoint with dragging row non-interactive
+        st.row.style.pointerEvents = 'none';
+        var el = document.elementFromPoint(x != null ? x : 0, y);
+        st.row.style.pointerEvents = '';
+        var over = el && el.closest && el.closest('.list-item');
+        if (over && over !== st.row && over.getAttribute('data-kind') === st.row.getAttribute('data-kind')) {
+          var rect = over.getBoundingClientRect();
+          hit = { el: over, placeAfter: y > rect.top + rect.height / 2 };
+        }
+      }
+      if (hit && hit.el) {
+        hit.el.classList.add('drag-over');
+        st.overId = hit.el.getAttribute('data-item-id');
+        st.placeAfter = !!hit.placeAfter;
+      } else {
+        st.overId = null;
+      }
+    }
+
     function onPointerDown(e) {
-      var handle = e.target.closest && e.target.closest('[data-act="drag"]');
-      if (!handle || !listRoot.contains(handle)) return;
+      // Only primary button / touch
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      var t = e.target;
+      if (!t || !t.closest) return;
+      var handle = t.closest('[data-act="drag"]');
+      if (!handle) return;
       var row = handle.closest('.list-item');
       if (!row) return;
+      if (!handle.closest('#ev-list, #lists-active, #mobile-list-sheet, .list-col-body, .list-triad, #mls-body')) return;
+      // Stop scroll + item click
       e.preventDefault();
       e.stopPropagation();
+      var xy = clientXY(e);
       var id = row.getAttribute('data-item-id');
       _dragState = {
         id: id,
         row: row,
-        startY: e.clientY || (e.touches && e.touches[0] && e.touches[0].clientY) || 0,
+        handle: handle,
+        startY: xy.y || 0,
+        startX: xy.x || 0,
+        pointerId: e.pointerId,
         moved: false,
-        overId: null
+        overId: null,
+        placeAfter: false
       };
-      row.classList.add('is-dragging');
+      // Capture first, then mark dragging (pointer-events:none on row)
       try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+      row.classList.add('is-dragging');
+      try { document.body.classList.add('ps-list-dragging'); } catch (eB2) {}
+      try { if (navigator.vibrate) navigator.vibrate(6); } catch (eV) {}
     }
     function onPointerMove(e) {
       if (!_dragState) return;
-      var y = e.clientY != null ? e.clientY : (e.touches && e.touches[0] && e.touches[0].clientY);
-      if (y == null) return;
-      if (Math.abs(y - _dragState.startY) > 4) _dragState.moved = true;
-      var el = document.elementFromPoint(e.clientX != null ? e.clientX : (e.touches && e.touches[0].clientX), y);
-      var over = el && el.closest && el.closest('.list-item');
-      listRoot.querySelectorAll('.list-item.drag-over').forEach(function (n) { n.classList.remove('drag-over'); });
-      if (over && over !== _dragState.row && listRoot.contains(over)) {
-        over.classList.add('drag-over');
-        _dragState.overId = over.getAttribute('data-item-id');
-        var rect = over.getBoundingClientRect();
-        _dragState.placeAfter = y > rect.top + rect.height / 2;
-      } else {
-        _dragState.overId = null;
+      if (e.pointerId != null && _dragState.pointerId != null && e.pointerId !== _dragState.pointerId) return;
+      var xy = clientXY(e);
+      if (xy.y == null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (Math.abs(xy.y - _dragState.startY) > 3 || Math.abs((xy.x || 0) - _dragState.startX) > 3) {
+        _dragState.moved = true;
+      }
+      updateDropTarget(_dragState, xy.x, xy.y);
+      // Auto-scroll parent scroller near edges (mobile list sheet body)
+      var scroller = _dragState.row.closest('#mls-body, .list-col-body, .mls-body') ||
+        document.scrollingElement;
+      if (scroller && scroller !== document.scrollingElement) {
+        var sRect = scroller.getBoundingClientRect();
+        var edge = 48;
+        if (xy.y < sRect.top + edge) scroller.scrollTop -= 12;
+        else if (xy.y > sRect.bottom - edge) scroller.scrollTop += 12;
       }
     }
     function onPointerUp(e) {
       if (!_dragState) return;
+      if (e && e.pointerId != null && _dragState.pointerId != null && e.pointerId !== _dragState.pointerId) return;
       var st = _dragState;
       _dragState = null;
-      listRoot.querySelectorAll('.list-item.is-dragging, .list-item.drag-over').forEach(function (n) {
-        n.classList.remove('is-dragging'); n.classList.remove('drag-over');
-      });
+      try {
+        if (st.handle && e && e.pointerId != null) st.handle.releasePointerCapture(e.pointerId);
+      } catch (errR) {}
+      // Final target from release position
+      var xy = clientXY(e || {});
+      if (xy.y != null && st.moved) updateDropTarget(st, xy.x, xy.y);
+      clearDragVisuals();
       if (!st.moved || !st.overId) return;
+      state._suppressItemClick = true;
+      setTimeout(function () { state._suppressItemClick = false; }, 120);
       var meta = bucketForRow(st.row);
       if (!meta) return;
-      if (reorderInBucket(meta.bucket, st.id, st.overId, st.placeAfter)) {
+      if (reorderInBucketSafe(meta.bucket, st.id, st.overId, st.placeAfter)) {
         meta.save();
         render();
       }
     }
-    listRoot.addEventListener('pointerdown', onPointerDown);
-    listRoot.addEventListener('pointermove', onPointerMove);
-    listRoot.addEventListener('pointerup', onPointerUp);
-    listRoot.addEventListener('pointercancel', onPointerUp);
+    // capture + non-passive so preventDefault stops scroll on mobile
+    document.addEventListener('pointerdown', onPointerDown, { capture: true, passive: false });
+    document.addEventListener('pointermove', onPointerMove, { capture: true, passive: false });
+    document.addEventListener('pointerup', onPointerUp, { capture: true, passive: false });
+    document.addEventListener('pointercancel', onPointerUp, { capture: true, passive: false });
+    // iOS Safari sometimes needs touch listeners for preventDefault during drag
+    document.addEventListener('touchmove', function (e) {
+      if (!_dragState) return;
+      e.preventDefault();
+    }, { capture: true, passive: false });
   }
 
   /** Move item one slot up/down in its bucket (legacy helper). */
@@ -5991,6 +6132,170 @@
     item.notes = text; // keep legacy field in sync
   }
 
+  /** Snapshot item options when expanding — Cancel restores this. */
+  function snapshotItemDetail(item) {
+    if (!item) return null;
+    var notes = [];
+    try { notes = JSON.parse(JSON.stringify(normalizeNotes(item))); } catch (e) {
+      notes = (normalizeNotes(item) || []).slice();
+    }
+    return {
+      title: item.title,
+      qty: item.qty,
+      qualifier: item.qualifier,
+      priority: item.priority,
+      highlight: !!item.highlight,
+      highlight_color: item.highlight_color || 'red',
+      creator_only_edit: !!item.creator_only_edit,
+      require_all: !!item.require_all,
+      due_mode: item.due_mode || 'anytime_before',
+      due_days: item.due_days || 0,
+      notes: item.notes,
+      notesList: notes,
+      expense_share_with: (item.expense_share_with || []).slice(),
+      expense_amount: item.expense_amount,
+      shared_expense: !!item.shared_expense
+    };
+  }
+  function restoreItemDetail(item, snap) {
+    if (!item || !snap) return;
+    item.title = snap.title;
+    item.qty = snap.qty;
+    item.qualifier = snap.qualifier;
+    item.priority = snap.priority;
+    item.highlight = !!snap.highlight;
+    item.highlight_color = snap.highlight_color || 'red';
+    item.creator_only_edit = !!snap.creator_only_edit;
+    item.require_all = !!snap.require_all;
+    item.due_mode = snap.due_mode || 'anytime_before';
+    item.due_days = snap.due_days || 0;
+    item.notes = snap.notes;
+    item.notesList = Array.isArray(snap.notesList) ? snap.notesList.slice() : [];
+    item.expense_share_with = (snap.expense_share_with || []).slice();
+    item.expense_amount = snap.expense_amount;
+    item.shared_expense = !!snap.shared_expense;
+  }
+  /**
+   * Read expanded .li-detail fields into item.
+   * @returns {'ok'|'add-category'|'locked'}
+   */
+  function applyItemDetailFromRow(row, item) {
+    if (!row || !item) return 'ok';
+    var get = function (f) { return row.querySelector('[data-f="' + f + '"]'); };
+    var allowSettings = true;
+    try { allowSettings = canEditItemSettings(item); } catch (e) { allowSettings = true; }
+    if (get('note_text')) applyNoteFromDetail(item, get('note_text').value);
+    if (get('expense_amount')) item.expense_amount = Math.max(0, parseFloat(get('expense_amount').value) || 0);
+    if (!allowSettings) return 'locked';
+    if (get('title')) item.title = autoCap(get('title').value.trim()) || item.title;
+    if (get('qty')) item.qty = Math.max(1, parseInt(get('qty').value, 10) || 1);
+    if (get('priority')) item.priority = parseInt(get('priority').value, 10) || 0;
+    var qVal = get('qualifier') ? get('qualifier').value : (item.qualifier || 'other');
+    if (qVal === '__add_category__') return 'add-category';
+    item.qualifier = qVal || 'other';
+    if (get('highlight')) item.highlight = !!get('highlight').checked;
+    var hlPick = row.querySelector('[data-f-hl-color].is-on');
+    if (hlPick) {
+      item.highlight_color = hlPick.getAttribute('data-f-hl-color') || 'red';
+    } else if (item.highlight && !item.highlight_color) {
+      item.highlight_color = 'red';
+    }
+    if (!item.highlight && !item.highlight_color) item.highlight_color = 'red';
+    if (get('creator_only_edit')) item.creator_only_edit = !!get('creator_only_edit').checked;
+    if (get('require_all')) item.require_all = !!get('require_all').checked;
+    if (get('due_mode')) item.due_mode = get('due_mode').value;
+    if (get('due_days')) item.due_days = Math.max(0, parseInt(get('due_days').value, 10) || 0);
+    var shares = [];
+    row.querySelectorAll('[data-share-id]').forEach(function (cb) {
+      if (cb.checked) shares.push(cb.getAttribute('data-share-id'));
+    });
+    if (shares.length || row.querySelector('[data-share-id]')) item.expense_share_with = shares;
+    if (item.shared_expense && !item.created_by) item.created_by = myId();
+    return 'ok';
+  }
+  /** Persist item after in-place mutation (named list / personal / event). */
+  function persistItemByMeta(kind, scope, id, fromEl) {
+    scope = scope || 'free-list';
+    if (scope === 'personal-board' || scope === 'free-list') {
+      var namedList = resolveOpenNamedList(fromEl) || findNamedListById(state.activeNamedListId);
+      if (namedList) {
+        var hit = findInNamedListColumn(namedList, kind, id) || findInNamedListColumn(namedList, null, id);
+        if (hit) {
+          saveNamedList(hit.list);
+          return true;
+        }
+      }
+      var free = getActiveFreeBucket(kind);
+      if (free && free.bucket) {
+        var idx = free.bucket.findIndex(function (x) { return String(x.id) === String(id); });
+        if (idx >= 0) {
+          if (free.named) saveNamedList(free.named);
+          else saveFreeListsStore(free.store);
+          return true;
+        }
+      }
+      try {
+        var board = loadPersonalBoard();
+        var arr = board[kind] || [];
+        if (arr.some(function (x) { return String(x.id) === String(id); })) {
+          savePersonalBoard(board);
+          return true;
+        }
+      } catch (eB) {}
+      return false;
+    }
+    saveActiveEvent();
+    return true;
+  }
+  function findItemFromRow(row) {
+    if (!row) return null;
+    var id = row.getAttribute('data-item-id');
+    var kind = row.getAttribute('data-kind');
+    var scope = row.getAttribute('data-scope') || 'free-list';
+    if (!id) return null;
+    if (scope === 'personal-board' || scope === 'free-list') {
+      var namedList = resolveOpenNamedList(row) || findNamedListById(state.activeNamedListId);
+      if (namedList) {
+        var hit = findInNamedListColumn(namedList, kind, id) || findInNamedListColumn(namedList, null, id);
+        if (hit) return { item: hit.item, kind: hit.colId || kind, scope: scope, id: id, list: hit.list, bucket: hit.bucket };
+      }
+      var free = getActiveFreeBucket(kind);
+      if (free && free.bucket) {
+        var it = free.bucket.find(function (x) { return String(x.id) === String(id); });
+        if (it) return { item: it, kind: kind, scope: scope, id: id, free: free, bucket: free.bucket };
+      }
+      try {
+        var board = loadPersonalBoard();
+        var arr = board[kind] || [];
+        var it2 = arr.find(function (x) { return String(x.id) === String(id); });
+        if (it2) return { item: it2, kind: kind, scope: 'personal-board', id: id, board: board, bucket: arr };
+      } catch (e) {}
+      return null;
+    }
+    var ev = activeEvent();
+    if (!ev) return null;
+    var found = findItem(ev, kind, scope, id);
+    if (!found.item) return null;
+    return { item: found.item, kind: kind, scope: scope, id: id, bucket: found.bucket, event: ev };
+  }
+  /**
+   * Apply expanded options from DOM and persist (no re-render).
+   * @returns {boolean|string} true if saved, false if nothing, 'add-category' if picker needed
+   */
+  function commitExpandedItemDetail(row) {
+    if (!row) return false;
+    var meta = findItemFromRow(row);
+    if (!meta || !meta.item) return false;
+    var result = applyItemDetailFromRow(row, meta.item);
+    if (result === 'add-category') return 'add-category';
+    persistItemByMeta(meta.kind, meta.scope, meta.id, row);
+    return true;
+  }
+  function clearItemDetailEditState() {
+    state.itemDetailSnapshot = null;
+    state.itemDetailMeta = null;
+  }
+
   function findItem(ev, kind, scope, id) {
     var bucket = getListBucket(ev, kind, scope);
     return { bucket: bucket, item: bucket.find(function (x) { return x.id === id; }), index: bucket.findIndex(function (x) { return x.id === id; }) };
@@ -6645,7 +6950,7 @@
         e.stopPropagation();
         submitColumnAddFromUi(inp);
       }, true);
-      // Collapse expanded item when clicking outside its options
+      // Collapse expanded item when clicking outside its options — click-away SAVES changes
       // (must not run on the same click that opens expand — re-render detaches e.target)
       document.addEventListener('click', function (e) {
         if (!state.expandedItemId) return;
@@ -6654,14 +6959,67 @@
           return;
         }
         if (e.target.closest && e.target.closest('.modal-overlay.is-open, .modal-overlay[aria-hidden="false"]')) return;
-        // Clicks on any list item are owned by the item handler (toggle expand)
+        // Clicks on any list item are owned by the item handler (toggle expand / cancel / etc.)
         if (e.target.closest && e.target.closest('.list-item')) return;
         // Don't collapse when using add inputs / filters
         if (e.target.closest && e.target.closest('.list-col-add, #qualifier-filters, .list-col-head')) return;
+        // Auto-save detail before closing
+        var expandedRow = document.querySelector('.list-item.is-expanded');
+        if (expandedRow) {
+          try { commitExpandedItemDetail(expandedRow); } catch (eSave) {}
+        }
         state.expandedItemId = null;
         state.noteItemId = null;
+        clearItemDetailEditState();
         render();
       }, false);
+      // Live auto-save when changing options inside an expanded item (no Save required)
+      document.addEventListener('change', function (e) {
+        var t = e.target;
+        if (!t || !t.closest) return;
+        var detail = t.closest('.li-detail');
+        if (!detail) return;
+        var rowCh = detail.closest('.list-item.is-expanded');
+        if (!rowCh) return;
+        if (!t.matches || !t.matches('[data-f], [data-share-id]')) return;
+        // __add_category__ opens a modal — don't commit yet
+        if (t.getAttribute('data-f') === 'qualifier' && t.value === '__add_category__') {
+          var metaAdd = findItemFromRow(rowCh);
+          if (metaAdd && metaAdd.item) {
+            openAddCategoryModal(function (newId) {
+              if (newId) {
+                metaAdd.item.qualifier = newId;
+                persistItemByMeta(metaAdd.kind, metaAdd.scope, metaAdd.id, rowCh);
+              }
+              render();
+            });
+          }
+          return;
+        }
+        try { commitExpandedItemDetail(rowCh); } catch (eC) {}
+        // Live highlight preview
+        if (t.getAttribute('data-f') === 'highlight') {
+          var pick = rowCh.querySelector('[data-hl-color-pick]');
+          if (pick) pick.classList.toggle('is-open', !!t.checked);
+          rowCh.classList.remove('is-highlight', 'hl-red', 'hl-yellow', 'hl-green');
+          if (t.checked) {
+            var on = rowCh.querySelector('[data-f-hl-color].is-on');
+            var col = (on && on.getAttribute('data-f-hl-color')) || 'red';
+            rowCh.classList.add('is-highlight', 'hl-' + col);
+          }
+        }
+      }, true);
+      document.addEventListener('focusout', function (e) {
+        var t = e.target;
+        if (!t || !t.closest) return;
+        if (!t.matches || !t.matches('.li-detail input, .li-detail textarea, .li-detail select')) return;
+        var row = t.closest('.list-item.is-expanded');
+        if (!row) return;
+        // Related target still inside same detail → skip
+        var rt = e.relatedTarget;
+        if (rt && row.contains(rt)) return;
+        try { commitExpandedItemDetail(row); } catch (eF) {}
+      }, true);
       // Item name template suggestions while typing in column add fields
       document.addEventListener('input', function (e) {
         var inp = e.target && e.target.closest && e.target.closest('[data-col-add-input], [data-event-col-add-input]');
@@ -6712,28 +7070,11 @@
         }
       }, true);
     }
-    // Highlight checkbox → show/hide color pickers; live pulse preview
-    on('ev-list', 'change', function (e) {
-      var hl = e.target && e.target.getAttribute && e.target.getAttribute('data-f') === 'highlight' ? e.target : null;
-      if (!hl) return;
-      var rowHl = hl.closest('.list-item');
-      if (!rowHl) return;
-      var pick = rowHl.querySelector('[data-hl-color-pick]');
-      if (pick) pick.classList.toggle('is-open', !!hl.checked);
-      rowHl.classList.remove('is-highlight', 'hl-red', 'hl-yellow', 'hl-green');
-      if (hl.checked) {
-        var on = rowHl.querySelector('[data-f-hl-color].is-on');
-        if (!on) {
-          var red = rowHl.querySelector('[data-f-hl-color="red"]');
-          if (red) { red.classList.add('is-on'); on = red; }
-        }
-        var col = (on && on.getAttribute('data-f-hl-color')) || 'red';
-        rowHl.classList.add('is-highlight', 'hl-' + col);
-      }
-    });
-    on('ev-list', 'click', function (e) {
+    // Highlight color swatches — live preview + auto-save (desktop triad + mobile sheet)
+    document.addEventListener('click', function (e) {
       var sw = e.target.closest && e.target.closest('[data-f-hl-color]');
       if (!sw || sw.disabled) return;
+      if (!sw.closest('#ev-list, #lists-active, #mobile-list-sheet, .list-col-body')) return;
       e.preventDefault();
       e.stopPropagation();
       var row = sw.closest('.list-item');
@@ -6741,14 +7082,15 @@
       row.querySelectorAll('[data-f-hl-color]').forEach(function (b) {
         b.classList.toggle('is-on', b === sw);
       });
-      // Live preview pulse while expanded
       var col = sw.getAttribute('data-f-hl-color') || 'red';
       row.classList.remove('hl-red', 'hl-yellow', 'hl-green');
       var hlCb = row.querySelector('[data-f="highlight"]');
       if (hlCb && hlCb.checked) {
         row.classList.add('is-highlight', 'hl-' + col);
       }
-    });
+      // Auto-save highlight color
+      try { commitExpandedItemDetail(row); } catch (eHl) {}
+    }, true);
     on('ev-list', 'change', function (e) {
       if (!e.target || e.target.id !== 'list-detail-event-link') return;
       var list = findNamedListById(state.activeNamedListId);
@@ -6975,8 +7317,14 @@
     on('mls-tabs', 'click', function (e) {
       var t = e.target.closest && e.target.closest('[data-mls-tab]');
       if (!t) return;
+      // Save open item options before switching section
+      if (state.expandedItemId) {
+        var er = document.querySelector('.list-item.is-expanded');
+        if (er) { try { commitExpandedItemDetail(er); } catch (eTab) {} }
+      }
       state.listTab = t.getAttribute('data-mls-tab');
       state.expandedItemId = null;
+      clearItemDetailEditState();
       renderMobileListSheet();
       // Also refresh desktop triad if present
       try { render(); } catch (eR) { renderMobileListSheet(); }
@@ -7868,8 +8216,9 @@
 
       var row = ev.target.closest('.list-item');
       if (!row) return;
+      if (state._suppressItemClick) return;
       // Don't treat typing in expanded detail as an item action
-      if (ev.target.closest && ev.target.closest('.li-detail input, .li-detail select, .li-detail textarea, .li-detail label')) {
+      if (ev.target.closest && ev.target.closest('.li-detail input, .li-detail select, .li-detail textarea, .li-detail label, .li-detail .check-row')) {
         return;
       }
       // Keep this click from the outside-click collapse listener (re-render detaches nodes)
@@ -7953,15 +8302,31 @@
           // async confirm — handled below via abort-async-del
           return 'abort-async-del';
         } else if (action === 'minimize') {
-          if (state.minimizedItems[id]) delete state.minimizedItems[id];
-          else {
+          if (state.minimizedItems[id]) {
+            delete state.minimizedItems[id];
+          } else {
+            // Save any open options first, then shrink to name+type only
+            if (state.expandedItemId === id) {
+              try { commitExpandedItemDetail(row); } catch (eMin) {}
+              state.expandedItemId = null;
+              clearItemDetailEditState();
+            }
             state.minimizedItems[id] = true;
-            if (state.expandedItemId === id) state.expandedItemId = null;
           }
           return 'rerender-only';
         } else if (action === 'expense') {
           openExpenseFlow(item, kind, scope, id);
           return 'abort-modal';
+        } else if (action === 'cancel-detail') {
+          // Discard option changes → restore snapshot
+          if (state.itemDetailSnapshot && String(state.itemDetailMeta && state.itemDetailMeta.id) === String(id)) {
+            restoreItemDetail(item, state.itemDetailSnapshot);
+            try { persistItemByMeta(kind, scope, id, row); } catch (eR) {}
+          }
+          state.expandedItemId = null;
+          state.noteItemId = null;
+          clearItemDetailEditState();
+          return 'rerender-only';
         } else if (action === 'delegate') {
           var mgrList = resolveOpenNamedList(row) || findNamedListById(state.activeNamedListId);
           if (!canManageList(mgrList) && !(activeEvent() && isEventCreator(activeEvent()))) {
@@ -7986,12 +8351,33 @@
           appToast('Item template saved');
           return 'abort';
         } else if (action === 'expand' || action === 'face') {
-          // Identical for todo / buy / bring / any custom section — drop down all options
+          // Minimized → restore normal size + buttons only (don't open options yet)
+          if (state.minimizedItems[id]) {
+            delete state.minimizedItems[id];
+            return 'rerender-only';
+          }
+          // Clicking another item while one is open: save the previous first
+          if (state.expandedItemId && state.expandedItemId !== id) {
+            var prevRow = document.querySelector('.list-item.is-expanded');
+            if (prevRow) {
+              try { commitExpandedItemDetail(prevRow); } catch (ePrev) {}
+            }
+          }
+          // Toggle options panel; snapshot for Cancel
           state._skipExpandCollapseOnce = true;
-          state.expandedItemId = state.expandedItemId === id ? null : id;
+          if (state.expandedItemId === id) {
+            // Closing via re-click on face → save
+            try { commitExpandedItemDetail(row); } catch (eCl) {}
+            state.expandedItemId = null;
+            state.noteItemId = null;
+            clearItemDetailEditState();
+          } else {
+            state.expandedItemId = id;
+            state.noteItemId = id;
+            state.itemDetailSnapshot = snapshotItemDetail(item);
+            state.itemDetailMeta = { kind: kind, scope: scope, id: id };
+          }
           state.moveItemId = null;
-          state.noteItemId = state.expandedItemId === id ? id : null;
-          if (state.minimizedItems[id]) delete state.minimizedItems[id];
           return 'rerender-only';
         } else if (action === 'drag') {
           // Handled by drag listeners — ignore click
@@ -8035,50 +8421,23 @@
           row.querySelectorAll('[data-share-id]').forEach(function (cb) { cb.checked = true; });
           return 'abort';
         } else if (action === 'save-detail') {
-          var root = row;
-          var get = function (f) { return root.querySelector('[data-f="' + f + '"]'); };
-          var allowSettings = canEditItemSettings(item);
-          // Notes always allowed
-          if (get('note_text')) applyNoteFromDetail(item, get('note_text').value);
-          // $ amount always allowed when expense is on
-          if (get('expense_amount')) item.expense_amount = Math.max(0, parseFloat(get('expense_amount').value) || 0);
-          if (allowSettings) {
-            if (get('title')) item.title = autoCap(get('title').value.trim()) || item.title;
-            if (get('qty')) item.qty = Math.max(1, parseInt(get('qty').value, 10) || 1);
-            if (get('priority')) item.priority = parseInt(get('priority').value, 10) || 0;
-            var qVal = get('qualifier') ? get('qualifier').value : 'other';
-            if (qVal === '__add_category__') {
-              openAddCategoryModal(function (newId) {
-                if (newId) item.qualifier = newId;
-                render();
-              });
-              return 'abort-modal';
-            }
-            item.qualifier = qVal || 'other';
-            if (get('highlight')) item.highlight = !!get('highlight').checked;
-            var hlPick = root.querySelector('[data-f-hl-color].is-on');
-            if (hlPick) {
-              item.highlight_color = hlPick.getAttribute('data-f-hl-color') || 'red';
-            } else if (item.highlight && !item.highlight_color) {
-              item.highlight_color = 'red';
-            }
-            if (!item.highlight) {
-              // keep last color stored so re-checking restores it; default red if missing
-              if (!item.highlight_color) item.highlight_color = 'red';
-            }
-            if (get('creator_only_edit')) item.creator_only_edit = !!get('creator_only_edit').checked;
-            if (get('require_all')) item.require_all = !!get('require_all').checked;
-            if (get('due_mode')) item.due_mode = get('due_mode').value;
-            if (get('due_days')) item.due_days = Math.max(0, parseInt(get('due_days').value, 10) || 0);
-            var shares = [];
-            root.querySelectorAll('[data-share-id]').forEach(function (cb) {
-              if (cb.checked) shares.push(cb.getAttribute('data-share-id'));
+          // Done — apply + close (same as click-away)
+          var applied = applyItemDetailFromRow(row, item);
+          if (applied === 'add-category') {
+            openAddCategoryModal(function (newId) {
+              if (newId) item.qualifier = newId;
+              try { persistItemByMeta(kind, scope, id, row); } catch (eP) {}
+              state.expandedItemId = null;
+              clearItemDetailEditState();
+              render();
             });
-            item.expense_share_with = shares;
+            return 'abort-modal';
           }
-          if (item.shared_expense && !item.created_by) item.created_by = myId();
           state.expandedItemId = null;
           if (normalizeNotes(item).length) state.noteItemId = id;
+          else state.noteItemId = null;
+          clearItemDetailEditState();
+          // fall through to save + re-render
         }
         return null;
       }

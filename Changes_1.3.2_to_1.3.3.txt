@@ -1,0 +1,19 @@
+PlanSlayer V1.3.2 → V1.3.3
+===========================
+
+UX polish for lists (mobile sheet + item options + drag).
+
+1. Mobile list popup Close button is top-right (title left, Close right).
+2. Minimize item shrinks ~50% (name + category only; all option buttons hidden).
+   Tap again restores normal size and buttons.
+3. Item options auto-save: changing a field saves immediately; clicking away saves
+   and closes. Cancel discards back to the snapshot when options were opened.
+   Done button still closes after save. Hint text under the action row.
+4. $ (shared expense) on mobile: expense modal z-index raised above mobile list
+   sheet so the dialog is visible and usable on phone.
+5. Drag reorder: press the ⋮⋮ handle and drag up/down (immediate — no fragile
+   hold timer). Works on desktop + mobile list sheet. Drop target by Y among
+   siblings; auto-scroll near sheet edges; touch-action none on handle.
+6. Delete control is compact and leads the options row; Done is on the right.
+
+Version: APP_VERSION 1.3.3 · badge V1.3.3 · shell cache plan-slayer-shell-v35

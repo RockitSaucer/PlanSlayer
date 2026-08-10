@@ -616,18 +616,42 @@
     }
     .btn-add-list-big:hover,
     .btn-add-event-big:hover { filter: brightness(1.08); }
-    /* Drag reorder */
+    /* Drag reorder — handle is a touch drag target (no page scroll while held) */
     .list-item.is-dragging {
       opacity: 0.55; outline: 2px dashed var(--accent); z-index: 5;
+      pointer-events: none; /* so drop target can be found under finger on mobile */
     }
     .list-item.drag-over {
       box-shadow: inset 0 3px 0 0 var(--accent);
     }
-    .btn-icon.drag-handle {
-      cursor: grab; touch-action: none; user-select: none;
+    .list-item.drag-over.place-after {
+      box-shadow: inset 0 -3px 0 0 var(--accent);
     }
-    .btn-icon.drag-handle:active { cursor: grabbing; }
+    .btn-icon.drag-handle,
+    button.drag-handle,
+    [data-act="drag"] {
+      cursor: grab;
+      touch-action: none !important;
+      user-select: none !important;
+      -webkit-user-select: none !important;
+      -webkit-touch-callout: none !important;
+      /* Larger hit area on mobile without growing layout much */
+      min-width: 40px !important;
+      min-height: 40px !important;
+      position: relative;
+    }
+    .btn-icon.drag-handle:active,
+    [data-act="drag"]:active { cursor: grabbing; }
     .list-item.is-dragging .btn-icon.drag-handle { cursor: grabbing; }
+    body.ps-list-dragging {
+      overflow: hidden !important;
+      touch-action: none !important;
+      user-select: none !important;
+    }
+    body.ps-list-dragging .mls-body,
+    body.ps-list-dragging .list-col-body {
+      touch-action: none !important;
+    }
     /* Ideal wind dial */
     .wind-dial-wrap {
       display: flex; flex-direction: column; align-items: center; gap: 6px;
@@ -2049,15 +2073,38 @@
       background: #12160f;
     }
     .friend-swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    /* Minimized item: ~50% height, name + category only (no option buttons) */
+    .list-item.is-minimized {
+      min-height: 28px !important;
+      margin-bottom: 6px !important;
+    }
     .list-item.is-minimized .li-body-extra,
     .list-item.is-minimized .li-detail,
     .list-item.is-minimized .li-claimers,
     .list-item.is-minimized .note-preview,
     .list-item.is-minimized .needs-buy,
     .list-item.is-minimized .li-notes,
-    .list-item.is-minimized .move-pair { display: none !important; }
-    .list-item.is-minimized .li-row { padding: 8px 12px; align-items: center !important; min-height: 44px; }
-    .list-item.is-minimized .li-title { font-size: 24px !important; }
+    .list-item.is-minimized .move-pair,
+    .list-item.is-minimized .li-actions,
+    .list-item.is-minimized .li-qty,
+    .list-item.is-minimized .item-complete-check,
+    .list-item.is-minimized .chip:not(.chip-cat) { display: none !important; }
+    .list-item.is-minimized .li-row {
+      padding: 4px 10px !important;
+      align-items: center !important;
+      min-height: 28px !important;
+    }
+    .list-item.is-minimized .li-title {
+      font-size: 16px !important; /* ~50% of 32px */
+      line-height: 1.2 !important;
+    }
+    .list-item.is-minimized .chip-cat {
+      font-size: 10px !important;
+      padding: 1px 6px !important;
+    }
+    .list-item.is-minimized .li-face {
+      padding: 2px 0 !important;
+    }
     .btn-expense {
       min-width: 36px !important; height: 36px !important; font-size: 15px !important; font-weight: 800; padding: 0 10px !important;
       border-radius: 8px !important;
@@ -2484,6 +2531,31 @@
     .li-detail .field { flex: 1 1 120px; min-width: 100px; }
     .li-detail input, .li-detail select, .li-detail textarea { width: 100%; }
     .li-detail textarea { min-height: 56px; resize: vertical; }
+    /* Compact delete in item options (swapped to leading edge vs Done) */
+    .li-detail .btn-item-del {
+      flex: 0 0 auto !important;
+      min-width: 0 !important;
+      min-height: 0 !important;
+      height: auto !important;
+      padding: 2px 7px !important;
+      font-size: 10px !important;
+      font-weight: 600 !important;
+      line-height: 1.2 !important;
+      border-radius: 6px !important;
+      color: #fca5a5 !important;
+      border-color: rgba(252, 165, 165, 0.35) !important;
+      background: transparent !important;
+      opacity: 0.85;
+    }
+    .li-detail .btn-item-del:hover:not(:disabled) {
+      opacity: 1;
+      background: rgba(127, 29, 29, 0.25) !important;
+      border-color: rgba(252, 165, 165, 0.55) !important;
+    }
+    .li-detail .btn-item-del:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
     .check-row {
       display: flex; flex-direction: row; align-items: flex-start; gap: 10px;
       font-size: 12px; color: var(--ink); margin-top: 8px; line-height: 1.35;
@@ -2526,6 +2598,10 @@
       background: rgba(0,0,0,0.65); align-items: center; justify-content: center; padding: 12px;
     }
     .modal-overlay.is-open { display: flex; }
+    /* Expense must sit above mobile list sheet (z 20000) so $ works on phone */
+    #expense-modal {
+      z-index: 25000 !important;
+    }
     /* Confirm / alert / prompt always above edit/create modals */
     #app-confirm-modal, #app-alert-modal, #app-prompt-modal {
       z-index: 30000 !important;
@@ -2577,6 +2653,7 @@
       gap: 10px;
       flex: 0 0 auto;
       margin-bottom: 8px;
+      position: relative;
     }
     .mls-head h3 {
       flex: 1 1 auto;
@@ -2587,9 +2664,12 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      padding-right: 8px;
     }
     #mls-close {
       flex: 0 0 auto;
+      margin-left: auto;
+      order: 2;
     }
     .mls-tabs {
       display: flex;
@@ -2745,7 +2825,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.2</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.3</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -3285,8 +3365,8 @@
   <!-- Mobile: full-screen list popup (one section at a time) -->
   <div class="mobile-list-sheet" id="mobile-list-sheet" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="mls-title">
     <div class="mls-head">
-      <button type="button" class="btn" id="mls-close">Close</button>
       <h3 id="mls-title">List</h3>
+      <button type="button" class="btn" id="mls-close" aria-label="Close list">Close</button>
     </div>
     <div class="mls-tabs" id="mls-tabs" role="tablist" aria-label="List sections"></div>
     <div class="mls-body" id="mls-body"></div>

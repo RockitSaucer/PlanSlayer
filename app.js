@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.9';
+  var APP_VERSION = '1.3.10';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -6188,7 +6188,8 @@
   }
 
   /**
-   * Rasterize any camera/gallery file to JPEG data URL for Tesseract.
+   * Rasterize any camera/gallery file to JPEG data URL(s) for Tesseract.
+   * Returns { mild, ink } data URLs for dual-pass OCR (#48).
    * Fixes HEIC/HEIF phones where raw File often fails OCR (#38).
    */
   function fileToOcrJpegDataUrl(file) {
@@ -6208,33 +6209,31 @@
             reject(new Error('Could not read image dimensions'));
             return;
           }
-          var maxEdge = 1600;
+          var maxEdge = 1800;
           var scale = 1;
           if (Math.max(w, h) > maxEdge) scale = maxEdge / Math.max(w, h);
           var cw = Math.max(1, Math.round(w * scale));
           var ch = Math.max(1, Math.round(h * scale));
-          var canvas = document.createElement('canvas');
-          canvas.width = cw;
-          canvas.height = ch;
-          var ctx = canvas.getContext('2d');
-          if (!ctx) {
-            URL.revokeObjectURL(url);
-            reject(new Error('Canvas not available'));
-            return;
+          function makeVariant(mode) {
+            var canvas = document.createElement('canvas');
+            canvas.width = cw;
+            canvas.height = ch;
+            var ctx = canvas.getContext('2d');
+            if (!ctx) return null;
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, cw, ch);
+            ctx.drawImage(img, 0, 0, cw, ch);
+            try { enhanceCanvasForOcr(ctx, cw, ch, mode); } catch (eEn) {}
+            return canvas.toDataURL('image/jpeg', 0.92);
           }
-          // White background helps dark/transparent photos
-          ctx.fillStyle = '#ffffff';
-          ctx.fillRect(0, 0, cw, ch);
-          ctx.drawImage(img, 0, 0, cw, ch);
-          // Paper-list prep: grayscale + contrast stretch (#39)
-          try { enhanceCanvasForOcr(ctx, cw, ch); } catch (eEn) {}
-          var dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+          var mild = makeVariant('mild');
+          var ink = makeVariant('ink');
           URL.revokeObjectURL(url);
-          if (!dataUrl || dataUrl.length < 100) {
+          if (!mild || mild.length < 100) {
             reject(new Error('Could not convert photo for OCR'));
             return;
           }
-          resolve(dataUrl);
+          resolve({ mild: mild, ink: ink || mild, primary: mild });
         } catch (eDraw) {
           try { URL.revokeObjectURL(url); } catch (eU) {}
           reject(eDraw || new Error('Image convert failed'));
@@ -6254,17 +6253,21 @@
                 try {
                   var w2 = img2.naturalWidth || img2.width;
                   var h2 = img2.naturalHeight || img2.height;
-                  var maxE = 1600;
+                  var maxE = 1800;
                   var sc = Math.max(w2, h2) > maxE ? maxE / Math.max(w2, h2) : 1;
-                  var c2 = document.createElement('canvas');
-                  c2.width = Math.max(1, Math.round(w2 * sc));
-                  c2.height = Math.max(1, Math.round(h2 * sc));
-                  var x2 = c2.getContext('2d');
-                  x2.fillStyle = '#fff';
-                  x2.fillRect(0, 0, c2.width, c2.height);
-                  x2.drawImage(img2, 0, 0, c2.width, c2.height);
-                  try { enhanceCanvasForOcr(x2, c2.width, c2.height); } catch (eEn2) {}
-                  resolve(c2.toDataURL('image/jpeg', 0.92));
+                  function var2(mode) {
+                    var c2 = document.createElement('canvas');
+                    c2.width = Math.max(1, Math.round(w2 * sc));
+                    c2.height = Math.max(1, Math.round(h2 * sc));
+                    var x2 = c2.getContext('2d');
+                    x2.fillStyle = '#fff';
+                    x2.fillRect(0, 0, c2.width, c2.height);
+                    x2.drawImage(img2, 0, 0, c2.width, c2.height);
+                    try { enhanceCanvasForOcr(x2, c2.width, c2.height, mode); } catch (eEn2) {}
+                    return c2.toDataURL('image/jpeg', 0.92);
+                  }
+                  var mild2 = var2('mild');
+                  resolve({ mild: mild2, ink: var2('ink') || mild2, primary: mild2 });
                 } catch (e2) {
                   reject(new Error('Phone photo format not supported — try Gallery JPG'));
                 }
@@ -6289,9 +6292,14 @@
     });
   }
 
-  /** Grayscale + contrast stretch for paper lists (handwriting / print). */
-  function enhanceCanvasForOcr(ctx, w, h) {
+  /**
+   * Image prep for handwriting (#48).
+   * mode: 'mild' = grayscale + gentle stretch (keeps faint pencil)
+   *        'ink'  = stronger stretch (print / dark pen) — no hard wipe of mid grays
+   */
+  function enhanceCanvasForOcr(ctx, w, h, mode) {
     if (!ctx || !w || !h) return;
+    mode = mode || 'mild';
     var imgData = ctx.getImageData(0, 0, w, h);
     var d = imgData.data;
     var i, min = 255, max = 0, g;
@@ -6304,27 +6312,36 @@
     var range = Math.max(1, max - min);
     for (i = 0; i < d.length; i += 4) {
       g = d[i];
-      // Stretch contrast
       g = Math.round(((g - min) / range) * 255);
-      // Soft threshold toward black/white for ink on paper
-      if (g > 190) g = 255;
-      else if (g < 90) g = 0;
-      else g = Math.round((g - 90) * (255 / 100));
+      if (mode === 'ink') {
+        // Gentle S-curve — do NOT hard-threshold (that wiped pale handwriting → blank rows)
+        if (g > 220) g = 255;
+        else if (g < 40) g = 0;
+        else g = Math.round(Math.pow(g / 255, 0.85) * 255);
+      } else {
+        // Mild: only stretch; leave midtones for pencil
+        g = Math.min(255, Math.max(0, Math.round((g - 10) * (255 / 235))));
+      }
       d[i] = d[i + 1] = d[i + 2] = g;
     }
     ctx.putImageData(imgData, 0, 0);
   }
 
-  /** True if line looks like real words (not OCR junk symbols). */
+  /** True if line looks like real words (not OCR junk / empty / control chars). */
   function ocrLineLooksReal(line) {
-    line = String(line || '').trim();
+    line = String(line || '')
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
+      .replace(/\u00A0/g, ' ')
+      .trim();
     if (line.length < 2) return false;
     if (line.length > 80) return false;
+    // Must have visible non-space content
+    if (!/\S/.test(line)) return false;
     // Mostly letters / numbers / basic punctuation
     var letters = (line.match(/[A-Za-z0-9]/g) || []).length;
     var alpha = (line.match(/[A-Za-z]/g) || []).length;
     var ratio = letters / line.length;
-    if (ratio < 0.55) return false;
+    if (ratio < 0.5) return false;
     // Prefer lines with at least 2 letters (handwritten list words)
     if (alpha < 2) return false;
     // Reject pure symbol noise
@@ -6336,6 +6353,8 @@
     if (/function|const |var |return |https?:|www\./i.test(line)) return false;
     // Single short tokens of only ambiguous OCR chars
     if (/^[ilIL|0Oo]{2,6}$/.test(line)) return false;
+    // Blank-looking after stripping non-letters
+    if (!(line.replace(/[^A-Za-z0-9]/g, '').length >= 2)) return false;
     return true;
   }
 
@@ -6351,14 +6370,18 @@
   }
 
   function splitOcrToListItems(text) {
-    text = String(text || '').replace(/\r/g, '\n');
+    text = String(text || '')
+      .replace(/\r/g, '\n')
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
     var lines = text.split(/\n+/).map(function (l) {
       return l
         .replace(/^[\s•\-\*\u2022·▪◦\d\.\)\(]+/, '')
         .replace(/[|]+/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
-    }).filter(Boolean);
+    }).filter(function (l) {
+      return l && l.length >= 2 && /\S/.test(l);
+    });
     var items = [];
     lines.forEach(function (line) {
       // Only split on clear separators — NOT every double-space (that made extra junk items)
@@ -6385,6 +6408,20 @@
     return out;
   }
 
+  function mergeOcrLineLists(a, b) {
+    var seen = {};
+    var out = [];
+    (a || []).concat(b || []).forEach(function (it) {
+      it = String(it || '').trim();
+      if (!ocrLineLooksReal(it)) return;
+      var k = it.toLowerCase();
+      if (seen[k]) return;
+      seen[k] = true;
+      out.push(it);
+    });
+    return out;
+  }
+
   var _ocrReviewCtx = null;
 
   function closeOcrReviewModal() {
@@ -6400,9 +6437,28 @@
     _ocrReviewCtx = ctx || {};
     var modal = $('ocr-review-modal');
     var listEl = $('ocr-review-list');
+    // Never show blank checkbox rows (#48)
+    lines = (lines || []).map(function (l) {
+      return String(l || '').replace(/[\u0000-\u001F\u007F]/g, '').trim();
+    }).filter(function (l) {
+      return l.length >= 2 && ocrLineLooksReal(l);
+    });
     if (!modal || !listEl) {
-      // Fallback: add all if modal missing
-      applyOcrLines(lines, _ocrReviewCtx);
+      if (lines.length) applyOcrLines(lines, _ocrReviewCtx);
+      else appToast('No readable words — try darker pen / better light');
+      return;
+    }
+    if (!lines.length) {
+      listEl.innerHTML =
+        '<li class="ocr-review-row" style="display:block;padding:8px 0">' +
+        '<p class="muted" style="margin:0 0 8px;font-size:12px">Couldn’t read clear words. Type lines below, or retake with better light / darker ink.</p>' +
+        '<input type="text" class="ocr-txt ocr-manual" placeholder="Type an item…" style="width:100%" />' +
+        '</li>';
+      if ($('ocr-review-sub')) {
+        $('ocr-review-sub').textContent = 'No OCR hits — type items manually, then Add selected.';
+      }
+      modal.classList.add('is-open');
+      modal.setAttribute('aria-hidden', 'false');
       return;
     }
     listEl.innerHTML = lines.map(function (line, idx) {
@@ -6412,12 +6468,17 @@
         '<input type="text" class="ocr-txt" value="' + esc(line) + '" />' +
         '<button type="button" class="ocr-rm" title="Remove" aria-label="Remove">×</button>' +
         '</li>';
-    }).join('');
+    }).join('') +
+      '<li class="ocr-review-row" data-ocr-manual="1">' +
+      '<input type="checkbox" class="ocr-ck" checked />' +
+      '<input type="text" class="ocr-txt ocr-manual" placeholder="+ type extra line…" value="" />' +
+      '<button type="button" class="ocr-rm" title="Remove" aria-label="Remove">×</button>' +
+      '</li>';
     if ($('ocr-review-sub')) {
       $('ocr-review-sub').textContent =
         (ctx && ctx.mode === 'note')
           ? 'Edit text, then Add selected to append to the note.'
-          : 'Uncheck junk, fix words, then Add selected to your list.';
+          : 'Uncheck junk, fix words, then Add selected. Empty lines are ignored.';
     }
     modal.classList.add('is-open');
     modal.setAttribute('aria-hidden', 'false');
@@ -6606,10 +6667,13 @@
       var held = file;
       try { inp.value = ''; } catch (eV) {}
 
-      fileToOcrJpegDataUrl(held).then(function (dataUrl) {
+      fileToOcrJpegDataUrl(held).then(function (urls) {
+        // Dual-pass: mild (pencil) + ink (dark pen) — merge real lines (#48)
+        var mildUrl = (urls && urls.mild) || urls;
+        var inkUrl = (urls && urls.ink) || mildUrl;
+        if (typeof mildUrl === 'object' && mildUrl.primary) mildUrl = mildUrl.primary;
         appToast('Reading words…');
-        return loadTesseractLib().then(function (T) {
-          // createWorker when available for list-friendly PSM
+        function ocrOne(T, dataUrl) {
           if (T.createWorker) {
             return T.createWorker('eng', 1, {
               workerPath: TESSERACT_CDN + '/worker.min.js',
@@ -6618,7 +6682,7 @@
               logger: function () {}
             }).then(function (worker) {
               return worker.setParameters({
-                tessedit_pageseg_mode: '6', // assume uniform block of text (list-like)
+                tessedit_pageseg_mode: '6',
                 preserve_interword_spaces: '1'
               }).then(function () {
                 return worker.recognize(dataUrl).then(function (result) {
@@ -6633,19 +6697,40 @@
             langPath: TESSERACT_LANG_CDN,
             logger: function () {}
           });
+        }
+        return loadTesseractLib().then(function (T) {
+          return ocrOne(T, mildUrl).then(function (r1) {
+            var t1 = (r1 && r1.data && r1.data.text) || '';
+            // Second pass only if first is weak
+            var firstItems = splitOcrToListItems(t1);
+            if (firstItems.length >= 3 || mildUrl === inkUrl) {
+              return { text: t1, items: firstItems, chars: String(t1).replace(/\s/g, '').length };
+            }
+            return ocrOne(T, inkUrl).then(function (r2) {
+              var t2 = (r2 && r2.data && r2.data.text) || '';
+              var merged = mergeOcrLineLists(firstItems, splitOcrToListItems(t2));
+              return {
+                text: t1 + '\n' + t2,
+                items: merged,
+                chars: String(t1 + t2).replace(/\s/g, '').length
+              };
+            });
+          });
         });
-      }).then(function (result) {
-        var text = result && result.data && result.data.text;
-        if (!text || !String(text).trim()) {
-          appToast('No words found — try better light / closer photo');
-          return;
-        }
-        var items = splitOcrToListItems(text);
+      }).then(function (pack) {
+        if (!pack) return;
+        var items = pack.items || [];
+        try {
+          console.info('[PlanSlayer OCR] chars=', pack.chars, 'lines=', items.length, 'sample=', (pack.text || '').slice(0, 120));
+        } catch (eLog) {}
         if (!items.length) {
-          appToast('No clear list lines found — try flatter paper / better light');
+          // Still open modal so user can type lines manually
+          appToast('No clear words — type items in the review box');
+          wireOcrReviewModal();
+          openOcrReviewModal([], { mode: mode, colId: colId, isEvent: isEvent });
           return;
         }
-        // If OCR produced lots of junk vs a few strong words, keep strong only for review (#40)
+        // If OCR produced lots of junk vs a few strong words, keep strong only for review
         var strongOnly = items.filter(ocrLineIsStrong);
         if (strongOnly.length >= 1 && items.length > Math.max(6, strongOnly.length * 2)) {
           items = strongOnly;

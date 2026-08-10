@@ -1,0 +1,12 @@
+PlanSlayer V1.3.9 → V1.3.10
+===========================
+
+#48 Camera OCR blank/junk rows (Hunt-Slayer inbox, Plan-only code)
+
+- Soften image prep (no hard threshold wiping pale handwriting)
+- Dual-pass OCR (mild + ink) when first pass is weak; merge real lines
+- Never render blank checkbox rows; filter control chars / empty lines
+- Manual type row always available; empty OCR opens type-only review
+- Debug: console OCR char/line counts
+
+APP_VERSION 1.3.10 · shell plan-slayer-shell-v42

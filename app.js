@@ -2,10 +2,14 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.1';
+  var APP_VERSION = '1.3.2';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
+  /** Cross-tab / multi-device delete + change signal */
+  var LOCAL_SYNC_KEY = 'plan_slayer_sync_v1';
+  var LOCAL_TOMBSTONES_KEY = 'plan_slayer_tombstones_v1';
+  var LOCAL_CAL_COLLAPSED_KEY = 'plan_slayer_cal_collapsed_v1';
   /** Import Hunt/Reg calendar events (shared browser localStorage) once per session */
   var HUNT_CAL_EVENTS_KEY = 'reg_slayer_cal_events_v2';
   var HUNT_IMPORT_MAP_KEY = 'plan_slayer_hunt_import_map_v1';
@@ -78,9 +82,15 @@
     /** Left column top tabs: personal lists vs events (+ event-linked lists) */
     leftTab: 'lists', // lists | events
     /** Map: when true, show pins from all events + personal; false = current context only */
-    showAllPins: true
+    showAllPins: true,
+    /** Side calendar collapsed to a thin bar */
+    calCollapsed: false,
+    /** Mobile full-screen list sheet open */
+    mobileSheetOpen: false
   };
   var _sideCalNavLockUntil = 0;
+  var _syncChannel = null;
+  var _lastSyncAt = 0;
 
   function $(id) { return document.getElementById(id); }
   /** Local calendar day — never UTC toISOString slice (Hunt hard rule) */
@@ -433,6 +443,148 @@
   }
   function saveJson(key, val) {
     try { localStorage.setItem(key, JSON.stringify(val)); return true; } catch (e) { return false; }
+  }
+
+  /* ---------- Cross-tab / device sync (deletes show up faster) ---------- */
+  function loadTombstones() {
+    var t = loadJson(LOCAL_TOMBSTONES_KEY, null) || { events: {}, lists: {} };
+    if (!t.events || typeof t.events !== 'object') t.events = {};
+    if (!t.lists || typeof t.lists !== 'object') t.lists = {};
+    // Drop entries older than 14 days
+    var cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+    ['events', 'lists'].forEach(function (k) {
+      Object.keys(t[k]).forEach(function (id) {
+        if (Number(t[k][id]) < cutoff) delete t[k][id];
+      });
+    });
+    return t;
+  }
+  function markTombstone(kind, id) {
+    if (id == null || id === '') return;
+    var t = loadTombstones();
+    var bag = kind === 'event' ? t.events : t.lists;
+    bag[String(id)] = Date.now();
+    saveJson(LOCAL_TOMBSTONES_KEY, t);
+  }
+  function isTombstoned(kind, id) {
+    if (id == null || id === '') return false;
+    var t = loadTombstones();
+    var bag = kind === 'event' ? t.events : t.lists;
+    return !!bag[String(id)];
+  }
+  function broadcastSync(payload) {
+    payload = payload || {};
+    payload.at = Date.now();
+    payload.src = payload.src || (myId() || 'local');
+    try {
+      localStorage.setItem(LOCAL_SYNC_KEY, JSON.stringify(payload));
+    } catch (e) {}
+    try {
+      if (!_syncChannel && typeof BroadcastChannel !== 'undefined') {
+        _syncChannel = new BroadcastChannel('plan_slayer_sync');
+      }
+      if (_syncChannel) _syncChannel.postMessage(payload);
+    } catch (e2) {}
+  }
+  function applyRemoteSync(payload, fromSelf) {
+    if (!payload || !payload.at) return;
+    if (payload.at <= _lastSyncAt) return;
+    _lastSyncAt = payload.at;
+    // Ignore echo of our own save within 400ms (we already re-rendered)
+    if (fromSelf) return;
+    try {
+      if (payload.type === 'delete-event' && payload.id) {
+        markTombstone('event', payload.id);
+        state.events = (state.events || []).filter(function (e) { return String(e.id) !== String(payload.id); });
+        if (String(state.activeEventId) === String(payload.id)) {
+          state.activeEventId = null;
+          state.view = 'home';
+        }
+        // personal board too
+        try {
+          var board = loadPersonalBoard();
+          board.events = (board.events || []).filter(function (e) { return String(e.id) !== String(payload.id); });
+          savePersonalBoard(board);
+        } catch (eB) {}
+      }
+      if (payload.type === 'delete-list' && payload.id) {
+        markTombstone('list', payload.id);
+        try {
+          var store = loadFreeListsStoreRaw();
+          store.named = (store.named || []).filter(function (n) { return String(n.id) !== String(payload.id); });
+          saveJson(LOCAL_FREE_LISTS_KEY, store);
+        } catch (eL) {}
+        if (String(state.activeNamedListId) === String(payload.id)) {
+          state.activeNamedListId = null;
+          state.mobileSheetOpen = false;
+        }
+      }
+      // Soft reload from storage for any change
+      try {
+        var localEv = loadJson(LOCAL_EVENTS_KEY, []);
+        if (Array.isArray(localEv)) {
+          var dead = loadTombstones().events;
+          state.events = localEv.filter(function (e) { return e && !dead[String(e.id)]; }).map(normalizeEvent);
+        }
+      } catch (eE) {}
+      if (payload.type === 'delete-event' || payload.type === 'delete-list') {
+        try { closeMobileListSheet(true); } catch (eC) {}
+      }
+      render();
+    } catch (eR) {
+      console.warn('applyRemoteSync', eR);
+    }
+  }
+  function wireCrossTabSync() {
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        _syncChannel = new BroadcastChannel('plan_slayer_sync');
+        _syncChannel.onmessage = function (ev) {
+          applyRemoteSync(ev.data || {}, false);
+        };
+      }
+    } catch (e) {}
+    window.addEventListener('storage', function (e) {
+      if (!e) return;
+      if (e.key === LOCAL_SYNC_KEY && e.newValue) {
+        try { applyRemoteSync(JSON.parse(e.newValue), false); } catch (err) {}
+        return;
+      }
+      // Another tab wrote events or lists — refresh UI soon
+      if (e.key === LOCAL_EVENTS_KEY || e.key === LOCAL_FREE_LISTS_KEY || e.key === LOCAL_PERSONAL_KEY || e.key === LOCAL_TOMBSTONES_KEY) {
+        try {
+          if (e.key === LOCAL_EVENTS_KEY && e.newValue) {
+            var arr = JSON.parse(e.newValue);
+            if (Array.isArray(arr)) {
+              var dead = loadTombstones().events;
+              state.events = arr.filter(function (x) { return x && !dead[String(x.id)]; }).map(normalizeEvent);
+            }
+          }
+          render();
+        } catch (err2) {}
+      }
+    });
+    // When tab becomes visible, pull cloud events so member deletes show up sooner
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState !== 'visible') return;
+      if (typeof loadEvents === 'function') {
+        loadEvents().then(function () { render(); }).catch(function () { render(); });
+      }
+    });
+    // Light poll while tab is open (multi-device / multi-user)
+    setInterval(function () {
+      if (document.visibilityState !== 'visible') return;
+      if (typeof loadEvents === 'function') {
+        loadEvents().then(function () { render(); }).catch(function () {});
+      }
+    }, 20000);
+  }
+  function isMobileLayout() {
+    try {
+      return window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
+    } catch (e) {
+      return window.innerWidth <= 900;
+    }
   }
   /** V1.2.16: wipe lists + events once so this build starts clean for bug-checking */
   function maybeCleanSlateThisBuild() {
@@ -929,9 +1081,12 @@
       try { saveJson(LOCAL_FREE_LISTS_KEY, s); } catch (eM) {}
     }
     // Always heal every list so open never sticks on "Could not render"
+    var deadLists = loadTombstones().lists;
     s.named = (s.named || []).map(function (n) {
       return sanitizeNamedList(n);
-    }).filter(function (n) { return n && n.id; });
+    }).filter(function (n) {
+      return n && n.id && !deadLists[String(n.id)];
+    });
     return s;
   }
   function defaultColumn(id, name) {
@@ -1457,7 +1612,16 @@
     render();
   }
 
-  function persistLocal() { saveJson(LOCAL_EVENTS_KEY, state.events); }
+  function persistLocal(opts) {
+    opts = opts || {};
+    // Drop tombstoned events so they cannot reappear from stale state
+    try {
+      var dead = loadTombstones().events;
+      state.events = (state.events || []).filter(function (e) { return e && !dead[String(e.id)]; });
+    } catch (e) {}
+    saveJson(LOCAL_EVENTS_KEY, state.events);
+    if (!opts.quiet) broadcastSync({ type: 'events-save' });
+  }
 
   async function cloudListEvents() {
     var client = sb();
@@ -1498,21 +1662,25 @@
   }
 
   async function loadEvents() {
+    var deadEv = loadTombstones().events;
     var local = loadJson(LOCAL_EVENTS_KEY, []);
     if (!Array.isArray(local)) local = [];
-    state.events = local.map(normalizeEvent);
+    state.events = local.filter(function (e) { return e && !deadEv[String(e.id)]; }).map(normalizeEvent);
     var cloud = await cloudListEvents();
     if (cloud && cloud.length) {
       var byId = {};
       state.events.forEach(function (e) { byId[e.id] = e; });
       cloud.forEach(function (e) {
+        if (!e || deadEv[String(e.id)]) return; // respect local delete tombstones
         var prev = byId[e.id];
         if (!prev || new Date(e.updated_at || 0) >= new Date(prev.updated_at || 0)) {
           byId[e.id] = normalizeEvent(e);
         }
       });
+      // Remove tombstoned ids that may have been in byId from earlier
+      Object.keys(deadEv).forEach(function (id) { delete byId[id]; });
       state.events = Object.keys(byId).map(function (k) { return byId[k]; });
-      persistLocal();
+      persistLocal({ quiet: true });
     }
     // Hunt/Reg calendar events → PlanSlayer events + associated lists
     try {
@@ -1784,6 +1952,104 @@
     }
     try { render(); } catch (eR1) { console.warn('openEvent re-render', eR1); }
     if (state.mapMode === 'mini' || state.mapMode === 'max') snapMapToActiveEvent(true);
+    if (isMobileLayout()) openMobileListSheet();
+  }
+
+  function openMobileListSheet() {
+    if (!isMobileLayout()) return;
+    state.mobileSheetOpen = true;
+    var sheet = $('mobile-list-sheet');
+    if (sheet) {
+      sheet.classList.add('is-open');
+      sheet.setAttribute('aria-hidden', 'false');
+    }
+    try { document.body.classList.add('mls-open'); } catch (e) {}
+    renderMobileListSheet();
+  }
+  function closeMobileListSheet(keepSelection) {
+    state.mobileSheetOpen = false;
+    var sheet = $('mobile-list-sheet');
+    if (sheet) {
+      sheet.classList.remove('is-open');
+      sheet.setAttribute('aria-hidden', 'true');
+    }
+    try { document.body.classList.remove('mls-open'); } catch (e) {}
+    if (!keepSelection) {
+      // keep selection on left; just close sheet
+    }
+  }
+  function renderMobileListSheet() {
+    var sheet = $('mobile-list-sheet');
+    if (!sheet || !state.mobileSheetOpen) return;
+    var list = null;
+    try {
+      list = state.activeNamedListId ? findNamedListById(state.activeNamedListId) : null;
+    } catch (e) { list = null; }
+    var ev = activeEvent();
+    if (!list && ev) {
+      try {
+        list = ensureAssociatedListForEvent(ev);
+        if (list) state.activeNamedListId = list.id;
+      } catch (e2) {}
+    }
+    if (!list) {
+      if ($('mls-title')) $('mls-title').textContent = 'Lists';
+      if ($('mls-tabs')) $('mls-tabs').innerHTML = '';
+      if ($('mls-body')) $('mls-body').innerHTML = '<p class="empty">No list open.</p>';
+      return;
+    }
+    sanitizeNamedList(list);
+    if ($('mls-title')) {
+      $('mls-title').textContent = list.name || (ev && ev.name) || 'List';
+    }
+    // Tabs — one section at a time
+    var tabs = $('mls-tabs');
+    if (tabs) {
+      var activeTab = state.listTab || (list.columns[0] && list.columns[0].id) || 'todo';
+      if (!(list.columns || []).some(function (c) { return String(c.id) === String(activeTab); })) {
+        activeTab = list.columns[0] && list.columns[0].id;
+        state.listTab = activeTab;
+      }
+      tabs.innerHTML = (list.columns || []).map(function (c) {
+        var on = String(c.id) === String(activeTab);
+        return '<button type="button" class="mls-tab' + (on ? ' is-active' : '') +
+          '" data-mls-tab="' + esc(c.id) + '">' + esc(c.name || listKindLabel(c.id)) + '</button>';
+      }).join('');
+    }
+    // Single column body (same items + add bar as desktop)
+    var body = $('mls-body');
+    if (body) {
+      var col = getListColumn(list, state.listTab) || (list.columns && list.columns[0]);
+      if (!col) {
+        body.innerHTML = '<p class="empty">Nothing here yet.</p>';
+        return;
+      }
+      var qEv = { state: { qualifiers: DEFAULT_QUALIFIERS.map(function (q) { return Object.assign({}, q); }) } };
+      var colItems = Array.isArray(col.items) ? col.items.filter(function (it) { return it && typeof it === 'object'; }) : [];
+      var itemsHtml = '';
+      try {
+        itemsHtml = renderSplitLists(colItems, col.id, 'free-list', qEv);
+      } catch (eR) {
+        itemsHtml = colItems.map(function (it) { return renderItemRow(it, col.id, 'free-list', qEv); }).join('');
+      }
+      var colors = col.colors || DEFAULT_COL_COLORS;
+      body.innerHTML =
+        '<div class="list-triad mls-single-triad" id="list-triad" data-list-id="' + esc(list.id) + '">' +
+          '<div class="list-col" data-col-kind="' + esc(col.id) + '" ' +
+            'style="--col-font:' + esc(colors.font) + ';--col-tab:' + esc(colors.tab) + ';--col-bg:' + esc(colors.bg) + ';">' +
+            '<div class="list-col-body" data-col-body="' + esc(col.id) + '" data-col-focus-add="' + esc(col.id) + '" ' +
+              'style="background:' + esc(colors.bg) + ';color:' + esc(colors.font) + ';">' +
+              itemsHtml +
+            '</div>' +
+            '<div class="list-col-add">' +
+              '<input type="text" class="list-col-add-input" data-col-add-input="' + esc(col.id) +
+                '" placeholder="Type item, press Enter…" autocomplete="off" style="text-transform:capitalize" />' +
+              '<button type="button" class="btn btn-primary list-col-add-btn" data-col-add="' + esc(col.id) + '">Add</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      try { wireListColumnUi(list); } catch (eW) {}
+    }
   }
 
   function openNamedListById(listId, opts) {
@@ -1867,6 +2133,7 @@
         return false;
       }
     }
+    if (isMobileLayout()) openMobileListSheet();
     return true;
   }
 
@@ -1916,12 +2183,23 @@
     if (!ev) return;
     var ok = await appConfirm('Delete event “' + (ev.name || 'Event') + '”? Lists linked to it stay as personal packs.', 'Delete event');
     if (!ok) return;
+    var eid = String(ev.id);
+    markTombstone('event', eid);
+    // Cloud delete first so other members drop it on next poll / visibility
+    try {
+      var client = sb();
+      if (client && !ev._personalOnly && !ev._localOnly) {
+        await client.from('plan_events').delete().eq('id', ev.id);
+      }
+    } catch (eCloud) {
+      console.warn('cloud delete event', eCloud);
+    }
     if (ev._personalOnly) {
       var board = loadPersonalBoard();
-      board.events = (board.events || []).filter(function (e) { return String(e.id) !== String(ev.id); });
+      board.events = (board.events || []).filter(function (e) { return String(e.id) !== eid; });
       savePersonalBoard(board);
     } else {
-      state.events = (state.events || []).filter(function (e) { return String(e.id) !== String(ev.id); });
+      state.events = (state.events || []).filter(function (e) { return String(e.id) !== eid; });
       persistLocal();
     }
     // Unlink lists from this event (keep the lists)
@@ -1934,12 +2212,15 @@
     state.activeEventId = null;
     state.activeNamedListId = null;
     state.view = 'home';
+    state.mobileSheetOpen = false;
     if ($('edit-event-modal')) {
       $('edit-event-modal').classList.remove('is-open');
       $('edit-event-modal').setAttribute('aria-hidden', 'true');
     }
+    broadcastSync({ type: 'delete-event', id: eid });
     appToast('Event deleted');
     render();
+    closeMobileListSheet(true);
   }
 
   function snapMapToActiveEvent(force) {
@@ -4122,6 +4403,22 @@
     if (who) who.textContent = myName();
 
     mergeInboxIntoPersonal();
+    // Calendar collapsed state
+    try {
+      if (state.calCollapsed == null) {
+        state.calCollapsed = localStorage.getItem(LOCAL_CAL_COLLAPSED_KEY) === '1';
+      }
+    } catch (eCal) {}
+    var sideCal = $('side-cal');
+    var calFab = $('cal-collapsed-btn');
+    if (sideCal) {
+      sideCal.classList.toggle('is-collapsed', !!state.calCollapsed);
+      sideCal.style.display = state.calCollapsed ? 'none' : '';
+    }
+    if (calFab) {
+      calFab.style.display = state.calCollapsed ? '' : 'none';
+      calFab.setAttribute('aria-hidden', state.calCollapsed ? 'false' : 'true');
+    }
     renderSideCalendar();
     setMapMode(state.mapMode);
     ensureCountdownTicker();
@@ -4336,6 +4633,12 @@
     }
     updateMapPinFilterBtn();
     wireListDrag();
+    // Keep mobile sheet in sync when open
+    if (state.mobileSheetOpen && isMobileLayout()) {
+      try { renderMobileListSheet(); } catch (eMs) {}
+    } else if (state.mobileSheetOpen && !isMobileLayout()) {
+      closeMobileListSheet(true);
+    }
   }
 
   /** Drag-and-drop reorder for list items (desktop drag + mobile press-hold). */
@@ -6114,16 +6417,20 @@
       );
       if (!ok) return;
       var lid = String(list.id);
-      var store = loadFreeListsStore();
-      store.named = (store.named || []).filter(function (n) { return String(n.id) !== lid; });
-      saveFreeListsStore(store);
+      markTombstone('list', lid);
+      var store = loadFreeListsStoreRaw();
+      store.named = (store.named || []).filter(function (n) { return String(n && n.id) !== lid; });
+      saveJson(LOCAL_FREE_LISTS_KEY, store);
       if (String(state.activeNamedListId) === lid) {
         state.activeNamedListId = null;
+        state.mobileSheetOpen = false;
         setRightPanelMode('empty');
       }
       closeEditListModal();
+      broadcastSync({ type: 'delete-list', id: lid });
       appToast('List deleted');
       render();
+      closeMobileListSheet(true);
     });
     // User settings (click username)
     click('user-chip-btn', function () { openUserSettingsModal(); });
@@ -6324,7 +6631,7 @@
       document.addEventListener('click', function (e) {
         var addBtn = e.target && e.target.closest && e.target.closest('[data-col-add], [data-event-col-add]');
         if (!addBtn) return;
-        if (!addBtn.closest('#ev-list') && !addBtn.closest('#lists-active')) return;
+        if (!addBtn.closest('#ev-list') && !addBtn.closest('#lists-active') && !addBtn.closest('#mobile-list-sheet')) return;
         e.preventDefault();
         e.stopPropagation();
         submitColumnAddFromUi(addBtn);
@@ -6333,7 +6640,7 @@
         if (e.key !== 'Enter') return;
         var inp = e.target && e.target.closest && e.target.closest('[data-col-add-input], [data-event-col-add-input]');
         if (!inp) return;
-        if (!inp.closest('#ev-list') && !inp.closest('#lists-active')) return;
+        if (!inp.closest('#ev-list') && !inp.closest('#lists-active') && !inp.closest('#mobile-list-sheet')) return;
         e.preventDefault();
         e.stopPropagation();
         submitColumnAddFromUi(inp);
@@ -6649,6 +6956,49 @@
     });
 
     // Side calendar (Hunt: double-tap lock on month nav)
+    // Calendar minimize / expand
+    try {
+      state.calCollapsed = localStorage.getItem(LOCAL_CAL_COLLAPSED_KEY) === '1';
+    } catch (eC0) { state.calCollapsed = false; }
+    click('side-cal-collapse', function () {
+      state.calCollapsed = true;
+      try { localStorage.setItem(LOCAL_CAL_COLLAPSED_KEY, '1'); } catch (e) {}
+      render();
+    });
+    click('cal-collapsed-btn', function () {
+      state.calCollapsed = false;
+      try { localStorage.setItem(LOCAL_CAL_COLLAPSED_KEY, '0'); } catch (e) {}
+      render();
+    });
+    // Mobile list sheet
+    click('mls-close', function () { closeMobileListSheet(true); });
+    on('mls-tabs', 'click', function (e) {
+      var t = e.target.closest && e.target.closest('[data-mls-tab]');
+      if (!t) return;
+      state.listTab = t.getAttribute('data-mls-tab');
+      state.expandedItemId = null;
+      renderMobileListSheet();
+      // Also refresh desktop triad if present
+      try { render(); } catch (eR) { renderMobileListSheet(); }
+    });
+    on('mobile-list-sheet', 'click', function (e) {
+      // Add via same path as desktop
+      var addBtn = e.target.closest && e.target.closest('[data-col-add]');
+      if (addBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        submitColumnAddFromUi(addBtn);
+        return;
+      }
+    });
+    on('mobile-list-sheet', 'keydown', function (e) {
+      if (e.key !== 'Enter') return;
+      var inp = e.target.closest && e.target.closest('[data-col-add-input]');
+      if (!inp) return;
+      e.preventDefault();
+      submitColumnAddFromUi(inp);
+    });
+
     click('side-cal-prev', function () {
       var now = Date.now();
       if (now < _sideCalNavLockUntil) return;
@@ -7900,6 +8250,7 @@
       maybeCleanSlateThisBuild();
       loadFriends();
       configurePlanMap();
+      wireCrossTabSync();
       wire();
       setMapMode('button'); // default: Map button (minimized), not open
     });
@@ -7907,6 +8258,7 @@
     maybeCleanSlateThisBuild();
     loadFriends();
     configurePlanMap();
+    wireCrossTabSync();
     wire();
     setMapMode('button');
   }

@@ -241,39 +241,8 @@
     .event-card-wrap:not(.has-members) .event-card {
       border-radius: 10px;
     }
-    .brand-report-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      padding: 6px 10px;
-      border-radius: 8px;
-      border: 1px solid rgba(160, 175, 150, 0.45);
-      background: rgba(13, 15, 12, 0.72);
-      color: rgba(220, 230, 210, 0.95);
-      font-size: 10px;
-      font-weight: 650;
-      letter-spacing: 0.04em;
-      text-decoration: none;
-      text-transform: none;
-      white-space: nowrap;
-      line-height: 1.1;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.4);
-      backdrop-filter: blur(4px);
-      -webkit-backdrop-filter: blur(4px);
-      transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
-      cursor: pointer;
-      font-family: inherit;
-      box-sizing: border-box;
-    }
-    .brand-report-btn:hover,
-    .brand-report-btn:focus-visible {
-      border-color: var(--accent, #e59a18);
-      background: rgba(72, 106, 47, 0.55);
-      color: #fff;
-      outline: none;
-    }
-    .brand-report-btn:active { transform: scale(0.98); }
+    /* Report an issue — same chrome as Other ways to slay */
+    .brand-report-btn,
     .brand-sister-link {
       display: inline-flex;
       align-items: center;
@@ -288,12 +257,23 @@
       font-weight: 700;
       letter-spacing: 0.04em;
       text-decoration: none;
+      text-transform: none;
       white-space: nowrap;
+      line-height: 1.1;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.4);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
       cursor: pointer;
       font-family: inherit;
       box-sizing: border-box;
     }
-    .brand-sister-link .brand-sister-label { color: var(--accent, #e59a18); }
+    .brand-sister-link .brand-sister-label,
+    .brand-report-btn {
+      color: var(--accent, #e59a18);
+    }
+    .brand-report-btn:hover,
+    .brand-report-btn:focus-visible,
     .brand-sister-link:hover,
     .brand-sister-link:focus-visible {
       border-color: var(--accent, #e59a18);
@@ -301,6 +281,12 @@
       color: #fff;
       outline: none;
     }
+    .brand-report-btn:hover,
+    .brand-report-btn:focus-visible {
+      color: #fff;
+    }
+    .brand-report-btn:active,
+    .brand-sister-link:active { transform: scale(0.98); }
     .leaflet-layer.basemap-lidar-under {
       filter: saturate(0.85) contrast(1.02) brightness(0.98);
     }
@@ -2548,6 +2534,108 @@
     #date-pick-modal {
       z-index: 31000 !important;
     }
+    /* Calendar minimize */
+    .calendar-header {
+      position: relative;
+    }
+    .cal-collapse-btn {
+      margin-left: 4px !important;
+      min-width: 36px !important;
+      font-size: 18px !important;
+      font-weight: 800 !important;
+      line-height: 1 !important;
+    }
+    .cal-collapsed-btn {
+      width: 100%;
+      order: 10;
+      flex: 0 0 auto;
+      min-height: 40px !important;
+      font-weight: 800 !important;
+      letter-spacing: 0.04em;
+      margin: 0 0 8px !important;
+    }
+    /* Mobile list sheet — full-screen popup with one section at a time */
+    .mobile-list-sheet {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 20000;
+      background: var(--bg, #0a0c09);
+      flex-direction: column;
+      padding: max(8px, env(safe-area-inset-top, 0px)) 10px max(10px, env(safe-area-inset-bottom, 0px));
+      box-sizing: border-box;
+    }
+    .mobile-list-sheet.is-open {
+      display: flex !important;
+    }
+    body.mls-open {
+      overflow: hidden;
+    }
+    .mls-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex: 0 0 auto;
+      margin-bottom: 8px;
+    }
+    .mls-head h3 {
+      flex: 1 1 auto;
+      margin: 0;
+      font-size: 16px;
+      color: #fff;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #mls-close {
+      flex: 0 0 auto;
+    }
+    .mls-tabs {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 6px;
+      overflow-x: auto;
+      flex: 0 0 auto;
+      padding-bottom: 8px;
+      margin-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+      -webkit-overflow-scrolling: touch;
+    }
+    .mls-tab {
+      flex: 0 0 auto;
+      padding: 8px 14px !important;
+      font-size: 12px !important;
+      font-weight: 800 !important;
+      border-radius: 999px !important;
+      white-space: nowrap;
+    }
+    .mls-tab.is-active {
+      outline: 2px solid var(--accent);
+      color: #fff;
+      background: linear-gradient(180deg, #4a6a2a 0%, #2f4a1c 100%) !important;
+    }
+    .mls-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .mls-single-triad.list-triad {
+      flex-direction: column !important;
+      height: 100% !important;
+      min-height: 100% !important;
+      overflow: hidden !important;
+    }
+    .mls-single-triad .list-col {
+      min-width: 0 !important;
+      max-width: 100% !important;
+      flex: 1 1 auto !important;
+      height: 100% !important;
+    }
+    @media (min-width: 901px) {
+      .mobile-list-sheet { display: none !important; }
+    }
     .modal {
       width: min(480px, 100%); max-height: min(92vh, 720px); overflow: auto;
       background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
@@ -2657,7 +2745,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.1</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.2</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -2736,9 +2824,11 @@
                 <button type="button" class="cal-nav-btn" id="side-cal-prev" aria-label="Previous month">&lt; Prev</button>
                 <h3 id="side-cal-label">—</h3>
                 <button type="button" class="cal-nav-btn" id="side-cal-next" aria-label="Next month">Next &gt;</button>
+                <button type="button" class="cal-nav-btn cal-collapse-btn" id="side-cal-collapse" title="Minimize calendar" aria-label="Minimize calendar">−</button>
               </div>
               <div class="calendar-grid" id="side-cal-grid" role="grid" aria-label="Event calendar"></div>
             </div>
+            <button type="button" class="btn cal-collapsed-btn" id="cal-collapsed-btn" style="display:none" title="Show calendar" aria-hidden="true">📅 Calendar</button>
             <div class="cal-map-row" id="cal-map-row" hidden aria-hidden="true"></div>
             <div id="panel-events-block">
               <div class="events-filter-row" id="events-filter-row" style="display:none">
@@ -3190,6 +3280,16 @@
         <button type="button" class="btn" id="ql-btn-cancel">Cancel</button>
       </div>
     </div>
+  </div>
+
+  <!-- Mobile: full-screen list popup (one section at a time) -->
+  <div class="mobile-list-sheet" id="mobile-list-sheet" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="mls-title">
+    <div class="mls-head">
+      <button type="button" class="btn" id="mls-close">Close</button>
+      <h3 id="mls-title">List</h3>
+    </div>
+    <div class="mls-tabs" id="mls-tabs" role="tablist" aria-label="List sections"></div>
+    <div class="mls-body" id="mls-body"></div>
   </div>
 
   <!-- In-app dialogs (no browser alert/confirm/prompt) -->

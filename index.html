@@ -1421,6 +1421,33 @@
     .note-ocr-row { display: flex; gap: 8px; align-items: flex-start; }
     .note-ocr-row textarea { flex: 1 1 auto; min-width: 0; }
     .note-ocr-row .list-ocr-cam { margin-top: 2px; }
+    #ocr-review-modal .ocr-review-list {
+      max-height: min(48vh, 360px);
+      overflow-y: auto;
+      margin: 0 0 12px;
+      padding: 0;
+      list-style: none;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(0,0,0,0.25);
+      scrollbar-width: thin;
+      scrollbar-color: #2a3224 #0a0c09;
+    }
+    #ocr-review-modal .ocr-review-list::-webkit-scrollbar { width: 8px; background: #0a0c09; }
+    #ocr-review-modal .ocr-review-list::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+    #ocr-review-modal .ocr-review-list::-webkit-scrollbar-thumb { background: #2a3224; border-radius: 4px; }
+    #ocr-review-modal .ocr-review-row {
+      display: flex; align-items: flex-start; gap: 8px;
+      padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    #ocr-review-modal .ocr-review-row:last-child { border-bottom: none; }
+    #ocr-review-modal .ocr-review-row input[type="checkbox"] { margin-top: 4px; flex: 0 0 auto; }
+    #ocr-review-modal .ocr-review-row input[type="text"] {
+      flex: 1 1 auto; min-width: 0; padding: 6px 8px !important; font-size: 13px !important;
+    }
+    #ocr-review-modal .ocr-review-row .ocr-rm {
+      flex: 0 0 auto; background: none; border: none; color: #fca5a5; cursor: pointer; font-size: 16px; padding: 2px 4px;
+    }
     #create-modal .cal-day-btn.is-in-range {
       background: rgba(229, 154, 24, 0.22);
       border-color: rgba(229, 154, 24, 0.55);
@@ -2872,7 +2899,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.7</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.8</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -3449,6 +3476,19 @@
       <div class="modal-actions">
         <button type="button" class="btn" id="app-prompt-cancel">Cancel</button>
         <button type="button" class="btn btn-primary" id="app-prompt-ok">OK</button>
+      </div>
+    </div>
+  </div>
+  <!-- Photo OCR review: confirm lines before adding to list (#39) -->
+  <div class="modal-overlay" id="ocr-review-modal" aria-hidden="true">
+    <div class="modal" role="dialog" aria-labelledby="ocr-review-title" style="max-width:420px">
+      <h3 id="ocr-review-title">Add from photo?</h3>
+      <p class="muted" id="ocr-review-sub" style="font-size:12px;margin:0 0 10px">Uncheck junk, edit words, then add selected.</p>
+      <ul class="ocr-review-list" id="ocr-review-list"></ul>
+      <div class="modal-actions" style="flex-wrap:wrap;gap:8px">
+        <button type="button" class="btn" id="ocr-review-cancel">Cancel</button>
+        <button type="button" class="btn" id="ocr-review-all">Select all</button>
+        <button type="button" class="btn btn-primary" id="ocr-review-add">Add selected</button>
       </div>
     </div>
   </div>

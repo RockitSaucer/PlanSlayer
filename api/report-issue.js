@@ -4,13 +4,15 @@
  * Never embed a token in client JS.
  *
  * POST JSON: { message, title?, contact?, site?: 'plan', appVersion? }
- * Creates issue on RockitSaucer/Hunt-Slayer (shared inbox) with labels from-site + from-planslayer.
+ * Default: RockitSaucer/Hunt-Slayer (shared inbox) with from-site + from-planslayer.
+ * Fallback: RockitSaucer/PlanSlayer if Hunt create fails (permissions / missing labels).
  *
  * Workflow (same as Hunt):
  *   agent plans → ready-for-review → Rockit marks ready-to-commit or revised-changes
  */
 
-const REPO = process.env.GITHUB_ISSUE_REPO || 'RockitSaucer/Hunt-Slayer';
+const PRIMARY_REPO = process.env.GITHUB_ISSUE_REPO || 'RockitSaucer/Hunt-Slayer';
+const FALLBACK_REPO = process.env.GITHUB_ISSUE_FALLBACK_REPO || 'RockitSaucer/PlanSlayer';
 const MAX_MSG = 4000;
 const MAX_TITLE = 120;
 
@@ -48,7 +50,6 @@ function cors(res, origin) {
     'http://localhost:5173',
     'http://127.0.0.1:5173'
   ];
-  // Vercel preview deployments
   const isVercelPreview = typeof origin === 'string' &&
     /^https:\/\/[\w.-]+\.vercel\.app$/i.test(origin);
   if (origin && (allowed.includes(origin) || isVercelPreview)) {
@@ -65,6 +66,24 @@ function sanitize(s, max) {
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
     .trim()
     .slice(0, max);
+}
+
+async function createIssue(token, repo, title, issueBody, labels) {
+  const payload = { title: title, body: issueBody };
+  if (labels && labels.length) payload.labels = labels;
+  const ghRes = await fetch('https://api.github.com/repos/' + repo + '/issues', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + token,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'plan-slayer-report-api',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+  const data = await ghRes.json().catch(function () { return {}; });
+  return { ghRes: ghRes, data: data };
 }
 
 module.exports = async function handler(req, res) {
@@ -90,7 +109,7 @@ module.exports = async function handler(req, res) {
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({
       ok: false,
-      error: 'Issue reporting is not configured on the server. Set Vercel env GITHUB_ISSUE_TOKEN (GitHub PAT with issues:write on RockitSaucer/Hunt-Slayer) and redeploy PlanSlayer.'
+      error: 'Issue reporting is not configured on the server. Set Vercel env GITHUB_ISSUE_TOKEN (GitHub PAT with issues:write on Hunt-Slayer and/or PlanSlayer) and redeploy PlanSlayer.'
     }));
     return;
   }
@@ -145,70 +164,68 @@ module.exports = async function handler(req, res) {
     '_Code path: `Desktop/PlanSlayer/` → push **RockitSaucer/PlanSlayer** only (not Hunt/Reg)._'
   ].join('\n');
 
-  try {
-    const ghRes = await fetch('https://api.github.com/repos/' + REPO + '/issues', {
-      method: 'POST',
-      headers: {
-        Authorization: 'Bearer ' + token,
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'User-Agent': 'plan-slayer-report-api',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        title: title,
-        body: issueBody,
-        labels: ['from-site', siteLabel]
-      })
-    });
+  const labels = ['from-site', siteLabel];
+  const reposToTry = [PRIMARY_REPO];
+  if (FALLBACK_REPO && FALLBACK_REPO !== PRIMARY_REPO) reposToTry.push(FALLBACK_REPO);
 
-    const data = await ghRes.json().catch(function () { return {}; });
-    if (!ghRes.ok) {
-      console.error('GitHub issue create failed', ghRes.status, data);
-      // If labels don't exist yet, retry without labels so the report still lands
-      if (ghRes.status === 422 && data && /label/i.test(String(data.message || ''))) {
-        const retry = await fetch('https://api.github.com/repos/' + REPO + '/issues', {
-          method: 'POST',
-          headers: {
-            Authorization: 'Bearer ' + token,
-            Accept: 'application/vnd.github+json',
-            'X-GitHub-Api-Version': '2022-11-28',
-            'User-Agent': 'plan-slayer-report-api',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            title: title,
-            body: issueBody + '\n\n_(Note: labels `from-site` / `from-planslayer` were missing — create them in GitHub.)_'
-          })
-        });
-        const retryData = await retry.json().catch(function () { return {}; });
-        if (retry.ok) {
-          res.statusCode = 200;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({
-            ok: true,
-            number: retryData.number,
-            url: retryData.html_url,
-            labelsMissing: true
-          }));
-          return;
+  try {
+    let lastErr = null;
+    for (let r = 0; r < reposToTry.length; r++) {
+      const repo = reposToTry[r];
+      let result = await createIssue(token, repo, title, issueBody, labels);
+      // Retry without labels if labels missing
+      if (!result.ghRes.ok && result.ghRes.status === 422 &&
+          result.data && /label/i.test(String(result.data.message || ''))) {
+        result = await createIssue(
+          token,
+          repo,
+          title,
+          issueBody + '\n\n_(Note: labels `from-site` / `from-planslayer` were missing on ' + repo + '.)_',
+          undefined
+        );
+        // createIssue always sends labels key — handle bare body
+        if (!result.ghRes.ok) {
+          const bare = await fetch('https://api.github.com/repos/' + repo + '/issues', {
+            method: 'POST',
+            headers: {
+              Authorization: 'Bearer ' + token,
+              Accept: 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'plan-slayer-report-api',
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              title: title,
+              body: issueBody + '\n\n_(Note: labels missing on ' + repo + '.)_'
+            })
+          });
+          const bareData = await bare.json().catch(function () { return {}; });
+          result = { ghRes: bare, data: bareData };
         }
       }
-      res.statusCode = 502;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({
-        ok: false,
-        error: (data && data.message) ? data.message : 'GitHub rejected the report.'
-      }));
-      return;
+
+      if (result.ghRes.ok) {
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({
+          ok: true,
+          number: result.data.number,
+          url: result.data.html_url,
+          repo: repo,
+          usedFallback: repo !== PRIMARY_REPO
+        }));
+        return;
+      }
+
+      lastErr = (result.data && result.data.message) ? result.data.message : ('HTTP ' + result.ghRes.status);
+      console.error('GitHub issue create failed', repo, result.ghRes.status, result.data);
     }
 
-    res.statusCode = 200;
+    res.statusCode = 502;
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({
-      ok: true,
-      number: data.number,
-      url: data.html_url
+      ok: false,
+      error: lastErr || 'GitHub rejected the report. Check GITHUB_ISSUE_TOKEN scopes on Hunt-Slayer and PlanSlayer.'
     }));
   } catch (e) {
     console.error('report-issue', e);

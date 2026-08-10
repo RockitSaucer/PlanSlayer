@@ -1,0 +1,8 @@
+﻿V1.3.8 — #39 OCR quality review + report-issue fallback
+
+- Grayscale/contrast prep on photo before OCR
+- Stricter line filter (drop symbol junk / extra splits)
+- Confirm modal: edit/uncheck lines before Add selected
+- Tesseract PSM 6 via createWorker when available
+- Report API: Hunt-Slayer primary, PlanSlayer fallback; labels created on PlanSlayer
+- shell v40

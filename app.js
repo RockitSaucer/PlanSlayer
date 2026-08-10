@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.7';
+  var APP_VERSION = '1.3.8';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -6226,6 +6226,8 @@
           ctx.fillStyle = '#ffffff';
           ctx.fillRect(0, 0, cw, ch);
           ctx.drawImage(img, 0, 0, cw, ch);
+          // Paper-list prep: grayscale + contrast stretch (#39)
+          try { enhanceCanvasForOcr(ctx, cw, ch); } catch (eEn) {}
           var dataUrl = canvas.toDataURL('image/jpeg', 0.92);
           URL.revokeObjectURL(url);
           if (!dataUrl || dataUrl.length < 100) {
@@ -6261,6 +6263,7 @@
                   x2.fillStyle = '#fff';
                   x2.fillRect(0, 0, c2.width, c2.height);
                   x2.drawImage(img2, 0, 0, c2.width, c2.height);
+                  try { enhanceCanvasForOcr(x2, c2.width, c2.height); } catch (eEn2) {}
                   resolve(c2.toDataURL('image/jpeg', 0.92));
                 } catch (e2) {
                   reject(new Error('Phone photo format not supported — try Gallery JPG'));
@@ -6286,29 +6289,241 @@
     });
   }
 
+  /** Grayscale + contrast stretch for paper lists (handwriting / print). */
+  function enhanceCanvasForOcr(ctx, w, h) {
+    if (!ctx || !w || !h) return;
+    var imgData = ctx.getImageData(0, 0, w, h);
+    var d = imgData.data;
+    var i, min = 255, max = 0, g;
+    for (i = 0; i < d.length; i += 4) {
+      g = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+      d[i] = d[i + 1] = d[i + 2] = g;
+      if (g < min) min = g;
+      if (g > max) max = g;
+    }
+    var range = Math.max(1, max - min);
+    for (i = 0; i < d.length; i += 4) {
+      g = d[i];
+      // Stretch contrast
+      g = Math.round(((g - min) / range) * 255);
+      // Soft threshold toward black/white for ink on paper
+      if (g > 190) g = 255;
+      else if (g < 90) g = 0;
+      else g = Math.round((g - 90) * (255 / 100));
+      d[i] = d[i + 1] = d[i + 2] = g;
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  /** True if line looks like real words (not OCR junk symbols). */
+  function ocrLineLooksReal(line) {
+    line = String(line || '').trim();
+    if (line.length < 2) return false;
+    if (line.length > 120) return false;
+    // Mostly letters / numbers / basic punctuation
+    var letters = (line.match(/[A-Za-z0-9]/g) || []).length;
+    var ratio = letters / line.length;
+    if (ratio < 0.45) return false;
+    // Reject pure symbol noise
+    if (/^[^\w\s]+$/.test(line)) return false;
+    // Common Tesseract garbage
+    if (/^[|Il1\-~_=+*#@%&]+$/.test(line)) return false;
+    if (/(.)\1{5,}/.test(line)) return false; // aaaaaa
+    return true;
+  }
+
   function splitOcrToListItems(text) {
     text = String(text || '').replace(/\r/g, '\n');
     var lines = text.split(/\n+/).map(function (l) {
-      return l.replace(/^[\s•\-\*\u2022\d\.\)\(]+/, '').trim();
+      return l
+        .replace(/^[\s•\-\*\u2022·▪◦\d\.\)\(]+/, '')
+        .replace(/[|]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
     }).filter(Boolean);
     var items = [];
     lines.forEach(function (line) {
-      // Prefer bullet/line splits; also split long lines on commas if many words
-      if (/;|\s{2,}|\t/.test(line)) {
-        line.split(/;|\t|\s{2,}/).forEach(function (p) {
+      // Only split on clear separators — NOT every double-space (that made extra junk items)
+      if (/;/.test(line) && line.split(';').length <= 8) {
+        line.split(';').forEach(function (p) {
           p = String(p || '').trim();
-          if (p.length >= 2) items.push(p);
+          if (ocrLineLooksReal(p)) items.push(p);
         });
-      } else if (line.length >= 2) {
+      } else if (ocrLineLooksReal(line)) {
         items.push(line);
       }
     });
-    // Dedupe consecutive identical lines (OCR noise)
+    // Dedupe (case-insensitive) keep first
+    var seen = {};
     var out = [];
     items.forEach(function (it) {
-      if (!out.length || out[out.length - 1].toLowerCase() !== it.toLowerCase()) out.push(it);
+      var k = it.toLowerCase();
+      if (seen[k]) return;
+      seen[k] = true;
+      out.push(it);
+    });
+    // Cap to avoid flood
+    if (out.length > 40) out = out.slice(0, 40);
+    return out;
+  }
+
+  var _ocrReviewCtx = null;
+
+  function closeOcrReviewModal() {
+    var modal = $('ocr-review-modal');
+    if (modal) {
+      modal.classList.remove('is-open');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+    _ocrReviewCtx = null;
+  }
+
+  function openOcrReviewModal(lines, ctx) {
+    _ocrReviewCtx = ctx || {};
+    var modal = $('ocr-review-modal');
+    var listEl = $('ocr-review-list');
+    if (!modal || !listEl) {
+      // Fallback: add all if modal missing
+      applyOcrLines(lines, _ocrReviewCtx);
+      return;
+    }
+    listEl.innerHTML = lines.map(function (line, idx) {
+      return '<li class="ocr-review-row" data-ocr-idx="' + idx + '">' +
+        '<input type="checkbox" class="ocr-ck" checked />' +
+        '<input type="text" class="ocr-txt" value="' + esc(line) + '" />' +
+        '<button type="button" class="ocr-rm" title="Remove" aria-label="Remove">×</button>' +
+        '</li>';
+    }).join('');
+    if ($('ocr-review-sub')) {
+      $('ocr-review-sub').textContent =
+        (ctx && ctx.mode === 'note')
+          ? 'Edit text, then Add selected to append to the note.'
+          : 'Uncheck junk, fix words, then Add selected to your list.';
+    }
+    modal.classList.add('is-open');
+    modal.setAttribute('aria-hidden', 'false');
+  }
+
+  function collectOcrReviewSelected() {
+    var listEl = $('ocr-review-list');
+    if (!listEl) return [];
+    var out = [];
+    listEl.querySelectorAll('.ocr-review-row').forEach(function (row) {
+      var ck = row.querySelector('.ocr-ck');
+      var txt = row.querySelector('.ocr-txt');
+      if (ck && !ck.checked) return;
+      var v = txt ? String(txt.value || '').trim() : '';
+      if (v.length >= 2 && ocrLineLooksReal(v)) out.push(v);
     });
     return out;
+  }
+
+  function applyOcrLines(items, ctx) {
+    ctx = ctx || _ocrReviewCtx || {};
+    var mode = ctx.mode || 'items';
+    var colId = ctx.colId || null;
+    var isEvent = !!ctx.isEvent;
+    if (!items || !items.length) {
+      appToast('Nothing selected to add');
+      return;
+    }
+    if (mode === 'note') {
+      var ta = document.querySelector('.list-item.is-expanded .li-detail textarea[data-f="note_text"]') ||
+        document.querySelector('.li-detail textarea[data-f="note_text"]');
+      if (!ta) {
+        appToast('Open an item’s note first');
+        return;
+      }
+      var chunk = items.join('\n');
+      var cur = ta.value || '';
+      ta.value = cur ? (cur.replace(/\s+$/, '') + '\n' + chunk) : chunk;
+      try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch (eI) {}
+      try {
+        var row = ta.closest('.list-item');
+        if (row) {
+          var id = row.getAttribute('data-item-id');
+          var kind = row.getAttribute('data-kind');
+          var scope = row.getAttribute('data-scope') || 'free-list';
+          var item = findItemFromRow(row);
+          if (item) {
+            applyNoteFromDetail(item, ta.value);
+            persistItemByMeta(kind, scope, id, row);
+          }
+        }
+      } catch (eP) {}
+      appToast('Note updated from photo');
+      closeOcrReviewModal();
+      return;
+    }
+    var added = 0;
+    var list = resolveOcrTargetList();
+    var ev = activeEvent();
+    items.forEach(function (title) {
+      title = autoCap(String(title || '').trim());
+      if (!title || title.length < 2) return;
+      if (list && colId) {
+        if (addItemToListColumn(list, colId, title)) {
+          added++;
+          try { list = resolveOcrTargetList() || list; } catch (eL2) {}
+        }
+      } else if (colId && ev) {
+        try {
+          var bucket = getListBucket(ev, colId, 'group');
+          if (bucket) {
+            bucket.push(newItem(title));
+            added++;
+          }
+        } catch (eA) {}
+      }
+    });
+    if (list) {
+      try { saveNamedList(resolveOcrTargetList() || list); } catch (eS) {}
+    } else if (ev && added) {
+      try { saveActiveEvent(); } catch (eS2) {}
+    }
+    try { render(); } catch (eR) {}
+    closeOcrReviewModal();
+    if (added) {
+      appToast('Added ' + added + ' item' + (added === 1 ? '' : 's') + ' from photo', 4000);
+    } else if (!list && !ev) {
+      appToast('Open a list first, then try the camera again');
+    } else {
+      appToast('Could not add items — try again on an open list');
+    }
+  }
+
+  function wireOcrReviewModal() {
+    if (document._psOcrReviewWired) return;
+    document._psOcrReviewWired = true;
+    function bind(id, fn) {
+      var el = $(id);
+      if (el) el.addEventListener('click', fn);
+    }
+    bind('ocr-review-cancel', function () { closeOcrReviewModal(); });
+    bind('ocr-review-all', function () {
+      var listEl = $('ocr-review-list');
+      if (!listEl) return;
+      listEl.querySelectorAll('.ocr-ck').forEach(function (ck) { ck.checked = true; });
+    });
+    bind('ocr-review-add', function () {
+      var selected = collectOcrReviewSelected();
+      applyOcrLines(selected, _ocrReviewCtx);
+    });
+    var listEl = $('ocr-review-list');
+    if (listEl) {
+      listEl.addEventListener('click', function (e) {
+        var rm = e.target.closest && e.target.closest('.ocr-rm');
+        if (!rm) return;
+        var row = rm.closest('.ocr-review-row');
+        if (row) row.remove();
+      });
+    }
+    var modal = $('ocr-review-modal');
+    if (modal) {
+      modal.addEventListener('click', function (e) {
+        if (e.target === modal) closeOcrReviewModal();
+      });
+    }
   }
 
   function resolveOcrTargetList() {
@@ -6375,11 +6590,29 @@
       fileToOcrJpegDataUrl(held).then(function (dataUrl) {
         appToast('Reading words…');
         return loadTesseractLib().then(function (T) {
+          // createWorker when available for list-friendly PSM
+          if (T.createWorker) {
+            return T.createWorker('eng', 1, {
+              workerPath: TESSERACT_CDN + '/worker.min.js',
+              corePath: TESSERACT_CORE_CDN,
+              langPath: TESSERACT_LANG_CDN,
+              logger: function () {}
+            }).then(function (worker) {
+              return worker.setParameters({
+                tessedit_pageseg_mode: '6', // assume uniform block of text (list-like)
+                preserve_interword_spaces: '1'
+              }).then(function () {
+                return worker.recognize(dataUrl).then(function (result) {
+                  return worker.terminate().then(function () { return result; }, function () { return result; });
+                });
+              });
+            });
+          }
           return T.recognize(dataUrl, 'eng', {
             workerPath: TESSERACT_CDN + '/worker.min.js',
             corePath: TESSERACT_CORE_CDN,
             langPath: TESSERACT_LANG_CDN,
-            logger: function () { /* quiet */ }
+            logger: function () {}
           });
         });
       }).then(function (result) {
@@ -6388,78 +6621,14 @@
           appToast('No words found — try better light / closer photo');
           return;
         }
-        if (mode === 'note') {
-          var ta = document.querySelector('.list-item.is-expanded .li-detail textarea[data-f="note_text"]') ||
-            document.querySelector('.li-detail textarea[data-f="note_text"]');
-          if (!ta) {
-            appToast('Open an item’s note first');
-            return;
-          }
-          var cur = ta.value || '';
-          var chunk = String(text).trim();
-          ta.value = cur ? (cur.replace(/\s+$/, '') + '\n' + chunk) : chunk;
-          try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch (eI) {}
-          // Persist if possible
-          try {
-            var row = ta.closest('.list-item');
-            if (row) {
-              var id = row.getAttribute('data-item-id');
-              var kind = row.getAttribute('data-kind');
-              var scope = row.getAttribute('data-scope') || 'free-list';
-              var item = findItemFromRow(row);
-              if (item) {
-                applyNoteFromDetail(item, ta.value);
-                persistItemByMeta(kind, scope, id, row);
-              }
-            }
-          } catch (eP) {}
-          appToast('Note text added from photo');
-          return;
-        }
         var items = splitOcrToListItems(text);
         if (!items.length) {
-          appToast('No list lines found in photo');
+          appToast('No clear list lines found — try flatter paper / better light');
           return;
         }
-        appToast('Found ' + items.length + ' line' + (items.length === 1 ? '' : 's') + '…');
-        var added = 0;
-        var list = resolveOcrTargetList();
-        var ev = activeEvent();
-
-        items.forEach(function (title) {
-          title = autoCap(String(title || '').trim());
-          if (!title || title.length < 2) return;
-          // Prefer named list column
-          if (list && colId) {
-            if (addItemToListColumn(list, colId, title)) {
-              added++;
-              // refresh live list pointer after first save
-              try { list = resolveOcrTargetList() || list; } catch (eL2) {}
-            }
-          } else if (colId && ev) {
-            try {
-              var bucket = getListBucket(ev, colId, 'group');
-              if (bucket) {
-                bucket.push(newItem(title));
-                added++;
-              }
-            } catch (eA) {}
-          }
-        });
-        if (list) {
-          try { saveNamedList(resolveOcrTargetList() || list); } catch (eS) {}
-        } else if (ev && added) {
-          try { saveActiveEvent(); } catch (eS2) {}
-        }
-        try { render(); } catch (eR) {}
-        if (added) {
-          var preview = items.slice(0, 3).map(function (x) { return autoCap(x); }).join(' · ');
-          appToast('Added ' + added + ' item' + (added === 1 ? '' : 's') + (preview ? ': ' + preview : ''), 4500);
-        } else if (!list && !ev) {
-          appToast('Open a list first, then try the camera again');
-        } else {
-          appToast('Read text but could not add — try again on an open list');
-        }
+        appToast('Review ' + items.length + ' line' + (items.length === 1 ? '' : 's') + '…');
+        wireOcrReviewModal();
+        openOcrReviewModal(items, { mode: mode, colId: colId, isEvent: isEvent });
       }).catch(function (err) {
         console.warn('OCR', err);
         var msg = (err && err.message) ? String(err.message) : 'Could not read photo';
@@ -7018,6 +7187,7 @@
 
     wireOtherWaysToSlay();
     wireReportIssueUi();
+    try { wireOcrReviewModal(); } catch (eOcrW) {}
 
     click('btn-create-event', openCreateModal);
     click('create-cancel', closeCreateModal);

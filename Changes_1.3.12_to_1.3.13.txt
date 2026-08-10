@@ -1,0 +1,3 @@
+﻿PlanSlayer V1.3.12 → 1.3.13
+- Create event: Select map dropdown (Hunt/Reg membership maps)
+- openEvent auto-opens linked map pins into Plan map

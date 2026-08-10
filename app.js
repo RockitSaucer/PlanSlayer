@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.12';
+  var APP_VERSION = '1.3.13';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -1524,8 +1524,165 @@
     });
     if (!Array.isArray(ev.state.expenses)) ev.state.expenses = [];
     if (!Array.isArray(ev.state.mapPins)) ev.state.mapPins = [];
+    // Linked Hunt/Reg map (party or private)
+    if (ev.shared_map_id && !ev.sharedMapId) ev.sharedMapId = ev.shared_map_id;
+    if (ev.private_map_id && !ev.privateMapId) ev.privateMapId = ev.private_map_id;
+    if (ev.map_scope && !ev.mapScope) ev.mapScope = ev.map_scope;
+    if (!ev.mapScope) {
+      if (ev.sharedMapId) ev.mapScope = 'shared';
+      else if (ev.privateMapId) ev.mapScope = 'private';
+      else ev.mapScope = 'personal';
+    }
     ensureQualifiers(ev);
     return ev;
+  }
+
+  /** Populate Create Event “Select map” from Hunt/Reg Supabase membership. */
+  function populateCreateMapSelect(selected) {
+    var sel = $('create-select-map');
+    if (!sel) return;
+    var cur = selected || sel.value || 'personal';
+    sel.innerHTML =
+      '<option value="personal">My personal map (this device / Plan pins)</option>' +
+      '<option value="all">No linked map</option>' +
+      '<option value="" disabled>—— Loading your maps… ——</option>';
+    var client = sb();
+    if (!client) {
+      sel.innerHTML =
+        '<option value="personal">My personal map</option>' +
+        '<option value="all">No linked map</option>' +
+        '<option value="" disabled>Sign in to load Hunt/Reg maps</option>';
+      return;
+    }
+    var pending = 2;
+    function finish() {
+      pending--;
+      if (pending > 0) return;
+      // remove loading row
+      for (var i = sel.options.length - 1; i >= 0; i--) {
+        if (sel.options[i].disabled && /Loading/i.test(sel.options[i].text)) {
+          sel.remove(i);
+        }
+      }
+      var found = false;
+      for (var j = 0; j < sel.options.length; j++) {
+        if (sel.options[j].value === cur) { sel.selectedIndex = j; found = true; break; }
+      }
+      if (!found) sel.value = 'personal';
+    }
+    client.rpc('list_my_private_maps').then(function (res) {
+      var rows = (res && res.data) || [];
+      if (Array.isArray(rows) && rows.length) {
+        var g = document.createElement('option');
+        g.disabled = true;
+        g.textContent = '—— My private maps (Hunt/Reg) ——';
+        sel.appendChild(g);
+        rows.forEach(function (m) {
+          if (!m || !m.id) return;
+          var o = document.createElement('option');
+          o.value = 'private:' + m.id;
+          o.textContent = 'Private: ' + (m.name || 'Map');
+          if (m.name) o.setAttribute('data-map-name', m.name);
+          sel.appendChild(o);
+        });
+      }
+      finish();
+    }).catch(function () { finish(); });
+    client.rpc('list_my_shared_maps').then(function (res) {
+      var rows = (res && res.data) || [];
+      if (Array.isArray(rows) && rows.length) {
+        var g = document.createElement('option');
+        g.disabled = true;
+        g.textContent = '—— Shared maps you are on ——';
+        sel.appendChild(g);
+        rows.forEach(function (m) {
+          if (!m || !m.id) return;
+          var o = document.createElement('option');
+          o.value = 'shared:' + m.id;
+          o.textContent = 'Shared: ' + (m.name || 'Map') + (m.code ? (' · ' + m.code) : '');
+          if (m.name) o.setAttribute('data-map-name', m.name);
+          sel.appendChild(o);
+        });
+      }
+      finish();
+    }).catch(function () { finish(); });
+  }
+
+  function parseCreateMapSelectValue(v) {
+    v = String(v || 'personal');
+    if (v.indexOf('shared:') === 0) {
+      return { mapScope: 'shared', sharedMapId: v.slice(7), privateMapId: null };
+    }
+    if (v.indexOf('private:') === 0) {
+      return { mapScope: 'private', sharedMapId: null, privateMapId: v.slice(8) };
+    }
+    return { mapScope: v === 'all' ? 'all' : 'personal', sharedMapId: null, privateMapId: null };
+  }
+
+  function applyMapLinkToEvent(ev, link) {
+    if (!ev || !link) return;
+    ev.mapScope = link.mapScope || 'personal';
+    ev.sharedMapId = link.sharedMapId || null;
+    ev.privateMapId = link.privateMapId || null;
+    ev.shared_map_id = ev.sharedMapId;
+    ev.private_map_id = ev.privateMapId;
+    ev.map_scope = ev.mapScope;
+    var sel = $('create-select-map');
+    if (sel && sel.selectedOptions && sel.selectedOptions[0]) {
+      var nm = sel.selectedOptions[0].getAttribute('data-map-name') ||
+        String(sel.selectedOptions[0].textContent || '').replace(/^(Shared|Private):\s*/, '').split(' · ')[0];
+      if (ev.sharedMapId || ev.privateMapId) ev.linkedMapName = nm;
+      else ev.linkedMapName = null;
+    }
+  }
+
+  /**
+   * When opening a Plan event, open the linked Hunt/Reg map (pull pins into Plan map overlay).
+   */
+  function openLinkedMapForEvent(ev) {
+    if (!ev) return Promise.resolve(false);
+    var client = sb();
+    var mapId = ev.sharedMapId || ev.privateMapId;
+    var kind = ev.sharedMapId ? 'shared' : (ev.privateMapId ? 'private' : null);
+    if (!client || !mapId || !kind) {
+      // Still open Plan map for event pins
+      if (ev.lat != null || (ev.state && ev.state.mapPins && ev.state.mapPins.length)) {
+        setMapMode(state.mapMode === 'button' ? 'mini' : state.mapMode);
+      }
+      return Promise.resolve(false);
+    }
+    var table = kind === 'shared' ? 'shared_maps' : 'private_maps';
+    return client.from(table).select('id, name, map_state').eq('id', mapId).maybeSingle()
+      .then(function (res) {
+        if (res.error || !res.data) {
+          appToast('Linked map not found (join it on Hunt/Reg first)');
+          return false;
+        }
+        var st = res.data.map_state || {};
+        var pins = Array.isArray(st.pins) ? st.pins : [];
+        state._linkedMapOverlay = {
+          mapId: String(mapId),
+          kind: kind,
+          name: res.data.name || ev.linkedMapName || 'Map',
+          pins: pins,
+          eventId: String(ev.id)
+        };
+        state.mapContext = 'event:' + ev.id;
+        state.showAllPins = false;
+        setMapMode(state.mapMode === 'button' ? 'mini' : (state.mapMode || 'mini'));
+        try { configurePlanMap(); if (window.PlanMap) { window.PlanMap.ensure(); window.PlanMap.redraw(); } } catch (eM) {}
+        if (ev.lat != null && ev.lng != null && window.PlanMap && window.PlanMap.getMap) {
+          try {
+            var map = window.PlanMap.getMap();
+            if (map) map.setView([Number(ev.lat), Number(ev.lng)], 13);
+          } catch (eV) {}
+        }
+        appToast('Opened map: ' + (state._linkedMapOverlay.name || 'linked'));
+        return true;
+      }).catch(function (e) {
+        console.warn('openLinkedMapForEvent', e);
+        return false;
+      });
   }
 
   function activeEvent() {
@@ -2019,12 +2176,13 @@
   async function openEvent(id) {
     state.activeEventId = id;
     state.view = 'event';
-    state.leftTab = 'events';
+    state.leftTab = 'lists';
     state.expandedItemId = null;
     state.moveItemId = null;
     state.noteItemId = null;
     state.filterQualifier = 'all';
     state._mapFollowedEvent = null;
+    state._linkedMapOverlay = null;
     var pe = (loadPersonalBoard().events || []).find(function (e) { return String(e.id) === String(id); });
     var se = state.events.find(function (e) { return String(e.id) === String(id); });
     var ev = se || pe || activeEvent();
@@ -2040,7 +2198,6 @@
         console.warn('ensureAssociatedListForEvent', eA);
       }
     }
-    if (state.mapMode !== 'mini' && state.mapMode !== 'max') state.mapMode = 'button';
     // Paint right panel immediately
     try { render(); } catch (eR0) { console.warn('openEvent render', eR0); }
 
@@ -2061,6 +2218,16 @@
       if (!state.members || !state.members.length) {
         state.members = [{ user_id: myId(), display_name: myName(), arrow_color: myColor(), role: 'owner' }];
       }
+    }
+    // Open linked Hunt/Reg map (pins + data) when event has Select map set
+    try {
+      if (ev && (ev.sharedMapId || ev.privateMapId)) {
+        await openLinkedMapForEvent(ev);
+      } else if (ev && (ev.lat != null || (ev.state && ev.state.mapPins && ev.state.mapPins.length))) {
+        if (state.mapMode === 'button') setMapMode('mini');
+      }
+    } catch (eMap) {
+      console.warn('open linked map', eMap);
     }
     try { render(); } catch (eR1) { console.warn('openEvent re-render', eR1); }
     if (state.mapMode === 'mini' || state.mapMode === 'max') snapMapToActiveEvent(true);
@@ -3676,6 +3843,18 @@
         return (window.PlanMap && window.PlanMap.getMap) ? (state.basemapKey || 'topo') : 'topo';
       },
       getPins: function () {
+        // Linked Hunt/Reg map overlay for the open event
+        if (state._linkedMapOverlay && state._linkedMapOverlay.pins &&
+            state.activeEventId && String(state._linkedMapOverlay.eventId) === String(state.activeEventId)) {
+          var baseEv = activeEvent();
+          var merged = (state._linkedMapOverlay.pins || []).slice();
+          if (baseEv && baseEv.state && Array.isArray(baseEv.state.mapPins)) {
+            baseEv.state.mapPins.forEach(function (p) {
+              if (p) merged.push(p);
+            });
+          }
+          return merged;
+        }
         // Event pins only mode: pins for the active/filtered event
         if (state.eventPinsFilter && state.eventPinsFilter.eventId) {
           var fid = String(state.eventPinsFilter.eventId);
@@ -5376,7 +5555,7 @@
 
   /* ---------- create calendar ---------- */
   function openCreateModal() {
-    state.leftTab = 'events';
+    state.leftTab = 'lists';
     var now = new Date();
     // Default start = side calendar selected day (else today) (#37)
     var seed = state.sideCal && state.sideCal.selectedDay
@@ -5403,6 +5582,7 @@
     if ($('create-personal-only')) $('create-personal-only').checked = state.mode === 'personal';
     updateCreateCalSelectedLabel();
     renderCalGrid();
+    try { populateCreateMapSelect('personal'); } catch (eMap) {}
     if ($('create-modal')) {
       $('create-modal').classList.add('is-open');
       $('create-modal').setAttribute('aria-hidden', 'false');
@@ -8294,6 +8474,7 @@
         if (!isNaN(de.getTime())) endAt = de.toISOString();
       }
       var useTpl = $('create-template') && $('create-template').checked;
+      var mapLink = parseCreateMapSelectValue($('create-select-map') && $('create-select-map').value);
       closeCreateModal();
       if (personalOnly) {
         var board = loadPersonalBoard();
@@ -8310,6 +8491,7 @@
           _personalOnly: true,
           _localOnly: true
         });
+        applyMapLinkToEvent(pev, mapLink);
         if (useTpl) applyTemplateToEvent(pev, type);
         board.events = board.events || [];
         board.events.unshift(pev);
@@ -8319,11 +8501,11 @@
         return;
       }
       createEvent(name, type, startAt, useTpl).then(function (ev) {
-        if (ev && endAt) {
-          ev.end_at = endAt;
-          saveActiveEvent();
-          render();
-        }
+        if (!ev) return;
+        if (endAt) ev.end_at = endAt;
+        applyMapLinkToEvent(ev, mapLink);
+        saveActiveEvent();
+        render();
       }).catch(function (e) { appAlert(e.message || String(e), 'Could not create'); });
     });
 

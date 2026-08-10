@@ -2,8 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.16';
-  // V1.3.16: event header cleanup, members drawer, Personal claim column
+  var APP_VERSION = '1.3.17';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -1628,11 +1627,12 @@
       if (!ev.state.lists[k]) ev.state.lists[k] = { group: [], personal: {} };
       ev.state.lists[k].group = (col.items || []).map(function (it) { return Object.assign({}, it); });
     });
-    // Copy list members into event localMembers for display
+    // Copy list members into event localMembers for display (never re-add removed)
     try {
       if (!Array.isArray(ev.state.localMembers)) ev.state.localMembers = [];
       (list.members || []).forEach(function (m) {
         if (!m) return;
+        if (isMemberRemoved(ev, m.user_id)) return;
         var exists = ev.state.localMembers.some(function (x) {
           return String(x.user_id) === String(m.user_id) ||
             String(x.display_name || '').toLowerCase() === String(m.display_name || '').toLowerCase();
@@ -1645,6 +1645,10 @@
             arrow_color: m.arrow_color || COLORS[0]
           });
         }
+      });
+      // Drop anyone on the removed denylist
+      ev.state.localMembers = (ev.state.localMembers || []).filter(function (m) {
+        return m && !isMemberRemoved(ev, m.user_id);
       });
     } catch (eM) {}
     ev.updated_at = new Date().toISOString();
@@ -1665,14 +1669,37 @@
       var listId = (existing && existing.id) || pack.listId || uid();
       var localUpdated = existing && existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
       var cloudUpdated = pack.updated_at ? new Date(pack.updated_at).getTime() : 0;
-      // Prefer cloud when newer or local missing
-      if (!existing || cloudUpdated >= localUpdated) {
+      function countPackItems(cols) {
+        var n = 0;
+        (cols || []).forEach(function (c) { n += (c && c.items ? c.items.length : 0); });
+        return n;
+      }
+      var localItems = existing ? countPackItems(existing.columns) : 0;
+      var cloudItems = countPackItems(pack.columns);
+      // Prefer cloud only when clearly newer AND not wiping a richer local list
+      var cloudWins = !existing ||
+        (cloudUpdated > localUpdated + 1500 && !(localItems > 0 && cloudItems === 0));
+      if (cloudWins) {
+        // Keep local members that cloud pack might have dropped after a race
+        var members = pack.members || [];
+        if (existing && existing.members && existing.members.length) {
+          var byM = {};
+          members.forEach(function (m) { if (m && m.user_id) byM[String(m.user_id)] = m; });
+          existing.members.forEach(function (m) {
+            if (!m || !m.user_id) return;
+            if (isMemberRemoved(ev, m.user_id)) return;
+            if (!byM[String(m.user_id)]) members.push(m);
+          });
+        }
+        members = members.filter(function (m) {
+          return m && !isMemberRemoved(ev, m.user_id);
+        });
         var rebuilt = sanitizeNamedList({
           id: listId,
           name: pack.name || ((ev.name || 'Event') + ' · lists'),
           owner_id: (existing && existing.owner_id) || ev.owner_user_id || myId() || 'local',
           eventId: String(ev.id),
-          members: pack.members || (existing && existing.members) || [],
+          members: members,
           creators: (existing && existing.creators) || [],
           columns: pack.columns,
           invite_code: pack.invite_code || (existing && existing.invite_code) || null,
@@ -1682,7 +1709,6 @@
         var idx = (store.named || []).findIndex(function (n) { return n && String(n.id) === String(listId); });
         if (idx >= 0) store.named[idx] = rebuilt;
         else {
-          // drop other packs for same event
           store.named = (store.named || []).filter(function (n) {
             return !(n && n.eventId && String(n.eventId) === String(ev.id));
           });
@@ -1697,21 +1723,30 @@
     if (!existing) {
       try { ensureAssociatedListForEvent(ev); } catch (eA) {}
     } else if (ev.state && ev.state.lists) {
-      // Merge classic buckets when cloud event is newer (local write only — no cloud bounce)
       var evT = ev.updated_at ? new Date(ev.updated_at).getTime() : 0;
       var locT = existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
-      if (evT > locT) {
+      // Only merge classic buckets when cloud is clearly ahead and has items
+      if (evT > locT + 1500) {
         sanitizeNamedList(existing);
+        var anyCloudItems = false;
         ['todo', 'buy', 'bring'].forEach(function (k) {
           var group = (ev.state.lists[k] && ev.state.lists[k].group) || [];
-          var col = getListColumn(existing, k);
-          if (col && Array.isArray(group)) col.items = group.map(function (it) { return Object.assign({}, it); });
+          if (group.length) anyCloudItems = true;
         });
-        existing.updated_at = ev.updated_at || existing.updated_at;
-        var idx2 = (store.named || []).findIndex(function (n) { return n && String(n.id) === String(existing.id); });
-        if (idx2 >= 0) store.named[idx2] = existing;
-        saveJson(LOCAL_FREE_LISTS_KEY, store);
-        try { publishEventListBridge(existing); } catch (eB2) {}
+        if (anyCloudItems) {
+          ['todo', 'buy', 'bring'].forEach(function (k) {
+            var group = (ev.state.lists[k] && ev.state.lists[k].group) || [];
+            var col = getListColumn(existing, k);
+            if (col && Array.isArray(group) && group.length) {
+              col.items = group.map(function (it) { return Object.assign({}, it); });
+            }
+          });
+          existing.updated_at = ev.updated_at || existing.updated_at;
+          var idx2 = (store.named || []).findIndex(function (n) { return n && String(n.id) === String(existing.id); });
+          if (idx2 >= 0) store.named[idx2] = existing;
+          saveJson(LOCAL_FREE_LISTS_KEY, store);
+          try { publishEventListBridge(existing); } catch (eB2) {}
+        }
       }
     }
   }
@@ -3261,10 +3296,12 @@
     if (!list) return;
     try { normalizeNamedList(list); } catch (eN) {}
     state.activeNamedListId = String(list.id);
+    state._editRmConfirm = null;
     if ($('edit-list-name')) $('edit-list-name').value = list.name || '';
     if ($('edit-list-link-event')) {
       $('edit-list-link-event').innerHTML = buildEventLinkOptionsHtml(list.eventId || null);
     }
+    try { fillEditListMembersPanel(list); } catch (eM) {}
     if ($('edit-list-modal')) {
       $('edit-list-modal').classList.add('is-open');
       $('edit-list-modal').setAttribute('aria-hidden', 'false');
@@ -3292,6 +3329,8 @@
       $('edit-ev-end-btn').textContent = ev.end_at
         ? new Date(ev.end_at).toLocaleString() : 'TBD';
     }
+    state._editRmConfirm = null;
+    try { fillEditEventMembersPanel(); } catch (eM) {}
     if ($('edit-event-modal')) {
       $('edit-event-modal').classList.add('is-open');
       $('edit-event-modal').setAttribute('aria-hidden', 'false');
@@ -3360,11 +3399,62 @@
     }
   }
 
+  function eventRemovedMemberIds(ev) {
+    if (!ev || !ev.state) return {};
+    var bag = {};
+    (Array.isArray(ev.state.removedMemberIds) ? ev.state.removedMemberIds : []).forEach(function (id) {
+      if (id != null && id !== '') bag[String(id)] = true;
+    });
+    return bag;
+  }
+  function markMemberRemoved(ev, memberId) {
+    if (!ev) return;
+    if (!ev.state) ev.state = {};
+    if (!Array.isArray(ev.state.removedMemberIds)) ev.state.removedMemberIds = [];
+    var sid = String(memberId);
+    if (ev.state.removedMemberIds.indexOf(sid) < 0) ev.state.removedMemberIds.push(sid);
+  }
+  function unmarkMemberRemoved(ev, memberId) {
+    if (!ev || !ev.state || !Array.isArray(ev.state.removedMemberIds)) return;
+    var sid = String(memberId);
+    ev.state.removedMemberIds = ev.state.removedMemberIds.filter(function (id) { return String(id) !== sid; });
+  }
+  function isMemberRemoved(ev, memberId) {
+    return !!eventRemovedMemberIds(ev)[String(memberId)];
+  }
+  function syncLocalMembersFromState(ev) {
+    if (!ev) return;
+    if (!ev.state) ev.state = {};
+    ev.state.localMembers = (state.members || []).map(function (m) {
+      return {
+        user_id: m.user_id,
+        display_name: m.display_name,
+        username: m.username || '',
+        role: m.role || 'member',
+        provisional: !!m.provisional,
+        arrow_color: m.arrow_color
+      };
+    });
+    try { ev._cachedMembers = (state.members || []).slice(); } catch (e) {}
+  }
+
   async function loadMembers(eventId) {
     state.members = [];
+    var evM = state.events.find(function (e) { return String(e.id) === String(eventId); }) ||
+      (activeEvent() && String(activeEvent().id) === String(eventId) ? activeEvent() : null);
+    var removed = eventRemovedMemberIds(evM);
     var client = sb();
     if (!client || !eventId) {
       state.members = [{ user_id: myId(), display_name: myName(), arrow_color: myColor(), role: 'owner' }];
+      // Prefer localMembers when offline
+      try {
+        var local0 = (evM && evM.state && Array.isArray(evM.state.localMembers)) ? evM.state.localMembers : [];
+        if (local0.length) {
+          state.members = local0.filter(function (m) {
+            return m && !removed[String(m.user_id)];
+          }).map(function (m) { return Object.assign({}, m); });
+        }
+      } catch (e0) {}
       collectFriendsFromMembers();
       return;
     }
@@ -3379,13 +3469,13 @@
         var pr = await client.from('profiles').select('id, username, display_name, arrow_color').in('id', ids);
         (pr.data || []).forEach(function (p) { profs[p.id] = p; });
       }
-      var evForRoles = state.events.find(function (e) { return String(e.id) === String(eventId); });
-      var creatorIds = (evForRoles && evForRoles.state && Array.isArray(evForRoles.state.creators))
-        ? evForRoles.state.creators.map(String) : [];
-      state.members = rows.map(function (r) {
+      var creatorIds = (evM && evM.state && Array.isArray(evM.state.creators))
+        ? evM.state.creators.map(String) : [];
+      state.members = rows.filter(function (r) {
+        return r && !removed[String(r.user_id)];
+      }).map(function (r) {
         var p = profs[r.user_id] || {};
         var role = r.role || 'member';
-        // Co-creators stored on event.state.creators (works offline + if DB still says member)
         if (role === 'member' && creatorIds.indexOf(String(r.user_id)) >= 0) role = 'creator';
         return {
           user_id: r.user_id,
@@ -3398,12 +3488,12 @@
       if (!state.members.length) {
         state.members = [{ user_id: myId(), display_name: myName(), arrow_color: myColor(), role: 'owner' }];
       }
-      // Merge name-only local members
+      // Merge name-only local members (respect removed denylist)
       try {
-        var evM = state.events.find(function (e) { return String(e.id) === String(eventId); }) || activeEvent();
         var local = (evM && evM.state && Array.isArray(evM.state.localMembers)) ? evM.state.localMembers : [];
         local.forEach(function (lm) {
           if (!lm) return;
+          if (removed[String(lm.user_id)]) return;
           if (state.members.some(function (m) {
             return String(m.user_id) === String(lm.user_id) ||
               String(m.display_name || '').toLowerCase() === String(lm.display_name || '').toLowerCase();
@@ -3663,21 +3753,44 @@
   }
 
   function itemsClaimedByMember(uid) {
-    var ev = activeEvent();
     var out = [];
-    if (!ev) return out;
-    ['todo', 'buy', 'bring'].forEach(function (kind) {
-      (ev.state.lists[kind].group || []).forEach(function (it) {
-        var q = Number((it.claims || {})[uid] || (it.claims || {})[String(uid)] || 0);
-        if (q > 0) out.push({ kind: kind, title: it.title, qty: q });
-      });
-      Object.keys(ev.state.lists[kind].personal || {}).forEach(function (pid) {
-        (ev.state.lists[kind].personal[pid] || []).forEach(function (it) {
-          var q = Number((it.claims || {})[uid] || (it.claims || {})[String(uid)] || 0);
-          if (q > 0) out.push({ kind: kind + ' (personal)', title: it.title, qty: q });
+    var seen = {};
+    var sid = String(uid);
+    function pushIt(it, kindLabel) {
+      if (!it || !it.id || seen[String(it.id)]) return;
+      var q = Number((it.claims || {})[uid] || (it.claims || {})[sid] || 0);
+      if (q <= 0) return;
+      seen[String(it.id)] = true;
+      out.push({ kind: kindLabel || 'bring', title: it.title, qty: q });
+    }
+    // Named packing list (event or personal)
+    try {
+      var nlist = findNamedListById(state.activeNamedListId);
+      if (!nlist && activeEvent()) {
+        var linked = listsForEvent(activeEvent().id);
+        nlist = linked[0] || null;
+      }
+      if (nlist) {
+        sanitizeNamedList(nlist);
+        (nlist.columns || []).forEach(function (c) {
+          if (!c || String(c.id) === 'personal') return;
+          (c.items || []).forEach(function (it) {
+            pushIt(it, c.name || c.id);
+          });
         });
+      }
+    } catch (eN) {}
+    // Legacy event.state.lists buckets
+    var ev = activeEvent();
+    if (ev && ev.state && ev.state.lists) {
+      ['todo', 'buy', 'bring'].forEach(function (kind) {
+        try {
+          ((ev.state.lists[kind] && ev.state.lists[kind].group) || []).forEach(function (it) {
+            pushIt(it, listKindLabel(kind));
+          });
+        } catch (eG) {}
       });
-    });
+    }
     return out;
   }
 
@@ -4333,6 +4446,7 @@
             return '<span class="cal-event-dot" style="background:' + esc(eventColor(ev)) + '"></span>';
           }).join('') + '</div>';
       }
+      // has-event: dots only (CSS strips highlight box). selected = user picked day.
       html += '<button type="button" class="cal-cell' +
         (isSel ? ' selected' : '') +
         (isToday ? ' is-today' : '') +
@@ -5253,20 +5367,16 @@
     }
     var scope = opts.scope || 'event'; // event | list
     var listId = opts.listId || '';
-    var canRemove = !!opts.canRemove;
     return list.map(function (m) {
       var mid = m.user_id || m.id || m.display_name || '';
       var isOwner = m.role === 'owner';
-      var clickable = canRemove && !isOwner && mid;
-      return '<button type="button" class="member-chip member-chip-sm' + (clickable ? ' is-clickable' : '') +
+      // Always clickable to see what they're bringing (remove is only in Edit event/list)
+      return '<button type="button" class="member-chip member-chip-sm is-clickable' +
         '" style="margin:2px 4px 2px 0;display:inline-flex" ' +
-        (clickable
-          ? ('data-member-chip="' + esc(String(mid)) + '" data-member-scope="' + esc(scope) +
-            '" data-member-list-id="' + esc(listId) + '" title="Tap for options / remove"')
-          : 'disabled') +
-        '>' +
+        'data-member-chip="' + esc(String(mid)) + '" data-member-scope="' + esc(scope) +
+        '" data-member-list-id="' + esc(listId) + '" title="What they are bringing">' +
         esc(m.display_name || m.username || 'Member') +
-        (isOwner ? ' · owner' : (m.provisional ? ' · name' : '')) +
+        (isOwner ? ' · host' : (m.provisional ? ' · name' : '')) +
         '</button>';
     }).join('');
   }
@@ -5288,7 +5398,7 @@
       (state.membersDrawerKey == null || String(state.membersDrawerKey) === listDrawerKey);
     if (active && showListDrawer) {
       var chips = membersChipsHtml(n.members || [], {
-        scope: 'list', listId: n.id, canRemove: isNamedListOwner(n)
+        scope: 'list', listId: n.id, canRemove: false
       });
       membersBlock = '<div class="event-card-members" data-list-members="' + esc(n.id) + '">' +
         renderInlineAddMembersHtml({
@@ -5351,7 +5461,7 @@
     if (active && showEvDrawer) {
       var canAddL = isEventCreator(e) || String(e.owner_user_id) === String(myId()) || !myId();
       var chips = membersChipsHtml(mems, {
-        scope: 'event', listId: '', canRemove: canAddL
+        scope: 'event', listId: '', canRemove: false
       });
       membersBlock = '<div class="event-card-members" data-event-members="' + esc(e.id) + '">' +
         renderInlineAddMembersHtml({
@@ -5694,7 +5804,7 @@
           if (sharedList) {
             barMem.style.display = '';
             barMem.innerHTML = membersChipsHtml(openList.members || [], {
-              scope: 'list', listId: openList.id, canRemove: isNamedListOwner(openList)
+              scope: 'list', listId: openList.id, canRemove: false
             });
           } else {
             barMem.style.display = 'none';
@@ -5708,16 +5818,23 @@
       if ($('inbox-area')) $('inbox-area').innerHTML = '';
       // ONLY the triad in #ev-list — heal list first so reopen always works
       openList = sanitizeNamedList(openList);
-      // Persist heal once per list id so permanently-broken store entries recover
+      // Soft heal only — avoid saveNamedList on every open (was racing cloud pull → blank lists)
       if (!state._healedLists) state._healedLists = {};
       if (!state._healedLists[String(openList.id)]) {
-        try { saveNamedList(openList); } catch (eHeal) {}
         state._healedLists[String(openList.id)] = true;
       }
       var qEvList = { state: { qualifiers: DEFAULT_QUALIFIERS.map(function (q) { return Object.assign({}, q); }) } };
+      try {
+        var aevQ = openList.eventId ? findEventById(openList.eventId) : null;
+        if (aevQ && aevQ.state && aevQ.state.qualifiers) qEvList.state.qualifiers = aevQ.state.qualifiers;
+      } catch (eQ0) {}
       if ($('ev-list')) {
         try {
           $('ev-list').innerHTML = renderListTriad(openList, qEvList);
+          // Recover if render produced nothing
+          if (!$('ev-list').innerHTML || !$('ev-list').innerHTML.trim()) {
+            $('ev-list').innerHTML = renderListTriad(sanitizeNamedList(findNamedListById(openList.id) || openList), qEvList);
+          }
         } catch (eTri) {
           console.warn('renderListTriad', eTri);
           // Absolute last resort: three empty columns + any raw titles
@@ -5754,7 +5871,7 @@
         if ($('ev-members')) {
           var canRemEv = isEventCreator(ev) || String(ev.owner_user_id) === String(myId()) || !myId();
           $('ev-members').innerHTML = membersChipsHtml(state.members || [], {
-            scope: 'event', listId: '', canRemove: canRemEv
+            scope: 'event', listId: '', canRemove: false
           });
         }
         renderExpenses(ev);
@@ -6573,19 +6690,71 @@
 
   function fillMemberSharePick(box, q) {
     if (!box) return;
-    var hits = searchFriends(q, 10);
+    q = String(q || '').trim();
+    // Combine friends + map partners for typeahead
+    var hits = searchFriends(q, 20);
+    var byKey = {};
+    hits.forEach(function (f) {
+      var k = String(f.user_id || f.username || f.display_name || '');
+      if (k) byKey[k.toLowerCase()] = f;
+    });
+    try {
+      allPeopleForAddMembers(q, 30).forEach(function (p) {
+        var k = String(p.user_id || p.username || p.display_name || '');
+        if (!k || byKey[k.toLowerCase()]) return;
+        byKey[k.toLowerCase()] = {
+          user_id: p.user_id,
+          display_name: p.display_name,
+          username: p.username,
+          arrow_color: p.arrow_color
+        };
+      });
+    } catch (eP) {}
+    hits = Object.keys(byKey).map(function (k) { return byKey[k]; });
+    // Exclude people already on the active event/list
+    var already = {};
+    try {
+      (state.members || []).forEach(function (m) {
+        if (m && m.user_id) already[String(m.user_id).toLowerCase()] = true;
+        if (m && m.display_name) already[String(m.display_name).toLowerCase()] = true;
+      });
+      var openL = findNamedListById(state.activeNamedListId);
+      if (openL && openL.members) {
+        openL.members.forEach(function (m) {
+          if (m && m.user_id) already[String(m.user_id).toLowerCase()] = true;
+          if (m && m.display_name) already[String(m.display_name).toLowerCase()] = true;
+        });
+      }
+    } catch (eA) {}
+    hits = hits.filter(function (f) {
+      var id = String(f.user_id || '').toLowerCase();
+      var dn = String(f.display_name || '').toLowerCase();
+      var un = String(f.username || '').toLowerCase();
+      return !already[id] && !already[dn] && !already[un];
+    }).slice(0, 12);
     var html = '';
     if (hits.length) {
       html = hits.map(function (f) {
         var key = f.user_id || f.username || f.display_name;
-        return '<button type="button" class="btn" data-share-to-member="' + esc(key) + '" style="width:100%;text-align:left;margin:0 0 6px">' +
-          esc(friendLabel(f)) + '</button>';
+        return '<button type="button" class="btn" data-share-to-member="' + esc(key) + '">' +
+          esc(friendLabel(f) || f.display_name || f.username || 'Member') +
+          (f.username ? (' <span class="muted">@' + esc(f.username) + '</span>') : '') +
+          '</button>';
       }).join('');
-    } else if (String(q || '').trim().length >= 2) {
-      html = '<button type="button" class="btn btn-accent" data-share-to-new="' + esc(String(q).trim()) +
-        '" style="width:100%">Add member “' + esc(autoCap(String(q).trim())) + '” and share</button>';
-    } else {
-      html = '<p class="muted" style="font-size:12px;margin:0">Type a name, nickname, or username…</p>';
+    }
+    if (q.length >= 1 && !hits.some(function (f) {
+      return String(f.display_name || '').toLowerCase() === q.toLowerCase() ||
+        String(f.username || '').toLowerCase() === q.toLowerCase();
+    })) {
+      if (q.length >= 2 && !already[q.toLowerCase()]) {
+        html += '<button type="button" class="btn btn-accent" data-share-to-new="' + esc(q) +
+          '">Add “' + esc(autoCap(q)) + '” as new name</button>';
+      }
+    }
+    if (!html) {
+      html = q.length
+        ? '<p class="muted" style="font-size:12px;margin:0">No matches — type a full name to add someone new.</p>'
+        : '<p class="muted" style="font-size:12px;margin:0">Type a name, nickname, or username…</p>';
     }
     box.innerHTML = html;
   }
@@ -7062,10 +7231,10 @@
     }
     return '<div class="inline-members-block" data-inline-members="' + esc(opts.scope || 'list') +
       '" data-inline-list-id="' + esc(opts.listId || '') + '" data-drawer-key="' + esc(drawerKey) + '">' +
-      '<div class="section-label">Members <span class="muted" style="font-weight:600;text-transform:none">· tap to remove</span></div>' +
+      '<div class="section-label">Members</div>' +
       '<div class="inline-members-chips">' + (opts.membersHtml || '<span class="muted" style="font-size:12px">Just you</span>') + '</div>' +
       '<button type="button" class="btn btn-accent btn-inline-add-members" data-inline-add-toggle="' + esc(drawerKey) + '">' +
-        (addOpen ? 'Hide add' : 'Add members') + '</button>' +
+        (addOpen ? 'Hide' : 'Add members') + '</button>' +
       '<div class="inline-add-members-form' + (addOpen ? ' is-open' : '') + '" id="' + esc(idPrefix) + '-add-form">' +
         '<p class="muted" style="font-size:11px;margin:0 0 6px">Friends, nicknames, or type a new name</p>' +
         '<div class="field" style="margin:0 0 6px">' +
@@ -7119,28 +7288,24 @@
     }
   }
 
-  async function removeEventMember(memberId) {
-    var ev = activeEvent();
-    if (!ev) return;
-    if (!isEventCreator(ev) && String(ev.owner_user_id) !== String(myId())) {
-      appToast('Only the host can remove members');
-      return;
+  /** Actually remove (no confirm). opts.skipRender / opts.quiet */
+  function removeEventMemberNow(memberId, opts) {
+    opts = opts || {};
+    var ev = activeEvent() || findEventById(state.activeEventId);
+    if (!ev) return false;
+    if (!isEventCreator(ev) && String(ev.owner_user_id) !== String(myId()) && myId()) {
+      if (!opts.quiet) appToast('Only the host can remove members');
+      return false;
     }
     if (String(memberId) === String(ev.owner_user_id) || String(memberId) === String(myId())) {
-      appToast('Can’t remove the host');
-      return;
+      if (!opts.quiet) appToast('Can’t remove the host');
+      return false;
     }
     var mem = (state.members || []).find(function (m) { return String(m.user_id) === String(memberId); });
-    var label = (mem && (mem.display_name || mem.username)) || 'this member';
-    var ok = await appConfirm('Remove ' + label + ' from this event?', 'Remove member');
-    if (!ok) return;
+    var label = (mem && (mem.display_name || mem.username)) || 'member';
+    markMemberRemoved(ev, memberId);
     state.members = (state.members || []).filter(function (m) { return String(m.user_id) !== String(memberId); });
-    if (ev.state && Array.isArray(ev.state.localMembers)) {
-      ev.state.localMembers = ev.state.localMembers.filter(function (m) {
-        return String(m.user_id) !== String(memberId);
-      });
-    }
-    try { ev._cachedMembers = state.members.slice(); } catch (eC) {}
+    syncLocalMembersFromState(ev);
     try {
       var client = sb();
       if (client && isUuidLike(ev.id) && isUuidLike(memberId) && !ev._localOnly) {
@@ -7148,7 +7313,6 @@
           .eq('event_id', ev.id).eq('user_id', memberId).then(function () {}).catch(function () {});
       }
     } catch (eCloud) {}
-    // Also drop from linked packing list
     try {
       var linked = listsForEvent(ev.id);
       if (linked[0] && Array.isArray(linked[0].members)) {
@@ -7158,58 +7322,222 @@
         saveNamedList(linked[0]);
       }
     } catch (eL) {}
-    try { saveActiveEvent(); } catch (eS) { persistLocal(); }
-    appToast('Removed ' + label);
-    render();
+    try { saveActiveEvent(); } catch (eS) { persistLocal(); cloudSaveEvent(ev); }
+    if (!opts.quiet) appToast('Removed ' + label);
+    if (!opts.skipRender) {
+      try { fillEditEventMembersPanel(); } catch (eP) {}
+      try { render(); } catch (eR) {}
+    }
+    return true;
   }
 
-  async function removeListMember(list, memberId) {
-    if (!list) return;
+  function removeListMemberNow(list, memberId, opts) {
+    opts = opts || {};
+    if (!list) return false;
     if (!isNamedListOwner(list)) {
-      appToast('Only the list creator can remove members');
-      return;
+      if (!opts.quiet) appToast('Only the list creator can remove members');
+      return false;
     }
     if (String(memberId) === String(list.owner_id)) {
-      appToast('Can’t remove the list owner');
-      return;
+      if (!opts.quiet) appToast('Can’t remove the list owner');
+      return false;
     }
     normalizeNamedList(list);
     var mem = (list.members || []).find(function (m) { return String(m.user_id) === String(memberId); });
-    var label = (mem && (mem.display_name || mem.username)) || 'this member';
-    var ok = await appConfirm('Remove ' + label + ' from this list?', 'Remove member');
-    if (!ok) return;
+    var label = (mem && (mem.display_name || mem.username)) || 'member';
     list.members = (list.members || []).filter(function (m) { return String(m.user_id) !== String(memberId); });
     saveNamedList(list);
-    // Quietly drop from linked event localMembers / state.members if present
     if (list.eventId) {
       try {
-        var evL = findEventById(list.eventId);
-        if (evL && evL.state && Array.isArray(evL.state.localMembers)) {
-          evL.state.localMembers = evL.state.localMembers.filter(function (m) {
-            return String(m.user_id) !== String(memberId);
-          });
+        var prevId = state.activeEventId;
+        if (String(state.activeEventId) !== String(list.eventId)) {
+          state.activeEventId = String(list.eventId);
         }
-        if (String(state.activeEventId) === String(list.eventId)) {
-          state.members = (state.members || []).filter(function (m) {
-            return String(m.user_id) !== String(memberId);
-          });
-        }
-        if (evL) {
-          try { saveActiveEvent(); } catch (eS2) {
-            // saveActiveEvent needs active event — force persist via dual path
-            try {
-              if (String(state.activeEventId) !== String(list.eventId)) {
-                // temporary
-              }
-              persistLocal();
-              cloudSaveEvent(evL);
-            } catch (eP) {}
-          }
-        }
+        removeEventMemberNow(memberId, { quiet: true, skipRender: true });
+        if (prevId) state.activeEventId = prevId;
       } catch (eE) {}
     }
-    appToast('Removed ' + label);
+    if (!opts.quiet) appToast('Removed ' + label);
+    if (!opts.skipRender) {
+      try { fillEditListMembersPanel(list); } catch (eP) {}
+      try { render(); } catch (eR) {}
+    }
+    return true;
+  }
+
+  /** Merge dropId into keepId (claims + drop member). scope: event | list */
+  function mergeMembers(keepId, dropId, scope, listId) {
+    keepId = String(keepId || '');
+    dropId = String(dropId || '');
+    if (!keepId || !dropId || keepId === dropId) {
+      appToast('Pick two different people');
+      return false;
+    }
+    function rekeyClaims(item) {
+      if (!item || !item.claims || typeof item.claims !== 'object') return;
+      var qDrop = Number(item.claims[dropId] || 0);
+      if (qDrop <= 0) return;
+      var qKeep = Number(item.claims[keepId] || 0);
+      item.claims[keepId] = qKeep + qDrop;
+      delete item.claims[dropId];
+    }
+    if (scope === 'list') {
+      var list = findNamedListById(listId || state.activeNamedListId);
+      if (!list) return false;
+      sanitizeNamedList(list);
+      (list.columns || []).forEach(function (c) {
+        (c.items || []).forEach(rekeyClaims);
+      });
+      list.members = (list.members || []).filter(function (m) {
+        return String(m.user_id) !== dropId;
+      });
+      saveNamedList(list);
+      if (list.eventId) {
+        var evL = findEventById(list.eventId);
+        if (evL) {
+          markMemberRemoved(evL, dropId);
+          if (String(state.activeEventId) === String(list.eventId)) {
+            state.members = (state.members || []).filter(function (m) {
+              return String(m.user_id) !== dropId;
+            });
+            syncLocalMembersFromState(evL);
+            try { saveActiveEvent(); } catch (e) { persistLocal(); }
+          }
+        }
+      }
+      appToast('Members merged');
+      fillEditListMembersPanel(list);
+      render();
+      return true;
+    }
+    var ev = activeEvent();
+    if (!ev) return false;
+    // Rekey claims on linked list + event buckets
+    try {
+      var linked = listsForEvent(ev.id);
+      if (linked[0]) {
+        sanitizeNamedList(linked[0]);
+        (linked[0].columns || []).forEach(function (c) {
+          (c.items || []).forEach(rekeyClaims);
+        });
+        linked[0].members = (linked[0].members || []).filter(function (m) {
+          return String(m.user_id) !== dropId;
+        });
+        saveNamedList(linked[0]);
+      }
+    } catch (eL) {}
+    if (ev.state && ev.state.lists) {
+      ['todo', 'buy', 'bring'].forEach(function (k) {
+        try {
+          ((ev.state.lists[k] && ev.state.lists[k].group) || []).forEach(rekeyClaims);
+        } catch (e) {}
+      });
+    }
+    markMemberRemoved(ev, dropId);
+    unmarkMemberRemoved(ev, keepId);
+    state.members = (state.members || []).filter(function (m) {
+      return String(m.user_id) !== dropId;
+    });
+    syncLocalMembersFromState(ev);
+    try {
+      var client = sb();
+      if (client && isUuidLike(ev.id) && isUuidLike(dropId) && !ev._localOnly) {
+        client.from('plan_event_members').delete()
+          .eq('event_id', ev.id).eq('user_id', dropId).then(function () {}).catch(function () {});
+      }
+    } catch (eC) {}
+    try { saveActiveEvent(); } catch (eS) { persistLocal(); }
+    appToast('Members merged');
+    fillEditEventMembersPanel();
     render();
+    return true;
+  }
+
+  function fillMergeSelects(keepSel, dropSel, members) {
+    if (!keepSel || !dropSel) return;
+    var opts = (members || []).filter(Boolean).map(function (m) {
+      var id = m.user_id || m.display_name;
+      return '<option value="' + esc(String(id)) + '">' + esc(m.display_name || m.username || 'Member') + '</option>';
+    }).join('');
+    keepSel.innerHTML = opts || '<option value="">—</option>';
+    dropSel.innerHTML = opts || '<option value="">—</option>';
+    if (dropSel.options.length > 1) dropSel.selectedIndex = 1;
+  }
+
+  function fillEditEventMembersPanel() {
+    var box = $('edit-ev-members-list');
+    if (!box) return;
+    var ev = activeEvent();
+    var canRm = ev && (isEventCreator(ev) || String(ev.owner_user_id) === String(myId()) || !myId());
+    var mems = state.members || [];
+    if (!mems.length) {
+      box.innerHTML = '<p class="muted" style="font-size:12px;margin:0">Just you so far.</p>';
+    } else {
+      box.innerHTML = mems.map(function (m) {
+        var mid = String(m.user_id || '');
+        var isOwner = m.role === 'owner' || String(mid) === String(ev && ev.owner_user_id);
+        var pending = state._editRmConfirm && state._editRmConfirm.scope === 'event' &&
+          String(state._editRmConfirm.id) === mid;
+        if (pending) {
+          return '<div class="edit-member-confirm" data-emc-id="' + esc(mid) + '">' +
+            '<div>Remove <strong>' + esc(m.display_name || 'Member') + '</strong> from this event?</div>' +
+            '<div class="emc-actions">' +
+              '<button type="button" class="btn btn-primary" data-emc-yes="' + esc(mid) + '" data-emc-scope="event">Remove</button>' +
+              '<button type="button" class="btn" data-emc-no>Cancel</button>' +
+            '</div></div>';
+        }
+        return '<div class="edit-member-row">' +
+          '<span class="member-chip">' + esc(m.display_name || m.username || 'Member') +
+          (isOwner ? ' · host' : '') + '</span>' +
+          (canRm && !isOwner
+            ? '<button type="button" class="btn btn-rm-mem" data-edit-rm-mem="' + esc(mid) +
+              '" data-edit-rm-scope="event">Remove</button>'
+            : '') +
+          '</div>';
+      }).join('');
+    }
+    fillMergeSelects($('edit-ev-merge-keep'), $('edit-ev-merge-drop'), mems);
+  }
+
+  function fillEditListMembersPanel(list) {
+    var box = $('edit-list-members-list');
+    if (!box) return;
+    list = list || findNamedListById(state.activeNamedListId);
+    if (!list) {
+      box.innerHTML = '<p class="muted" style="font-size:12px;margin:0">No list open.</p>';
+      return;
+    }
+    normalizeNamedList(list);
+    var canRm = isNamedListOwner(list);
+    var mems = list.members || [];
+    if (!mems.length) {
+      box.innerHTML = '<p class="muted" style="font-size:12px;margin:0">Just you so far.</p>';
+    } else {
+      box.innerHTML = mems.map(function (m) {
+        var mid = String(m.user_id || '');
+        var isOwner = m.role === 'owner' || String(mid) === String(list.owner_id);
+        var pending = state._editRmConfirm && state._editRmConfirm.scope === 'list' &&
+          String(state._editRmConfirm.id) === mid;
+        if (pending) {
+          return '<div class="edit-member-confirm" data-emc-id="' + esc(mid) + '">' +
+            '<div>Remove <strong>' + esc(m.display_name || 'Member') + '</strong> from this list?</div>' +
+            '<div class="emc-actions">' +
+              '<button type="button" class="btn btn-primary" data-emc-yes="' + esc(mid) +
+              '" data-emc-scope="list" data-emc-list="' + esc(list.id) + '">Remove</button>' +
+              '<button type="button" class="btn" data-emc-no>Cancel</button>' +
+            '</div></div>';
+        }
+        return '<div class="edit-member-row">' +
+          '<span class="member-chip">' + esc(m.display_name || m.username || 'Member') +
+          (isOwner ? ' · owner' : '') + '</span>' +
+          (canRm && !isOwner
+            ? '<button type="button" class="btn btn-rm-mem" data-edit-rm-mem="' + esc(mid) +
+              '" data-edit-rm-scope="list" data-edit-rm-list="' + esc(list.id) + '">Remove</button>'
+            : '') +
+          '</div>';
+      }).join('');
+    }
+    fillMergeSelects($('edit-list-merge-keep'), $('edit-list-merge-drop'), mems);
   }
 
   function addEventMemberFromPick(friendKey, isNewName) {
@@ -7263,20 +7591,8 @@
         }
       }
     }
-    try { ev._cachedMembers = state.members.slice(); } catch (eC) {}
-    // Local-only member tags on event state for offline packs
-    if (!ev.state) ev.state = {};
-    if (!Array.isArray(ev.state.localMembers)) ev.state.localMembers = [];
-    ev.state.localMembers = state.members.map(function (m) {
-      return {
-        user_id: m.user_id,
-        display_name: m.display_name,
-        username: m.username || '',
-        role: m.role || 'member',
-        provisional: !!m.provisional,
-        arrow_color: m.arrow_color
-      };
-    });
+    unmarkMemberRemoved(ev, uidM);
+    syncLocalMembersFromState(ev);
     if (!ev._personalOnly) saveActiveEvent();
     else {
       var board = loadPersonalBoard();
@@ -7284,10 +7600,12 @@
       if (idx >= 0) {
         board.events[idx].state = board.events[idx].state || {};
         board.events[idx].state.localMembers = ev.state.localMembers;
+        board.events[idx].state.removedMemberIds = (ev.state.removedMemberIds || []).slice();
         savePersonalBoard(board);
       }
     }
     appToast('Added ' + name);
+    try { fillEditEventMembersPanel(); } catch (eF) {}
   }
 
   /** Tesseract CDN base (#35 / #38) — explicit worker paths for mobile */
@@ -8845,6 +9163,60 @@
       var ev = activeEvent();
       if (!ev) return;
       openSharePeopleChooser('event', ev.id);
+    });
+    // Edit modal: remove member (in-place confirm) + merge
+    on('edit-ev-members-list', 'click', function (e) {
+      var yes = e.target.closest && e.target.closest('[data-emc-yes]');
+      if (yes) {
+        e.preventDefault();
+        removeEventMemberNow(yes.getAttribute('data-emc-yes'));
+        state._editRmConfirm = null;
+        fillEditEventMembersPanel();
+        return;
+      }
+      if (e.target.closest && e.target.closest('[data-emc-no]')) {
+        state._editRmConfirm = null;
+        fillEditEventMembersPanel();
+        return;
+      }
+      var rm = e.target.closest && e.target.closest('[data-edit-rm-mem]');
+      if (rm) {
+        e.preventDefault();
+        state._editRmConfirm = { scope: 'event', id: rm.getAttribute('data-edit-rm-mem') };
+        fillEditEventMembersPanel();
+      }
+    });
+    on('edit-list-members-list', 'click', function (e) {
+      var yes = e.target.closest && e.target.closest('[data-emc-yes]');
+      if (yes) {
+        e.preventDefault();
+        var lid = yes.getAttribute('data-emc-list');
+        removeListMemberNow(findNamedListById(lid), yes.getAttribute('data-emc-yes'));
+        state._editRmConfirm = null;
+        fillEditListMembersPanel(findNamedListById(lid));
+        return;
+      }
+      if (e.target.closest && e.target.closest('[data-emc-no]')) {
+        state._editRmConfirm = null;
+        fillEditListMembersPanel(findNamedListById(state.activeNamedListId));
+        return;
+      }
+      var rm = e.target.closest && e.target.closest('[data-edit-rm-mem]');
+      if (rm) {
+        e.preventDefault();
+        state._editRmConfirm = { scope: 'list', id: rm.getAttribute('data-edit-rm-mem') };
+        fillEditListMembersPanel(findNamedListById(rm.getAttribute('data-edit-rm-list') || state.activeNamedListId));
+      }
+    });
+    click('edit-ev-merge-go', function () {
+      var keep = $('edit-ev-merge-keep') && $('edit-ev-merge-keep').value;
+      var drop = $('edit-ev-merge-drop') && $('edit-ev-merge-drop').value;
+      mergeMembers(keep, drop, 'event', null);
+    });
+    click('edit-list-merge-go', function () {
+      var keep = $('edit-list-merge-keep') && $('edit-list-merge-keep').value;
+      var drop = $('edit-list-merge-drop') && $('edit-list-merge-drop').value;
+      mergeMembers(keep, drop, 'list', state.activeNamedListId);
     });
     click('share-people-chooser-cancel', closeSharePeopleChooser);
     on('share-people-chooser', 'click', function (e) {
@@ -10470,7 +10842,6 @@
           try { items = itemsClaimedByMember(mid); } catch (eI) { items = []; }
           var pop = document.createElement('div');
           pop.className = 'member-pop';
-          var aev = activeEvent();
           var mem = null;
           if (scope === 'list') {
             var lst = findNamedListById(listId);
@@ -10478,59 +10849,20 @@
           } else {
             mem = (state.members || []).find(function (x) { return String(x.user_id) === String(mid); });
           }
-          var isCreatorAlready = mem && (mem.role === 'owner' || mem.role === 'creator');
-          var canGrant = scope === 'event' && aev && !aev._personalOnly && isEventCreator(aev) && String(mid) !== String(myId());
-          var canRemove = false;
-          if (scope === 'event') {
-            canRemove = aev && (isEventCreator(aev) || String(aev.owner_user_id) === String(myId())) &&
-              !isCreatorAlready && String(mid) !== String(myId());
-          } else {
-            var lst2 = findNamedListById(listId);
-            canRemove = lst2 && isNamedListOwner(lst2) && mem && mem.role !== 'owner';
-          }
-          var actions = '';
-          if (canGrant) {
-            if (isCreatorAlready && mem.role === 'creator') {
-              actions += '<button type="button" class="btn" data-mem-act="revoke-creator" data-mid="' + esc(mid) + '" style="width:100%;margin-top:8px;font-size:11px">Remove creator privileges</button>';
-            } else if (!isCreatorAlready) {
-              actions += '<button type="button" class="btn btn-primary" data-mem-act="grant-creator" data-mid="' + esc(mid) + '" style="width:100%;margin-top:8px;font-size:11px">Grant creator privileges</button>';
-            }
-          }
-          if (canRemove) {
-            actions += '<button type="button" class="btn" data-mem-act="remove-member" data-mid="' + esc(mid) +
-              '" data-scope="' + esc(scope) + '" data-list-id="' + esc(listId || '') +
-              '" style="width:100%;margin-top:8px;font-size:11px;color:#fca5a5;border-color:rgba(252,165,165,0.4)">Remove from ' +
-              (scope === 'list' ? 'list' : 'event') + '</button>';
-          }
-          pop.innerHTML = '<h5 style="color:' + memberColor(mid) + '">' + esc(memberLabel(mid) || (mem && mem.display_name) || 'Member') +
-            (isCreatorAlready ? (mem.role === 'owner' ? ' · host' : ' · creator') : '') + '</h5>' +
-            '<p class="muted" style="margin:0 0 6px;font-size:11px">Claimed / bringing</p>' +
+          // Tap member chip: only what they agreed to bring (remove lives in Edit event/list)
+          pop.innerHTML = '<h5 style="color:' + memberColor(mid) + '">' +
+            esc(memberLabel(mid) || (mem && mem.display_name) || 'Member') + '</h5>' +
+            '<p class="muted" style="margin:0 0 6px;font-size:11px">Bringing</p>' +
             (items.length
               ? '<ul>' + items.map(function (it) {
-                return '<li>' + esc(it.title) + (it.qty > 1 ? ' ×' + it.qty : '') + '</li>';
+                return '<li>' + esc(it.title) + (it.qty > 1 ? ' ×' + it.qty : '') +
+                  (it.kind ? (' <span class="muted">· ' + esc(it.kind) + '</span>') : '') + '</li>';
               }).join('') + '</ul>'
-              : '<p class="muted">Nothing claimed yet.</p>') +
-            actions;
+              : '<p class="muted">Nothing claimed yet.</p>');
           document.body.appendChild(pop);
           var r = anchor.getBoundingClientRect();
           pop.style.left = Math.min(window.innerWidth - 220, Math.max(8, r.left)) + 'px';
           pop.style.top = (r.bottom + 6 + window.scrollY) + 'px';
-          pop.querySelectorAll('[data-mem-act]').forEach(function (b) {
-            b.addEventListener('click', function (e) {
-              e.stopPropagation();
-              var a = b.getAttribute('data-mem-act');
-              var id = b.getAttribute('data-mid');
-              pop.remove();
-              if (a === 'grant-creator') grantEventCreatorRole(id);
-              else if (a === 'revoke-creator') revokeEventCreatorRole(id);
-              else if (a === 'remove-member') {
-                var sc = b.getAttribute('data-scope') || 'event';
-                var lid = b.getAttribute('data-list-id') || '';
-                if (sc === 'list') removeListMember(findNamedListById(lid), id);
-                else removeEventMember(id);
-              }
-            });
-          });
           setTimeout(function () {
             function closePop(ev2) {
               if (pop.contains(ev2.target)) return;

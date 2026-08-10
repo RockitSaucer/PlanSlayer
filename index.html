@@ -998,7 +998,15 @@
     .calendar-container .cal-cell.empty {
       background: transparent; cursor: default; box-shadow: none; border: 0;
     }
-    .calendar-container .cal-cell.has-event { border-color: rgba(229,154,24,0.55); }
+    /* Event days: dots only — no highlight box around the day cell */
+    .calendar-container .cal-cell.has-event {
+      border-color: transparent;
+      box-shadow: none;
+      background: transparent;
+    }
+    .calendar-container .cal-cell.has-event:hover {
+      background: var(--border);
+    }
     .cal-dots-container {
       display: flex !important;
       gap: 3px;
@@ -2195,10 +2203,67 @@
       display: block;
     }
     .inline-members-block .btn-inline-add-members {
+      width: auto;
+      margin-top: 6px;
+      min-height: 0 !important;
+      padding: 4px 10px !important;
+      font-size: 11px !important;
+      font-weight: 700 !important;
+    }
+    .inline-member-pick .btn {
       width: 100%;
-      margin-top: 8px;
-      min-height: 40px;
-      font-weight: 800;
+      text-align: left;
+      margin: 0 0 4px;
+      min-height: 36px;
+      padding: 8px 10px !important;
+      font-size: 13px !important;
+    }
+    .edit-members-panel {
+      margin: 0 0 12px;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(0,0,0,0.18);
+    }
+    .edit-members-panel .section-label { margin-bottom: 6px; }
+    .edit-member-row {
+      display: flex; align-items: center; gap: 8px;
+      margin: 0 0 6px; flex-wrap: wrap;
+    }
+    .edit-member-row .member-chip { flex: 1 1 auto; margin: 0; cursor: default; }
+    .edit-member-row .btn-rm-mem {
+      flex: 0 0 auto;
+      padding: 4px 8px !important;
+      font-size: 11px !important;
+      color: #fca5a5;
+      border-color: rgba(252,165,165,0.4);
+    }
+    .edit-member-confirm {
+      width: 100%;
+      margin: 0 0 8px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(252,165,165,0.45);
+      background: rgba(80,20,20,0.35);
+      font-size: 12px;
+    }
+    .edit-member-confirm .emc-actions {
+      display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap;
+    }
+    .merge-members-box {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+    }
+    .merge-members-box select {
+      width: 100%;
+      margin: 0 0 6px;
+      padding: 8px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0c0f0a;
+      color: var(--ink);
+      font-family: inherit;
     }
     .list-col-body[data-col-focus-add] { cursor: text; }
     .list-triad .list-col { min-width: 200px; }
@@ -3085,7 +3150,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.16</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.17</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -3749,7 +3814,20 @@
           <option value="">None — personal list only</option>
         </select>
       </div>
-      <button type="button" class="btn btn-accent" id="edit-list-add-people" style="width:100%;margin:0 0 10px">Add people</button>
+      <div class="edit-members-panel" id="edit-list-members-panel">
+        <div class="section-label">Members</div>
+        <div id="edit-list-members-list"></div>
+        <button type="button" class="btn btn-accent btn-inline-add-members" id="edit-list-add-people" style="margin-top:6px">Add people</button>
+        <div class="merge-members-box">
+          <div class="section-label">Merge members</div>
+          <p class="muted" style="font-size:11px;margin:0 0 6px">If someone was added twice, merge the duplicate into the keeper. Claims move over.</p>
+          <label class="muted" style="font-size:11px">Keep this person</label>
+          <select id="edit-list-merge-keep"></select>
+          <label class="muted" style="font-size:11px">Merge this person into them</label>
+          <select id="edit-list-merge-drop"></select>
+          <button type="button" class="btn" id="edit-list-merge-go" style="width:100%;margin-top:4px">Merge members</button>
+        </div>
+      </div>
       <div class="modal-actions">
         <button type="button" class="btn" style="color:#fca5a5;border-color:rgba(252,165,165,0.4)" id="edit-list-delete">Delete list</button>
         <button type="button" class="btn" id="edit-list-cancel">Cancel</button>
@@ -3828,7 +3906,20 @@
         <label>End</label>
         <button type="button" class="btn" id="edit-ev-end-btn" style="width:100%">TBD</button>
       </div>
-      <button type="button" class="btn btn-accent" id="edit-ev-add-people" style="width:100%;margin:0 0 10px">Add people</button>
+      <div class="edit-members-panel" id="edit-ev-members-panel">
+        <div class="section-label">Members</div>
+        <div id="edit-ev-members-list"></div>
+        <button type="button" class="btn btn-accent btn-inline-add-members" id="edit-ev-add-people" style="margin-top:6px">Add people</button>
+        <div class="merge-members-box">
+          <div class="section-label">Merge members</div>
+          <p class="muted" style="font-size:11px;margin:0 0 6px">If someone was added twice, merge the duplicate into the keeper. Claims move over.</p>
+          <label class="muted" style="font-size:11px">Keep this person</label>
+          <select id="edit-ev-merge-keep"></select>
+          <label class="muted" style="font-size:11px">Merge this person into them</label>
+          <select id="edit-ev-merge-drop"></select>
+          <button type="button" class="btn" id="edit-ev-merge-go" style="width:100%;margin-top:4px">Merge members</button>
+        </div>
+      </div>
       <div class="modal-actions" style="flex-wrap:wrap;gap:8px">
         <button type="button" class="btn" style="color:#fca5a5;border-color:rgba(252,165,165,0.4)" id="edit-ev-delete">Delete event</button>
         <button type="button" class="btn" id="edit-ev-cancel">Cancel</button>

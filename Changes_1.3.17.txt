@@ -1,0 +1,18 @@
+PlanSlayer V1.3.17 — Member remove stick, edit-panel remove, blank list fix
+
+Members
+- Remove from event now sticks: denylist + localMembers sync + cloud delete
+- Remove only in Edit event / Edit list (in-place confirm under the button)
+- Tap a member chip → only what they claimed to bring (no remove there)
+- Smaller Add members button; no “tap to remove” label
+- Typeahead while typing a name: matching friends/map partners; skip duplicates
+- Merge members in Edit event / Edit list (keeper + duplicate)
+
+Lists
+- Stop cloud poll from wiping local packing lists (blank lists when swapping)
+- Softer heal on open; recover empty triad
+
+Calendar
+- Event days: dots only, no highlight box around the day
+
+Shell: plan-slayer-shell-v50

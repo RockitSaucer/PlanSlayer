@@ -1,0 +1,10 @@
+PlanSlayer V1.3.3 → V1.3.4
+===========================
+
+1. Drag reorder: item now follows the finger (translateY). Removed pointer-events:none
+   on the dragging row (that broke mobile pointer capture). Drop targets use frozen
+   slot midpoints. Pointer + touch listeners. Auto-scroll near list edges.
+2. Mobile list sheet: list name and section tabs are fully separated rows with solid
+   backgrounds and spacing so “To do” (etc.) is never covered by the list title.
+
+Version: APP_VERSION 1.3.4 · badge V1.3.4 · shell cache plan-slayer-shell-v36

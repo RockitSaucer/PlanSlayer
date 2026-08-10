@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.3';
+  var APP_VERSION = '1.3.4';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -4646,9 +4646,9 @@
   }
 
   /**
-   * Drag-and-drop reorder via the ⋮⋮ handle (desktop + mobile).
-   * Starts immediately on handle press (touch-action:none so scroll won't steal).
-   * Drop target = sibling under finger by Y, not only elementFromPoint.
+   * Drag-and-drop reorder via ⋮⋮ handle (desktop + mobile).
+   * Item follows the finger with transform; drop index from frozen slot mids.
+   * Uses pointer + touch (iOS) without pointer-events:none on the handle.
    */
   var _dragState = null;
   function wireListDrag() {
@@ -4686,22 +4686,23 @@
       };
     }
 
-    /** Reliable reorder: remove then insert relative to target id. */
-    function reorderInBucketSafe(bucket, fromId, toId, placeAfter) {
-      if (!bucket || String(fromId) === String(toId)) return false;
+    /**
+     * Reorder so fromId ends up at the position of targetId (before or after).
+     */
+    function reorderRelative(bucket, fromId, targetId, placeAfter) {
+      if (!bucket || String(fromId) === String(targetId)) return false;
       var fromIdx = -1;
       var toIdx = -1;
       var i;
       for (i = 0; i < bucket.length; i++) {
         if (String(bucket[i].id) === String(fromId)) fromIdx = i;
-        if (String(bucket[i].id) === String(toId)) toIdx = i;
+        if (String(bucket[i].id) === String(targetId)) toIdx = i;
       }
       if (fromIdx < 0 || toIdx < 0) return false;
       var item = bucket.splice(fromIdx, 1)[0];
-      // Target index may have shifted after removal
       toIdx = -1;
       for (i = 0; i < bucket.length; i++) {
-        if (String(bucket[i].id) === String(toId)) { toIdx = i; break; }
+        if (String(bucket[i].id) === String(targetId)) { toIdx = i; break; }
       }
       if (toIdx < 0) { bucket.push(item); return true; }
       var insertAt = placeAfter ? toIdx + 1 : toIdx;
@@ -4711,181 +4712,244 @@
       return true;
     }
 
-    function listItemsInSameColumn(row) {
+    /** Snapshot sibling slots at drag start (stable mids while row translates). */
+    function snapshotSlots(row) {
       var kind = row.getAttribute('data-kind');
-      var root = row.closest('.list-col-body') ||
-        row.closest('#mls-body') ||
-        row.closest('.list-col') ||
-        row.parentElement;
+      var root = row.closest('.list-col-body') || row.closest('#mls-body') || row.parentElement;
       if (!root) return [];
-      return Array.prototype.slice.call(root.querySelectorAll('.list-item')).filter(function (el) {
+      var nodes = Array.prototype.slice.call(root.querySelectorAll('.list-item')).filter(function (el) {
         return el.getAttribute('data-kind') === kind;
       });
+      return nodes.map(function (el, index) {
+        var r = el.getBoundingClientRect();
+        return {
+          id: el.getAttribute('data-item-id'),
+          el: el,
+          index: index,
+          top: r.top,
+          bottom: r.bottom,
+          mid: r.top + r.height / 2,
+          height: r.height
+        };
+      });
     }
 
-    /** Pick drop target by finger Y among sibling items (works when elementFromPoint fails on mobile). */
-    function findDropByY(row, y) {
-      var items = listItemsInSameColumn(row);
+    function pickSlotByY(slots, y, dragId) {
+      if (!slots || !slots.length) return null;
       var best = null;
-      var placeAfter = false;
+      var bestDist = Infinity;
       var i;
-      for (i = 0; i < items.length; i++) {
-        var el = items[i];
-        if (el === row) continue;
-        var rect = el.getBoundingClientRect();
-        var mid = rect.top + rect.height / 2;
-        if (y >= rect.top && y <= rect.bottom) {
-          best = el;
-          placeAfter = y > mid;
-          break;
-        }
-        // Between items: if y is above this item's top and past previous, snap to this (before)
-        if (y < rect.top) {
-          best = el;
-          placeAfter = false;
-          break;
-        }
-        // Past last item bottom
-        if (i === items.length - 1 && y > rect.bottom) {
-          best = el;
-          placeAfter = true;
-        } else if (y > rect.bottom) {
-          best = el;
-          placeAfter = true;
+      for (i = 0; i < slots.length; i++) {
+        var s = slots[i];
+        if (String(s.id) === String(dragId)) continue;
+        var d = Math.abs(y - s.mid);
+        if (d < bestDist) {
+          bestDist = d;
+          best = s;
         }
       }
-      return best ? { el: best, placeAfter: placeAfter } : null;
-    }
-
-    function clearDragVisuals() {
-      document.querySelectorAll('.list-item.is-dragging, .list-item.drag-over').forEach(function (n) {
-        n.classList.remove('is-dragging');
-        n.classList.remove('drag-over');
-      });
-      try { document.body.classList.remove('ps-list-dragging'); } catch (eB) {}
+      if (!best) return null;
+      return {
+        id: best.id,
+        placeAfter: y > best.mid,
+        el: best.el
+      };
     }
 
     function clientXY(e) {
-      var y = e.clientY;
-      var x = e.clientX;
-      if ((y == null || x == null) && e.touches && e.touches[0]) {
-        y = e.touches[0].clientY;
-        x = e.touches[0].clientX;
+      if (!e) return { x: 0, y: 0 };
+      if (e.touches && e.touches.length) {
+        return { x: e.touches[0].clientX, y: e.touches[0].clientY };
       }
-      if ((y == null || x == null) && e.changedTouches && e.changedTouches[0]) {
-        y = e.changedTouches[0].clientY;
-        x = e.changedTouches[0].clientX;
+      if (e.changedTouches && e.changedTouches.length) {
+        return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
       }
-      return { x: x, y: y };
+      return { x: e.clientX, y: e.clientY };
     }
 
-    function updateDropTarget(st, x, y) {
-      document.querySelectorAll('.list-item.drag-over').forEach(function (n) { n.classList.remove('drag-over'); });
-      var hit = findDropByY(st.row, y);
+    function clearDragVisuals(st) {
+      document.querySelectorAll('.list-item.is-dragging, .list-item.drag-over, .list-item.drag-over-after').forEach(function (n) {
+        n.classList.remove('is-dragging', 'drag-over', 'drag-over-after');
+        n.style.transform = '';
+        n.style.zIndex = '';
+        n.style.transition = '';
+        n.style.boxShadow = '';
+      });
+      try { document.body.classList.remove('ps-list-dragging'); } catch (eB) {}
+      if (st && st.placeholder && st.placeholder.parentNode) {
+        try { st.placeholder.parentNode.removeChild(st.placeholder); } catch (eP) {}
+      }
+    }
+
+    function updateDropVisual(st, y) {
+      document.querySelectorAll('.list-item.drag-over, .list-item.drag-over-after').forEach(function (n) {
+        n.classList.remove('drag-over', 'drag-over-after');
+      });
+      var hit = pickSlotByY(st.slots, y, st.id);
       if (!hit) {
-        // Fallback: elementFromPoint with dragging row non-interactive
-        st.row.style.pointerEvents = 'none';
-        var el = document.elementFromPoint(x != null ? x : 0, y);
-        st.row.style.pointerEvents = '';
-        var over = el && el.closest && el.closest('.list-item');
-        if (over && over !== st.row && over.getAttribute('data-kind') === st.row.getAttribute('data-kind')) {
-          var rect = over.getBoundingClientRect();
-          hit = { el: over, placeAfter: y > rect.top + rect.height / 2 };
-        }
-      }
-      if (hit && hit.el) {
-        hit.el.classList.add('drag-over');
-        st.overId = hit.el.getAttribute('data-item-id');
-        st.placeAfter = !!hit.placeAfter;
-      } else {
         st.overId = null;
+        return;
+      }
+      st.overId = hit.id;
+      st.placeAfter = hit.placeAfter;
+      if (hit.el) {
+        hit.el.classList.add(hit.placeAfter ? 'drag-over-after' : 'drag-over');
       }
     }
 
-    function onPointerDown(e) {
-      // Only primary button / touch
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      var t = e.target;
-      if (!t || !t.closest) return;
-      var handle = t.closest('[data-act="drag"]');
-      if (!handle) return;
-      var row = handle.closest('.list-item');
-      if (!row) return;
-      if (!handle.closest('#ev-list, #lists-active, #mobile-list-sheet, .list-col-body, .list-triad, #mls-body')) return;
-      // Stop scroll + item click
-      e.preventDefault();
-      e.stopPropagation();
-      var xy = clientXY(e);
+    function autoScroll(st, y) {
+      var scroller = st.row.closest('#mls-body') || st.row.closest('.list-col-body') || st.row.closest('.mls-body');
+      if (!scroller) return;
+      var sRect = scroller.getBoundingClientRect();
+      var edge = 56;
+      var step = 18;
+      if (y < sRect.top + edge) scroller.scrollTop -= step;
+      else if (y > sRect.bottom - edge) scroller.scrollTop += step;
+    }
+
+    function beginDrag(handle, row, xy, pointerId) {
+      if (_dragState) endDrag(null, true);
       var id = row.getAttribute('data-item-id');
+      var slots = snapshotSlots(row);
       _dragState = {
         id: id,
         row: row,
         handle: handle,
         startY: xy.y || 0,
         startX: xy.x || 0,
-        pointerId: e.pointerId,
+        lastY: xy.y || 0,
+        pointerId: pointerId,
         moved: false,
         overId: null,
-        placeAfter: false
+        placeAfter: false,
+        slots: slots
       };
-      // Capture first, then mark dragging (pointer-events:none on row)
-      try { handle.setPointerCapture(e.pointerId); } catch (err) {}
       row.classList.add('is-dragging');
+      row.style.zIndex = '40';
+      row.style.transition = 'none';
+      row.style.boxShadow = '0 8px 24px rgba(0,0,0,0.45)';
       try { document.body.classList.add('ps-list-dragging'); } catch (eB2) {}
-      try { if (navigator.vibrate) navigator.vibrate(6); } catch (eV) {}
+      try { if (navigator.vibrate) navigator.vibrate(8); } catch (eV) {}
     }
-    function onPointerMove(e) {
-      if (!_dragState) return;
-      if (e.pointerId != null && _dragState.pointerId != null && e.pointerId !== _dragState.pointerId) return;
-      var xy = clientXY(e);
-      if (xy.y == null) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (Math.abs(xy.y - _dragState.startY) > 3 || Math.abs((xy.x || 0) - _dragState.startX) > 3) {
-        _dragState.moved = true;
+
+    function moveDrag(xy, e) {
+      if (!_dragState || xy.y == null) return;
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
       }
-      updateDropTarget(_dragState, xy.x, xy.y);
-      // Auto-scroll parent scroller near edges (mobile list sheet body)
-      var scroller = _dragState.row.closest('#mls-body, .list-col-body, .mls-body') ||
-        document.scrollingElement;
-      if (scroller && scroller !== document.scrollingElement) {
-        var sRect = scroller.getBoundingClientRect();
-        var edge = 48;
-        if (xy.y < sRect.top + edge) scroller.scrollTop -= 12;
-        else if (xy.y > sRect.bottom - edge) scroller.scrollTop += 12;
-      }
+      var dy = xy.y - _dragState.startY;
+      var dx = (xy.x || 0) - _dragState.startX;
+      if (Math.abs(dy) > 4 || Math.abs(dx) > 4) _dragState.moved = true;
+      _dragState.lastY = xy.y;
+      // Visually follow the finger
+      _dragState.row.style.transform = 'translateY(' + dy + 'px)';
+      updateDropVisual(_dragState, xy.y);
+      autoScroll(_dragState, xy.y);
     }
-    function onPointerUp(e) {
+
+    function endDrag(xy, cancelled) {
       if (!_dragState) return;
-      if (e && e.pointerId != null && _dragState.pointerId != null && e.pointerId !== _dragState.pointerId) return;
       var st = _dragState;
       _dragState = null;
+      if (!cancelled && xy && xy.y != null) {
+        updateDropVisual(st, xy.y);
+      } else if (!cancelled && st.lastY != null) {
+        updateDropVisual(st, st.lastY);
+      }
+      var moved = st.moved;
+      var overId = st.overId;
+      var placeAfter = st.placeAfter;
+      var id = st.id;
+      var row = st.row;
+      // reset visual before re-render
       try {
-        if (st.handle && e && e.pointerId != null) st.handle.releasePointerCapture(e.pointerId);
-      } catch (errR) {}
-      // Final target from release position
-      var xy = clientXY(e || {});
-      if (xy.y != null && st.moved) updateDropTarget(st, xy.x, xy.y);
-      clearDragVisuals();
-      if (!st.moved || !st.overId) return;
+        row.style.transform = '';
+        row.style.zIndex = '';
+        row.style.transition = '';
+        row.style.boxShadow = '';
+      } catch (eR) {}
+      clearDragVisuals(st);
+      if (cancelled || !moved || !overId) return;
       state._suppressItemClick = true;
-      setTimeout(function () { state._suppressItemClick = false; }, 120);
-      var meta = bucketForRow(st.row);
+      setTimeout(function () { state._suppressItemClick = false; }, 150);
+      var meta = bucketForRow(row);
       if (!meta) return;
-      if (reorderInBucketSafe(meta.bucket, st.id, st.overId, st.placeAfter)) {
+      if (reorderRelative(meta.bucket, id, overId, placeAfter)) {
         meta.save();
         render();
       }
     }
-    // capture + non-passive so preventDefault stops scroll on mobile
-    document.addEventListener('pointerdown', onPointerDown, { capture: true, passive: false });
-    document.addEventListener('pointermove', onPointerMove, { capture: true, passive: false });
-    document.addEventListener('pointerup', onPointerUp, { capture: true, passive: false });
-    document.addEventListener('pointercancel', onPointerUp, { capture: true, passive: false });
-    // iOS Safari sometimes needs touch listeners for preventDefault during drag
+
+    function isDragHandleEvent(e) {
+      var t = e.target;
+      if (!t || !t.closest) return null;
+      var handle = t.closest('[data-act="drag"]');
+      if (!handle) return null;
+      var row = handle.closest('.list-item');
+      if (!row) return null;
+      if (!handle.closest('#ev-list, #lists-active, #mobile-list-sheet, .list-col-body, .list-triad, #mls-body')) {
+        return null;
+      }
+      return { handle: handle, row: row };
+    }
+
+    // --- Pointer events (desktop + modern mobile) ---
+    document.addEventListener('pointerdown', function (e) {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      var hit = isDragHandleEvent(e);
+      if (!hit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var xy = clientXY(e);
+      beginDrag(hit.handle, hit.row, xy, e.pointerId);
+      try { hit.handle.setPointerCapture(e.pointerId); } catch (err) {}
+    }, { capture: true, passive: false });
+
+    document.addEventListener('pointermove', function (e) {
+      if (!_dragState) return;
+      if (_dragState.pointerId != null && e.pointerId != null && e.pointerId !== _dragState.pointerId) return;
+      moveDrag(clientXY(e), e);
+    }, { capture: true, passive: false });
+
+    function onPointerEnd(e) {
+      if (!_dragState) return;
+      if (_dragState.pointerId != null && e.pointerId != null && e.pointerId !== _dragState.pointerId) return;
+      try {
+        if (_dragState.handle) _dragState.handle.releasePointerCapture(e.pointerId);
+      } catch (errR) {}
+      endDrag(clientXY(e), false);
+    }
+    document.addEventListener('pointerup', onPointerEnd, { capture: true, passive: false });
+    document.addEventListener('pointercancel', function (e) {
+      if (!_dragState) return;
+      endDrag(null, true);
+    }, { capture: true, passive: false });
+
+    // --- Touch fallback (older iOS / when pointer events flake) ---
+    document.addEventListener('touchstart', function (e) {
+      if (_dragState) return; // pointer path already active
+      var hit = isDragHandleEvent(e);
+      if (!hit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      beginDrag(hit.handle, hit.row, clientXY(e), 'touch');
+    }, { capture: true, passive: false });
+
     document.addEventListener('touchmove', function (e) {
       if (!_dragState) return;
-      e.preventDefault();
+      moveDrag(clientXY(e), e);
+    }, { capture: true, passive: false });
+
+    document.addEventListener('touchend', function (e) {
+      // Always finish if still active (iOS may skip pointerup)
+      if (!_dragState) return;
+      endDrag(clientXY(e), false);
+    }, { capture: true, passive: false });
+
+    document.addEventListener('touchcancel', function () {
+      if (!_dragState) return;
+      endDrag(null, true);
     }, { capture: true, passive: false });
   }
 

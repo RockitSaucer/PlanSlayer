@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.0';
+  var APP_VERSION = '1.3.1';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -5543,6 +5543,8 @@
     if ($('date-pick-title')) $('date-pick-title').textContent = field === 'end' ? 'Select end date' : 'Select start date';
     renderDatePickGrid();
     if ($('date-pick-modal')) {
+      // Always above Edit event / Create event modals
+      $('date-pick-modal').style.zIndex = '31000';
       $('date-pick-modal').classList.add('is-open');
       $('date-pick-modal').setAttribute('aria-hidden', 'false');
     }

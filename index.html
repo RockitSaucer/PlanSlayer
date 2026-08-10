@@ -2544,6 +2544,10 @@
     #app-confirm-modal, #app-alert-modal, #app-prompt-modal {
       z-index: 30000 !important;
     }
+    /* Date picker must sit above Edit event / Create event when choosing TBD/start/end */
+    #date-pick-modal {
+      z-index: 31000 !important;
+    }
     .modal {
       width: min(480px, 100%); max-height: min(92vh, 720px); overflow: auto;
       background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
@@ -2653,7 +2657,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.1</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">

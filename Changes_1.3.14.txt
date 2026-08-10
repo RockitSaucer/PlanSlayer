@@ -1,0 +1,10 @@
+PlanSlayer V1.3.14 — Share lists & events + Hunt/Reg View list bridge
+
+- Edit list and Edit event both have **Add people**
+- First popup title: **Copy list** / **Copy event**
+- Options: **Copy** (invite code) or **Add members**
+- Add members lists people you’ve shared maps with (Hunt/Reg/Plan) + friends; refreshes from shared map members when signed in
+- Event packing lists published to `slayer_event_lists_v1` for Hunt/Reg **View list**
+- Dual-write Plan events into Hunt/Reg calendar storage (`reg_slayer_cal_events_v2`) with embedded list pack
+- Best-effort cloud mirror via `map_calendar_events.hunt_link.listPack` so Hunt/Reg can pull packs across origins
+- Shell cache → plan-slayer-shell-v47

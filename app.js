@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.13';
+  var APP_VERSION = '1.3.14';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -13,6 +13,13 @@
   /** Import Hunt/Reg calendar events (shared browser localStorage) once per session */
   var HUNT_CAL_EVENTS_KEY = 'reg_slayer_cal_events_v2';
   var HUNT_IMPORT_MAP_KEY = 'plan_slayer_hunt_import_map_v1';
+  /**
+   * Cross-app event packing lists — Hunt/Reg read this for “View list”.
+   * Shape: { [eventKey]: { listId, name, eventId, huntEventId, invite_code, columns: [{id,name,items:[{title,qty}]}], updated_at } }
+   */
+  var SLAYER_EVENT_LISTS_KEY = 'slayer_event_lists_v1';
+  /** People you’ve shared maps with (Hunt/Reg/Plan) — for Add members */
+  var SLAYER_MAP_PARTNERS_KEY = 'slayer_map_partners_v1';
   /** Kit pin: behavior audited against Hunt Slayer this version */
   var HUNT_KIT_SOURCE = '7.0.50-beta';
   var LOCAL_EVENTS_KEY = 'plan_slayer_events_v1';
@@ -1274,6 +1281,59 @@
     state.listTab = kind;
     list.updated_at = new Date().toISOString();
   }
+  /** Publish event packing lists so Hunt/Reg can “View list”. */
+  function publishEventListBridge(list) {
+    if (!list || !list.eventId) return;
+    try {
+      sanitizeNamedList(list);
+      var bag = loadJson(SLAYER_EVENT_LISTS_KEY, null) || {};
+      var ev = findEventById(list.eventId);
+      var huntId = (ev && (ev.hunt_event_id || ev.huntEventId)) || null;
+      var pack = {
+        listId: String(list.id),
+        name: list.name || 'List',
+        eventId: String(list.eventId),
+        huntEventId: huntId ? String(huntId) : null,
+        invite_code: list.invite_code || null,
+        eventName: (ev && ev.name) || list.name || 'Event',
+        columns: (list.columns || []).map(function (c) {
+          return {
+            id: c.id,
+            name: c.name || listKindLabel(c.id),
+            items: (c.items || []).filter(function (it) { return it && it.title; }).map(function (it) {
+              return {
+                id: it.id,
+                title: it.title,
+                qty: it.qty || 1,
+                claims: it.claims || {},
+                highlight: !!it.highlight
+              };
+            })
+          };
+        }),
+        members: (list.members || []).map(function (m) {
+          return {
+            user_id: m.user_id,
+            display_name: m.display_name || m.username || 'Member',
+            role: m.role || 'member'
+          };
+        }),
+        updated_at: new Date().toISOString()
+      };
+      bag[String(list.eventId)] = pack;
+      if (huntId) bag['hunt:' + String(huntId)] = pack;
+      if (list.id) bag['list:' + String(list.id)] = pack;
+      saveJson(SLAYER_EVENT_LISTS_KEY, bag);
+      // Stamp plan event for reverse lookup
+      if (ev) {
+        ev.planListId = list.id;
+        ev.plan_list_id = list.id;
+      }
+    } catch (ePub) {
+      console.warn('publishEventListBridge', ePub);
+    }
+  }
+
   function saveNamedList(list) {
     if (!list) return false;
     try {
@@ -1332,11 +1392,236 @@
         // (only when this save isn't an explicit user re-link of a non-tombstoned list)
         return true;
       });
-      return saveJson(LOCAL_FREE_LISTS_KEY, store);
+      var ok = saveJson(LOCAL_FREE_LISTS_KEY, store);
+      if (ok && snapshot.eventId) {
+        try { publishEventListBridge(snapshot); } catch (eB) {}
+      }
+      return ok;
     } catch (eS) {
       console.warn('saveNamedList', eS);
       return false;
     }
+  }
+
+  /** Map partners + friends for Add members */
+  function loadMapPartnersRaw() {
+    var list = loadJson(SLAYER_MAP_PARTNERS_KEY, []) || [];
+    return Array.isArray(list) ? list : [];
+  }
+  function rememberMapPartner(p) {
+    if (!p) return;
+    var list = loadMapPartnersRaw();
+    var id = String(p.user_id || p.id || '');
+    var name = p.display_name || p.username || p.name || '';
+    if (!id && !name) return;
+    var idx = list.findIndex(function (x) {
+      return (id && String(x.user_id) === id) ||
+        (name && String(x.display_name || '').toLowerCase() === String(name).toLowerCase());
+    });
+    var row = {
+      user_id: id || (list[idx] && list[idx].user_id) || null,
+      display_name: name || (list[idx] && list[idx].display_name) || 'Member',
+      username: p.username || (list[idx] && list[idx].username) || '',
+      arrow_color: p.arrow_color || p.color || (list[idx] && list[idx].arrow_color) || COLORS[0],
+      from_map: p.from_map || (list[idx] && list[idx].from_map) || '',
+      updated_at: new Date().toISOString()
+    };
+    if (idx >= 0) list[idx] = Object.assign({}, list[idx], row);
+    else list.push(row);
+    saveJson(SLAYER_MAP_PARTNERS_KEY, list);
+    rememberFriend(row);
+  }
+  function allPeopleForAddMembers(q, limit) {
+    q = String(q || '').toLowerCase().trim();
+    var byId = {};
+    var out = [];
+    function add(p) {
+      if (!p) return;
+      var id = String(p.user_id || p.id || p.display_name || p.username || '');
+      if (!id || byId[id]) return;
+      byId[id] = true;
+      out.push({
+        user_id: p.user_id || p.id || null,
+        display_name: p.display_name || p.username || p.name || 'Member',
+        username: p.username || '',
+        arrow_color: p.arrow_color || p.color || COLORS[out.length % COLORS.length]
+      });
+    }
+    loadMapPartnersRaw().forEach(add);
+    loadFriendsRaw().forEach(add);
+    (state.members || []).forEach(add);
+    if (q) {
+      out = out.filter(function (p) {
+        return String(p.display_name || '').toLowerCase().indexOf(q) >= 0 ||
+          String(p.username || '').toLowerCase().indexOf(q) >= 0;
+      });
+    }
+    return out.slice(0, limit || 40);
+  }
+  /** Pull partners from every shared map (async, best-effort). */
+  function refreshMapPartnersFromCloud() {
+    var client = sb();
+    if (!client) return Promise.resolve([]);
+    return client.rpc('list_my_shared_maps').then(function (res) {
+      var maps = (res && res.data) || [];
+      if (!Array.isArray(maps) || !maps.length) return [];
+      var chain = Promise.resolve();
+      maps.forEach(function (m) {
+        if (!m || !m.id) return;
+        chain = chain.then(function () {
+          return client.rpc('list_shared_map_members', { p_map_id: m.id }).then(function (r2) {
+            var mems = (r2 && r2.data) || [];
+            (Array.isArray(mems) ? mems : []).forEach(function (mem) {
+              if (!mem) return;
+              var uid = mem.user_id || mem.id;
+              if (uid && String(uid) === String(myId())) return;
+              rememberMapPartner({
+                user_id: uid,
+                display_name: mem.display_name || mem.username || mem.name || 'Member',
+                username: mem.username || '',
+                arrow_color: mem.arrow_color || mem.color,
+                from_map: m.name || ''
+              });
+            });
+          }).catch(function () {});
+        });
+      });
+      return chain.then(function () { return loadMapPartnersRaw(); });
+    }).catch(function () { return loadMapPartnersRaw(); });
+  }
+
+  var _sharePeopleCtx = { kind: 'list', id: null }; // kind: list | event
+
+  function openSharePeopleChooser(kind, id) {
+    _sharePeopleCtx = { kind: kind || 'list', id: id };
+    var title = kind === 'event' ? 'Copy event' : 'Copy list';
+    if ($('share-people-title')) $('share-people-title').textContent = title;
+    if ($('share-people-sub')) {
+      $('share-people-sub').textContent = kind === 'event'
+        ? 'Share this event with others, or copy an invite code.'
+        : 'Share this list with others, or copy an invite code.';
+    }
+    if ($('share-people-copy-label')) {
+      $('share-people-copy-label').textContent = 'Copy';
+    }
+    if ($('share-people-chooser')) {
+      $('share-people-chooser').classList.add('is-open');
+      $('share-people-chooser').setAttribute('aria-hidden', 'false');
+    }
+  }
+  function closeSharePeopleChooser() {
+    if ($('share-people-chooser')) {
+      $('share-people-chooser').classList.remove('is-open');
+      $('share-people-chooser').setAttribute('aria-hidden', 'true');
+    }
+  }
+  function openSharePeopleMembers() {
+    closeSharePeopleChooser();
+    refreshMapPartnersFromCloud().then(function () {
+      fillSharePeoplePick('');
+    });
+    if ($('share-people-search')) $('share-people-search').value = '';
+    if ($('share-people-members')) {
+      $('share-people-members').classList.add('is-open');
+      $('share-people-members').setAttribute('aria-hidden', 'false');
+    }
+  }
+  function closeSharePeopleMembers() {
+    if ($('share-people-members')) {
+      $('share-people-members').classList.remove('is-open');
+      $('share-people-members').setAttribute('aria-hidden', 'true');
+    }
+  }
+  function fillSharePeoplePick(q) {
+    var box = $('share-people-pick');
+    if (!box) return;
+    var people = allPeopleForAddMembers(q, 30);
+    box.innerHTML = people.map(function (p) {
+      var id = p.user_id || p.display_name;
+      return '<button type="button" class="btn" style="width:100%;justify-content:flex-start;margin:0 0 6px;text-align:left" data-share-person="' +
+        esc(String(id)) + '" data-share-person-name="' + esc(p.display_name || '') + '">' +
+        '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' +
+        esc(p.arrow_color || COLORS[0]) + ';margin-right:8px"></span>' +
+        esc(p.display_name || 'Member') +
+        (p.username ? (' <span class="muted">@' + esc(p.username) + '</span>') : '') +
+        '</button>';
+    }).join('') || '<p class="muted">No map partners yet. Share maps on Hunt/Reg, or type a name below.</p>';
+  }
+  function copyShareCodeForCtx() {
+    var code = '';
+    var label = 'Code';
+    if (_sharePeopleCtx.kind === 'event') {
+      var ev = findEventById(_sharePeopleCtx.id) || activeEvent();
+      if (ev) {
+        if (!ev.invite_code) {
+          ev.invite_code = String(Math.floor(100000 + Math.random() * 900000));
+          try { saveActiveEvent(); } catch (eS) { persistLocal(); }
+        }
+        code = ev.invite_code;
+        label = 'Event code';
+      }
+    } else {
+      var list = findNamedListById(_sharePeopleCtx.id || state.activeNamedListId);
+      if (list) {
+        if (!list.invite_code) {
+          list.invite_code = makeListInviteCode();
+          saveNamedList(list);
+        }
+        code = list.invite_code;
+        label = 'List code';
+      }
+    }
+    if (!code) {
+      appToast('Could not create a code');
+      return;
+    }
+    var text = code;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        appToast(label + ' copied: ' + code);
+      }).catch(function () { appToast(code); });
+    } else {
+      appToast(code);
+    }
+  }
+  function addPersonToShareCtx(personId, personName) {
+    if (_sharePeopleCtx.kind === 'event') {
+      var ev = findEventById(_sharePeopleCtx.id) || activeEvent();
+      if (!ev) return;
+      if (!ev.state) ev.state = {};
+      if (!Array.isArray(ev.state.localMembers)) ev.state.localMembers = [];
+      var already = (ev.state.localMembers || []).some(function (m) {
+        return String(m.user_id) === String(personId) ||
+          String(m.display_name || '').toLowerCase() === String(personName || '').toLowerCase();
+      });
+      if (already) { appToast('Already on this event'); return; }
+      ev.state.localMembers.push({
+        user_id: personId,
+        display_name: personName || 'Member',
+        role: 'member',
+        arrow_color: COLORS[(ev.state.localMembers.length) % COLORS.length]
+      });
+      // Also into active members list
+      if (!state.members) state.members = [];
+      if (!state.members.some(function (m) { return String(m.user_id) === String(personId); })) {
+        state.members.push({
+          user_id: personId,
+          display_name: personName || 'Member',
+          role: 'member',
+          arrow_color: COLORS[state.members.length % COLORS.length]
+        });
+      }
+      rememberMapPartner({ user_id: personId, display_name: personName });
+      try { saveActiveEvent(); } catch (e) { persistLocal(); }
+      appToast('Added ' + (personName || 'member') + ' to event');
+      render();
+      return;
+    }
+    var list = findNamedListById(_sharePeopleCtx.id || state.activeNamedListId);
+    if (!list) return;
+    addListMemberFromPick(list, personId || personName, !personId);
+    appToast('Added ' + (personName || 'member') + ' to list');
+    render();
   }
   function saveFreeListsStore(s) {
     if (!s) return false;
@@ -1913,6 +2198,18 @@
     ev.updated_at = new Date().toISOString();
     persistLocal();
     cloudSaveEvent(ev);
+    // Keep Hunt/Reg calendar + View list packs in sync when the event changes
+    try {
+      var pack = null;
+      try {
+        var linked = listsForEvent(ev.id);
+        pack = linked && linked[0] ? linked[0] : null;
+      } catch (eL) {}
+      if (!pack) {
+        try { pack = ensureAssociatedListForEvent(ev); } catch (eA) {}
+      }
+      dualWriteHuntCalendarEvent(ev, pack);
+    } catch (eDw) {}
   }
 
   async function loadEvents() {
@@ -2039,6 +2336,7 @@
     store.named = store.named || [];
     store.named.push(nl);
     saveFreeListsStore(store);
+    try { publishEventListBridge(nl); } catch (eP) {}
     return nl;
   }
 
@@ -2091,9 +2389,130 @@
     state.events.unshift(ev);
     persistLocal();
     await cloudSaveEvent(ev);
-    ensureAssociatedListForEvent(ev);
+    var pack = ensureAssociatedListForEvent(ev);
+    try { if (pack) publishEventListBridge(pack); } catch (eB) {}
+    try { dualWriteHuntCalendarEvent(ev, pack); } catch (eH) {}
     openEvent(ev.id);
     return ev;
+  }
+
+  /** Mirror Plan events into Hunt/Reg calendar storage so View list works there. */
+  function dualWriteHuntCalendarEvent(ev, list) {
+    if (!ev || !ev.id) return;
+    var start = null;
+    var end = null;
+    try {
+      if (ev.start_at) {
+        var d = new Date(ev.start_at);
+        if (!isNaN(d.getTime())) start = localYmd(d);
+      }
+      if (ev.end_at) {
+        var d2 = new Date(ev.end_at);
+        if (!isNaN(d2.getTime())) end = localYmd(d2);
+      }
+    } catch (eD) {}
+    if (!start) start = localYmd(new Date());
+    if (!end) end = start;
+    var raw = [];
+    try { raw = JSON.parse(localStorage.getItem(HUNT_CAL_EVENTS_KEY) || '[]'); } catch (e) { raw = []; }
+    if (!Array.isArray(raw)) raw = [];
+    var huntId = ev.hunt_event_id || ('plan_' + ev.id);
+    ev.hunt_event_id = huntId;
+    var packSnapshot = null;
+    if (list) {
+      try {
+        list.eventId = String(ev.id);
+        publishEventListBridge(Object.assign({}, list, { eventId: ev.id }));
+        var bag = loadJson(SLAYER_EVENT_LISTS_KEY, null) || {};
+        if (bag[String(ev.id)]) {
+          bag['hunt:' + huntId] = bag[String(ev.id)];
+          bag[String(ev.id)].huntEventId = huntId;
+          saveJson(SLAYER_EVENT_LISTS_KEY, bag);
+          packSnapshot = bag[String(ev.id)];
+        }
+      } catch (eP) {}
+    }
+    var row = {
+      id: huntId,
+      text: ev.name || 'Event',
+      color: (ev.state && ev.state.color) || '#e59a18',
+      startDate: start,
+      endDate: end,
+      mapScope: ev.mapScope || 'personal',
+      sharedMapId: ev.sharedMapId || null,
+      privateMapId: ev.privateMapId || null,
+      lat: ev.lat != null ? ev.lat : null,
+      lng: ev.lng != null ? ev.lng : null,
+      locationLabel: ev.location_label || null,
+      planEventId: String(ev.id),
+      planListId: list && list.id ? String(list.id) : (ev.planListId || null),
+      inviteCode: ev.invite_code || null,
+      members: (ev.state && ev.state.localMembers) || [],
+      listPack: packSnapshot,
+      updatedAt: new Date().toISOString(),
+      _fromPlanSlayer: true
+    };
+    var idx = raw.findIndex(function (x) { return x && String(x.id) === String(huntId); });
+    if (idx >= 0) raw[idx] = Object.assign({}, raw[idx], row);
+    else raw.push(row);
+    try { localStorage.setItem(HUNT_CAL_EVENTS_KEY, JSON.stringify(raw)); } catch (eW) {}
+    // Best-effort cloud mirror so Hunt/Reg (other origins) can pull list packs
+    try { dualWriteHuntCalendarCloud(row, packSnapshot); } catch (eC) {}
+  }
+
+  function dualWriteHuntCalendarCloud(row, pack) {
+    var client = sb();
+    var user = me();
+    if (!client || !user || !row) return;
+    var isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(row.id));
+    var payload = {
+      creator_user_id: user.id,
+      name: row.text || 'Event',
+      color: row.color || '#e59a18',
+      start_date: row.startDate,
+      end_date: row.endDate || row.startDate,
+      map_scope: row.mapScope || 'personal',
+      shared_map_id: row.sharedMapId || null,
+      lat: row.lat,
+      lng: row.lng,
+      location_label: row.locationLabel || null,
+      hunt_link: {
+        planEventId: row.planEventId || null,
+        planListId: row.planListId || null,
+        inviteCode: row.inviteCode || null,
+        members: row.members || [],
+        listPack: pack || row.listPack || null,
+        fromPlanSlayer: true,
+        privateMapId: row.privateMapId || null
+      },
+      updated_at: new Date().toISOString()
+    };
+    if (isUuid) {
+      payload.id = row.id;
+      client.from('map_calendar_events').upsert(payload).then(function () {}).catch(function () {});
+    } else {
+      // Local plan_* ids aren't UUIDs — insert once, remember returned id
+      var insertRow = Object.assign({}, payload);
+      client.from('map_calendar_events').insert(insertRow).select('id').maybeSingle()
+        .then(function (res) {
+          if (res && res.data && res.data.id) {
+            var ev = findEventById(row.planEventId);
+            if (ev) {
+              ev.hunt_event_id = res.data.id;
+              try { persistLocal(); } catch (eP) {}
+            }
+            // rewrite local dual-write id for next time
+            try {
+              var raw = JSON.parse(localStorage.getItem(HUNT_CAL_EVENTS_KEY) || '[]') || [];
+              var i = raw.findIndex(function (x) { return x && String(x.id) === String(row.id); });
+              if (i >= 0) {
+                raw[i].id = res.data.id;
+                localStorage.setItem(HUNT_CAL_EVENTS_KEY, JSON.stringify(raw));
+              }
+            } catch (eR) {}
+          }
+        }).catch(function () {});
+    }
   }
 
   /** Pull Hunt/Reg calendar events from shared localStorage into PlanSlayer */
@@ -7875,6 +8294,39 @@
       deleteActiveEvent();
     });
     click('edit-list-cancel', closeEditListModal);
+    click('edit-list-add-people', function () {
+      var list = findNamedListById(state.activeNamedListId);
+      if (!list) return;
+      openSharePeopleChooser('list', list.id);
+    });
+    click('edit-ev-add-people', function () {
+      var ev = activeEvent();
+      if (!ev) return;
+      openSharePeopleChooser('event', ev.id);
+    });
+    click('share-people-chooser-cancel', closeSharePeopleChooser);
+    on('share-people-chooser', 'click', function (e) {
+      if (e.target === $('share-people-chooser')) closeSharePeopleChooser();
+    });
+    click('share-people-copy', function () {
+      copyShareCodeForCtx();
+      closeSharePeopleChooser();
+    });
+    click('share-people-add', function () {
+      openSharePeopleMembers();
+    });
+    click('share-people-members-cancel', closeSharePeopleMembers);
+    on('share-people-members', 'click', function (e) {
+      if (e.target === $('share-people-members')) closeSharePeopleMembers();
+    });
+    on('share-people-search', 'input', function () {
+      fillSharePeoplePick(this.value);
+    });
+    on('share-people-pick', 'click', function (e) {
+      var b = e.target.closest && e.target.closest('[data-share-person]');
+      if (!b) return;
+      addPersonToShareCtx(b.getAttribute('data-share-person'), b.getAttribute('data-share-person-name'));
+    });
     click('edit-list-save', function () {
       var list = findNamedListById(state.activeNamedListId);
       if (!list) { closeEditListModal(); return; }

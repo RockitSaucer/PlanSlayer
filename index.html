@@ -2992,7 +2992,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.13</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.14</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -3661,10 +3661,38 @@
           <option value="">None — personal list only</option>
         </select>
       </div>
+      <button type="button" class="btn btn-accent" id="edit-list-add-people" style="width:100%;margin:0 0 10px">Add people</button>
       <div class="modal-actions">
         <button type="button" class="btn" style="color:#fca5a5;border-color:rgba(252,165,165,0.4)" id="edit-list-delete">Delete list</button>
         <button type="button" class="btn" id="edit-list-cancel">Cancel</button>
         <button type="button" class="btn btn-primary" id="edit-list-save">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Share: Copy list/event → Copy code or Add members -->
+  <div class="modal-overlay" id="share-people-chooser" aria-hidden="true">
+    <div class="modal" role="dialog" style="max-width:360px">
+      <h3 id="share-people-title">Copy list</h3>
+      <p class="muted" id="share-people-sub" style="font-size:12px;margin:0 0 12px">Share with others</p>
+      <div class="modal-actions" style="flex-direction:column;align-items:stretch;gap:8px">
+        <button type="button" class="btn btn-primary" id="share-people-copy" style="width:100%"><span id="share-people-copy-label">Copy</span></button>
+        <button type="button" class="btn btn-accent" id="share-people-add" style="width:100%">Add members</button>
+        <button type="button" class="btn" id="share-people-chooser-cancel" style="width:100%">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <div class="modal-overlay" id="share-people-members" aria-hidden="true">
+    <div class="modal" role="dialog" style="max-width:380px">
+      <h3>Add members</h3>
+      <p class="muted" style="font-size:12px;margin:0 0 8px">People you’ve shared maps with on Hunt, Reg, or Plan — plus friends.</p>
+      <div class="field">
+        <label for="share-people-search">Search</label>
+        <input id="share-people-search" type="text" placeholder="Name or username" autocomplete="off" />
+      </div>
+      <div id="share-people-pick" style="max-height:240px;overflow:auto;margin:0 0 10px"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="share-people-members-cancel">Done</button>
       </div>
     </div>
   </div>
@@ -3711,6 +3739,7 @@
         <label>End</label>
         <button type="button" class="btn" id="edit-ev-end-btn" style="width:100%">TBD</button>
       </div>
+      <button type="button" class="btn btn-accent" id="edit-ev-add-people" style="width:100%;margin:0 0 10px">Add people</button>
       <div class="modal-actions" style="flex-wrap:wrap;gap:8px">
         <button type="button" class="btn" style="color:#fca5a5;border-color:rgba(252,165,165,0.4)" id="edit-ev-delete">Delete event</button>
         <button type="button" class="btn" id="edit-ev-cancel">Cancel</button>

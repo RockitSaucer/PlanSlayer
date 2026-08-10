@@ -1161,18 +1161,19 @@
       pointer-events: auto;
     }
     .map-fs-btn:hover { border-color: var(--accent); }
-    /* Mini (square): Max left of hide, both at top-right of the square */
-    .map-fs-btn#map-maximize-btn { right: 52px !important; top: 8px !important; }
-    .map-fs-btn#map-min-hide { right: 8px !important; top: 8px !important; }
+    /* Mini (square): top-right — Max outermost (right), hide to its left (swapped) */
+    .map-fs-btn#map-maximize-btn { right: 8px !important; top: 8px !important; }
+    .map-fs-btn#map-min-hide { right: 52px !important; top: 8px !important; }
     .map-fs-btn#map-minimize-btn { right: 8px !important; top: 8px !important; }
     html.map-mode-mini .map-dock .map-fs-btn {
       position: absolute !important;
       top: 8px !important;
       bottom: auto !important;
+      left: auto !important;
       z-index: 6000 !important;
     }
-    html.map-mode-mini .map-fs-btn#map-maximize-btn { right: 52px !important; display: block !important; }
-    html.map-mode-mini .map-fs-btn#map-min-hide { right: 8px !important; display: block !important; }
+    html.map-mode-mini .map-fs-btn#map-maximize-btn { right: 8px !important; display: block !important; }
+    html.map-mode-mini .map-fs-btn#map-min-hide { right: 52px !important; display: block !important; }
     html.map-mode-mini .map-fs-btn#map-minimize-btn { display: none !important; }
     html.map-mode-max .map-fs-btn#map-maximize-btn { display: none !important; }
     html.map-mode-max .map-fs-btn#map-minimize-btn {
@@ -1462,6 +1463,22 @@
       font-weight: 800; font-size: 13px; text-align: left;
       cursor: text; font-family: inherit; padding: 4px 6px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .list-col-title-classic,
+    .list-col-classic .list-col-title {
+      font-size: 16px !important;
+      font-weight: 900 !important;
+      letter-spacing: 0.03em;
+      color: var(--accent) !important;
+      text-shadow: 0 0 10px rgba(229, 154, 24, 0.25);
+    }
+    .list-col-head-classic {
+      min-height: 42px;
+      border-bottom: 1px solid rgba(229, 154, 24, 0.35) !important;
+    }
+    .list-col-personal .list-col-title {
+      font-size: 13px;
+      color: #9bb8d8 !important;
     }
     .list-col-head-actions { display: flex; gap: 2px; flex-shrink: 0; }
     .list-col-head-actions .btn-icon {
@@ -2219,13 +2236,73 @@
       font-size: 13px !important;
     }
     .edit-members-panel {
-      margin: 0 0 12px;
-      padding: 10px;
+      margin: 0 0 10px;
+      padding: 8px 10px 10px;
       border: 1px solid var(--border);
       border-radius: 10px;
       background: rgba(0,0,0,0.18);
     }
-    .edit-members-panel .section-label { margin-bottom: 6px; }
+    .edit-members-panel .section-label,
+    .inline-members-block > .section-label {
+      margin: 0 0 4px !important;
+      font-size: 10px !important;
+      letter-spacing: 0.06em;
+      line-height: 1.1;
+      align-self: flex-start;
+    }
+    .inline-members-block {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .inline-members-chips .member-chip,
+    .inline-members-chips .member-chip-sm,
+    .edit-member-row .member-chip {
+      font-size: 12px !important;
+      padding: 4px 8px !important;
+      max-width: none;
+    }
+    /* Fit-width fields in modals (only as wide as content needs, up to panel) */
+    .modal .field.field-fit input,
+    .modal .field.field-fit select,
+    .modal .field.field-fit .btn {
+      width: auto;
+      max-width: 100%;
+      min-width: 8ch;
+      display: block;
+    }
+    .modal .field.field-fit input[type="text"] {
+      width: max(12ch, min(100%, 28ch));
+    }
+    #edit-event-modal .modal-tight,
+    #edit-list-modal .modal-tight {
+      max-height: none !important;
+      overflow: visible !important;
+      padding: 12px 14px 14px !important;
+      width: min(400px, 96vw);
+    }
+    #edit-event-modal .modal-tight h3,
+    #edit-list-modal .modal-tight h3 { margin: 0 0 8px; font-size: 15px; }
+    #edit-event-modal .modal-tight .field,
+    #edit-list-modal .modal-tight .field { margin-bottom: 8px; }
+    #edit-event-modal .modal-tight .field label,
+    #edit-list-modal .modal-tight .field label { margin-bottom: 2px; }
+    #edit-event-modal .modal-tight .field input,
+    #edit-event-modal .modal-tight .field select,
+    #edit-list-modal .modal-tight .field input,
+    #edit-list-modal .modal-tight .field select {
+      padding: 6px 8px !important;
+      font-size: 13px !important;
+    }
+    #edit-event-modal .modal-tight .edit-members-panel,
+    #edit-list-modal .modal-tight .edit-members-panel {
+      max-height: 180px;
+      overflow: auto;
+    }
+    #edit-event-modal .modal-tight .merge-members-box,
+    #edit-list-modal .modal-tight .merge-members-box { margin-top: 6px; padding-top: 6px; }
+    #edit-event-modal .modal-tight .modal-actions,
+    #edit-list-modal .modal-tight .modal-actions { margin-top: 8px; }
     .edit-member-row {
       display: flex; align-items: center; gap: 8px;
       margin: 0 0 6px; flex-wrap: wrap;
@@ -2783,9 +2860,49 @@
     }
     .li-detail .field-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: flex-end; }
     .li-detail label { display: block; font-size: 10px; font-weight: 700; color: var(--muted); margin-bottom: 3px; }
-    .li-detail .field { flex: 1 1 120px; min-width: 100px; }
-    .li-detail input, .li-detail select, .li-detail textarea { width: 100%; }
-    .li-detail textarea { min-height: 56px; resize: vertical; }
+    .li-detail .field { flex: 1 1 auto; min-width: 0; max-width: 100%; }
+    .li-detail .field.field-grow { flex: 1 1 140px; min-width: 120px; }
+    .li-detail .field.field-sm { flex: 0 0 auto; width: 72px; min-width: 64px; }
+    .li-detail .field.field-md { flex: 0 0 auto; width: 110px; min-width: 96px; }
+    .li-detail .field.field-due { flex: 0 0 auto; width: 118px; min-width: 100px; }
+    .li-detail .field.field-days { flex: 0 0 auto; width: 64px; min-width: 56px; }
+    .li-detail .field-row-due { gap: 6px !important; }
+    .li-detail input, .li-detail select, .li-detail textarea { width: 100%; box-sizing: border-box; }
+    .li-detail select[data-f="due_mode"] {
+      font-size: 11px !important;
+      padding: 4px 6px !important;
+      min-height: 0 !important;
+      height: 28px;
+    }
+    .li-detail textarea { min-height: 48px; resize: vertical; }
+    .li-detail-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: flex-end;
+      justify-content: space-between;
+      margin-top: 14px;
+      padding-top: 10px;
+      border-top: 1px solid #1f2618;
+    }
+    .li-detail-actions-left {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .li-detail-actions .btn-save-detail {
+      flex: 0 0 auto;
+      margin-left: auto;
+      min-width: 112px !important;
+      min-height: 48px !important;
+      padding: 12px 22px !important;
+      font-size: 16px !important;
+      font-weight: 900 !important;
+      letter-spacing: 0.03em;
+    }
     /* Compact delete in item options (swapped to leading edge vs Done) */
     .li-detail .btn-item-del {
       flex: 0 0 auto !important;
@@ -3150,7 +3267,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.17</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.18</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -3802,18 +3919,22 @@
 
   <!-- Edit list (name / event link) -->
   <div class="modal-overlay" id="edit-list-modal" aria-hidden="true">
-    <div class="modal" role="dialog" aria-labelledby="edit-list-title">
+    <div class="modal modal-tight" role="dialog" aria-labelledby="edit-list-title">
       <h3 id="edit-list-title">Edit list</h3>
-      <div class="field">
+      <div class="field field-fit">
         <label for="edit-list-name">List name</label>
         <input id="edit-list-name" type="text" style="text-transform:capitalize" />
       </div>
-      <div class="field">
+      <div class="field field-fit">
         <label for="edit-list-link-event">Link to event (optional)</label>
         <select id="edit-list-link-event">
           <option value="">None — personal list only</option>
         </select>
       </div>
+      <label class="check-row" style="margin:0 0 10px">
+        <input type="checkbox" id="edit-list-show-expense" checked />
+        <span class="check-row-text">Show $ (shared expense) on list items</span>
+      </label>
       <div class="edit-members-panel" id="edit-list-members-panel">
         <div class="section-label">Members</div>
         <div id="edit-list-members-list"></div>
@@ -3888,24 +4009,30 @@
 
   <!-- Edit event -->
   <div class="modal-overlay" id="edit-event-modal" aria-hidden="true">
-    <div class="modal" role="dialog">
+    <div class="modal modal-tight" role="dialog">
       <h3>Edit event</h3>
-      <div class="field">
+      <div class="field field-fit">
         <label for="edit-ev-name">Name</label>
         <input id="edit-ev-name" type="text" />
       </div>
-      <div class="field">
+      <div class="field field-fit">
         <label for="edit-ev-type">Type</label>
         <input id="edit-ev-type" type="text" />
       </div>
-      <div class="field">
-        <label>Start</label>
-        <button type="button" class="btn" id="edit-ev-start-btn" style="width:100%">TBD</button>
+      <div class="field-row" style="gap:8px;margin:0 0 8px">
+        <div class="field field-fit" style="margin:0;flex:1 1 auto">
+          <label>Start</label>
+          <button type="button" class="btn" id="edit-ev-start-btn" style="width:auto;min-width:0">TBD</button>
+        </div>
+        <div class="field field-fit" style="margin:0;flex:1 1 auto">
+          <label>End</label>
+          <button type="button" class="btn" id="edit-ev-end-btn" style="width:auto;min-width:0">TBD</button>
+        </div>
       </div>
-      <div class="field">
-        <label>End</label>
-        <button type="button" class="btn" id="edit-ev-end-btn" style="width:100%">TBD</button>
-      </div>
+      <label class="check-row" style="margin:0 0 8px">
+        <input type="checkbox" id="edit-ev-show-expense" checked />
+        <span class="check-row-text">Show $ (shared expense) on list items</span>
+      </label>
       <div class="edit-members-panel" id="edit-ev-members-panel">
         <div class="section-label">Members</div>
         <div id="edit-ev-members-list"></div>

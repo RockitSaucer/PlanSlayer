@@ -1,0 +1,13 @@
+PlanSlayer V1.3.18 — Checklist, Save/Share, $ toggle, map buttons, typeahead
+
+- My checklist: private column for your Got it! claims on shared/event lists (not published to others)
+- Item options: Done → large Save bottom-right; Share auto-copies full item for paste into another list (keeps settings)
+- Due dropdown compacted
+- To do / To buy / To bring headers larger + accent orange
+- Edit list/event: checkbox to show/hide $ on items
+- Map mini mode: Max/Hide top-right, positions swapped (Max outermost)
+- Edit event/list tighter, fit-width fields, less scroll
+- Members label smaller at top of box; names slightly larger
+- Member typeahead: friends + map partners, no focus steal while typing
+
+Shell: plan-slayer-shell-v51

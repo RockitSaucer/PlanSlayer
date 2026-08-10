@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.17';
+  var APP_VERSION = '1.3.18';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -1201,21 +1201,20 @@
           byId[k].items = fromBucket;
         }
       });
-      // Event packing lists get a live “Personal” column (my claimed bring items)
-      if (n.eventId) {
+      // Shared / event lists: private “My checklist” (my claims only — not for others)
+      var wantPersonal = !!n.eventId || (Array.isArray(n.members) && n.members.length > 1);
+      if (wantPersonal) {
         if (!byId.personal) {
-          byId.personal = defaultColumn('personal', 'Personal');
-          // Distinct tab tint so it reads as “mine”
+          byId.personal = defaultColumn('personal', 'My checklist');
           byId.personal.colors = { font: '#f0f4ee', tab: '#2a3a4a', bg: '#0a1014' };
         } else {
-          byId.personal.name = byId.personal.name || 'Personal';
+          byId.personal.name = 'My checklist';
         }
       } else if (byId.personal) {
-        // Personal (non-event) lists do not use the Personal box
         delete byId.personal;
       }
 
-      // Preserve custom columns + classic order first; Personal always last on event lists
+      // Preserve custom columns + classic order first; My checklist always last when present
       var order = [];
       ['todo', 'buy', 'bring'].forEach(function (k) { order.push(k); });
       Object.keys(byId).forEach(function (k) {
@@ -1229,7 +1228,7 @@
           if (byId[k] && order.indexOf(k) < 0) order.push(k);
         });
       }
-      if (n.eventId && byId.personal) order.push('personal');
+      if (wantPersonal && byId.personal) order.push('personal');
 
       n.columns = order.map(function (k) { return byId[k]; }).filter(Boolean);
       n.buckets = {};
@@ -1341,8 +1340,18 @@
     if (k === 'buy') return 'To buy';
     if (k === 'bring') return 'To bring';
     if (k === 'todo') return 'To do';
-    if (k === 'personal') return 'Personal';
+    if (k === 'personal') return 'My checklist';
     return 'New list';
+  }
+
+  /** Whether $ / shared-expense UI is enabled for this list or event */
+  function showExpenseEnabled(list, ev) {
+    if (list && list.showExpense === false) return false;
+    if (list && list.showExpense === true) return true;
+    if (ev && ev.state && ev.state.showExpense === false) return false;
+    if (ev && ev.state && ev.state.showExpense === true) return true;
+    // Default on for backward compatibility
+    return true;
   }
 
   /** True when left chrome is fully minimized — only then show Back on the right */
@@ -1480,7 +1489,10 @@
         huntEventId: huntId ? String(huntId) : null,
         invite_code: list.invite_code || null,
         eventName: (ev && ev.name) || list.name || 'Event',
-        columns: (list.columns || []).map(function (c) {
+        columns: (list.columns || []).filter(function (c) {
+          // Never publish private My checklist to Hunt/Reg or other devices as shared pack data
+          return c && String(c.id) !== 'personal';
+        }).map(function (c) {
           return {
             id: c.id,
             name: c.name || listKindLabel(c.id),
@@ -3301,6 +3313,9 @@
     if ($('edit-list-link-event')) {
       $('edit-list-link-event').innerHTML = buildEventLinkOptionsHtml(list.eventId || null);
     }
+    if ($('edit-list-show-expense')) {
+      $('edit-list-show-expense').checked = list.showExpense !== false;
+    }
     try { fillEditListMembersPanel(list); } catch (eM) {}
     if ($('edit-list-modal')) {
       $('edit-list-modal').classList.add('is-open');
@@ -3330,6 +3345,9 @@
         ? new Date(ev.end_at).toLocaleString() : 'TBD';
     }
     state._editRmConfirm = null;
+    if ($('edit-ev-show-expense')) {
+      $('edit-ev-show-expense').checked = !(ev.state && ev.state.showExpense === false);
+    }
     try { fillEditEventMembersPanel(); } catch (eM) {}
     if ($('edit-event-modal')) {
       $('edit-event-modal').classList.add('is-open');
@@ -3960,7 +3978,9 @@
               '<div class="li-actions">' +
                 '<button type="button" class="btn btn-icon" data-act="minimize" title="Minimize">−</button>' +
                 '<button type="button" class="btn btn-got" data-act="got">Got it!</button>' +
-                '<button type="button" class="btn btn-expense" data-act="expense" title="Shared expense">$</button>' +
+                (showExpenseEnabled(findNamedListById(state.activeNamedListId), activeEvent())
+                  ? '<button type="button" class="btn btn-expense" data-act="expense" title="Shared expense">$</button>'
+                  : '') +
                 '<button type="button" class="btn btn-icon drag-handle" data-act="drag" title="Drag to reorder">⋮⋮</button>' +
               '</div>' +
             '</div>' +
@@ -4085,18 +4105,20 @@
               (state.minimizedItems[item.id] ? 'Expand' : 'Minimize') + '">' +
               (state.minimizedItems[item.id] ? '+' : '−') + '</button>' +
             '<button type="button" class="btn btn-got' + (mine > 0 ? ' is-on' : '') + '" data-act="got">Got it!</button>' +
-            '<button type="button" class="btn btn-expense' + (item.shared_expense ? ' is-on' : '') +
-              '" data-act="expense" title="Shared expense">$</button>' +
+            (showExpenseEnabled(findNamedListById(state.activeNamedListId), ev || activeEvent())
+              ? ('<button type="button" class="btn btn-expense' + (item.shared_expense ? ' is-on' : '') +
+                '" data-act="expense" title="Shared expense">$</button>')
+              : '') +
             '<button type="button" class="btn btn-icon drag-handle" data-act="drag" title="Hold and drag to reorder" aria-label="Hold and drag to reorder">⋮⋮</button>' +
           '</div>' +
         '</div>' +
         '<div class="li-detail">' +
-          (!canEditSettings ? '<p class="muted" style="font-size:11px;margin:0 0 8px">Only the list creator can change settings. You can still add notes, Got it, and $.</p>' : '') +
+          (!canEditSettings ? '<p class="muted" style="font-size:11px;margin:0 0 8px">Only the list creator can change settings. You can still add notes and Got it.</p>' : '') +
           '<div class="field-row">' +
-            '<div class="field"><label>Title</label><input data-f="title" value="' + esc(item.title) + '" style="text-transform:capitalize"' + lockAttr + ' /></div>' +
-            '<div class="field" style="flex:0 0 100px"><label>How many needed</label><input data-f="qty" type="number" min="1" value="' + (item.qty || 1) + '"' + lockAttr + ' /></div>' +
-            '<div class="field" style="flex:0 0 140px"><label>Category</label><select data-f="qualifier" data-cat-select' + lockAttr + '>' + qOpts + '</select></div>' +
-            '<div class="field" style="flex:0 0 110px"><label>Priority</label>' +
+            '<div class="field field-grow"><label>Title</label><input data-f="title" value="' + esc(item.title) + '" style="text-transform:capitalize"' + lockAttr + ' /></div>' +
+            '<div class="field field-sm"><label>Qty</label><input data-f="qty" type="number" min="1" value="' + (item.qty || 1) + '"' + lockAttr + ' /></div>' +
+            '<div class="field field-md"><label>Category</label><select data-f="qualifier" data-cat-select' + lockAttr + '>' + qOpts + '</select></div>' +
+            '<div class="field field-sm"><label>Priority</label>' +
               '<select data-f="priority"' + lockAttr + '>' +
                 '<option value="0"' + (!(item.priority) ? ' selected' : '') + '>Normal</option>' +
                 '<option value="1"' + (item.priority == 1 ? ' selected' : '') + '>High</option>' +
@@ -4131,27 +4153,29 @@
             ' /> Only list creator can edit</label>' +
           '<label class="check-row"><input type="checkbox" data-f="require_all" ' + (item.require_all ? 'checked' : '') + lockAttr +
             ' /> Everyone must complete this item</label>' +
-          '<div class="field-row">' +
-            '<div class="field"><label>Due</label>' +
+          '<div class="field-row field-row-due">' +
+            '<div class="field field-due"><label>Due</label>' +
               '<select data-f="due_mode"' + lockAttr + '>' +
                 '<option value="anytime_before"' + ((item.due_mode || 'anytime_before') === 'anytime_before' ? ' selected' : '') + '>Anytime before</option>' +
                 '<option value="anytime_during"' + (item.due_mode === 'anytime_during' ? ' selected' : '') + '>Anytime during</option>' +
                 '<option value="days_before"' + (item.due_mode === 'days_before' ? ' selected' : '') + '>Days before</option>' +
               '</select></div>' +
-            '<div class="field" style="flex:0 0 100px"><label>Days before</label><input data-f="due_days" type="number" min="0" value="' + (item.due_days || 0) + '"' + lockAttr + ' /></div>' +
+            '<div class="field field-days"><label>Days</label><input data-f="due_days" type="number" min="0" value="' + (item.due_days || 0) + '"' + lockAttr + ' /></div>' +
           '</div>' +
-          '<div class="field-row" style="margin-top:12px;gap:8px;flex-wrap:wrap;align-items:center">' +
-            '<button type="button" class="btn btn-item-del" data-act="del" title="Delete item"' +
-              (canEditSettings ? '' : ' disabled') + '>Delete</button>' +
-            '<button type="button" class="btn" data-act="cancel-detail" title="Discard option changes">Cancel</button>' +
-            (showDelegate
-              ? '<button type="button" class="btn" data-act="delegate" title="Delegate to a member’s To bring">Delegate</button>'
-              : '') +
-            '<button type="button" class="btn" data-act="share-item" title="Share item">Copy / share item</button>' +
-            '<button type="button" class="btn" data-act="save-item-template" title="Save this item’s settings as a template">Save item template</button>' +
-            '<button type="button" class="btn btn-primary" data-act="save-detail" title="Save and close">Done</button>' +
+          '<div class="li-detail-actions">' +
+            '<div class="li-detail-actions-left">' +
+              '<button type="button" class="btn btn-item-del" data-act="del" title="Delete item"' +
+                (canEditSettings ? '' : ' disabled') + '>Delete</button>' +
+              '<button type="button" class="btn" data-act="cancel-detail" title="Discard option changes">Cancel</button>' +
+              (showDelegate
+                ? '<button type="button" class="btn" data-act="delegate" title="Delegate to a member’s To bring">Delegate</button>'
+                : '') +
+              '<button type="button" class="btn" data-act="share-item" title="Copy item to clipboard">Share</button>' +
+              '<button type="button" class="btn" data-act="save-item-template" title="Save this item’s settings as a template">Save template</button>' +
+            '</div>' +
+            '<button type="button" class="btn btn-primary btn-save-detail" data-act="save-detail" title="Save and close">Save</button>' +
           '</div>' +
-          '<p class="muted" style="font-size:10px;margin:8px 0 0">Changes save when you click away. Cancel discards.</p>' +
+          '<p class="muted" style="font-size:10px;margin:8px 0 0">Save closes options. Cancel discards. Share copies the item for pasting into another list.</p>' +
         '</div>' +
       '</div>'
     );
@@ -4247,8 +4271,8 @@
         var colors = col.colors || DEFAULT_COL_COLORS;
         var mini = !!col.minimized;
         var colItems = Array.isArray(col.items) ? col.items.filter(function (it) { return it && typeof it === 'object'; }) : [];
-        // Event list “Personal” box = live view of everything I’ve claimed to bring
-        if (String(cid) === 'personal' && list.eventId) {
+        // My checklist = private live view of everything I’ve claimed (Got it!)
+        if (String(cid) === 'personal') {
           colItems = collectMyClaimedItems(list);
         }
         var sectionDone = false;
@@ -4265,24 +4289,27 @@
             return renderItemRow(it, cid, 'free-list', qEv);
           }).join('') || '<p class="empty">Nothing here yet.</p>';
         }
+        var isClassic = cid === 'todo' || cid === 'buy' || cid === 'bring';
+        var titleColor = sectionDone ? '#4ade80' : (isClassic ? 'var(--accent)' : colors.font);
         if (mini) {
           html +=
-            '<div class="list-col is-minimized" data-col-kind="' + esc(cid) + '" draggable="false" ' +
+            '<div class="list-col is-minimized' + (isClassic ? ' list-col-classic' : '') + '" data-col-kind="' + esc(cid) + '" draggable="false" ' +
               'style="--col-font:' + esc(colors.font) + ';--col-tab:' + esc(colors.tab) + ';--col-bg:' + esc(colors.bg) + ';">' +
               '<button type="button" class="list-col-mini-label" data-col-restore="' + esc(cid) + '" title="Expand ' + esc(col.name || cid) + '">' +
-                '<span class="list-col-mini-text">' + esc(col.name || cid) + '</span>' +
+                '<span class="list-col-mini-text' + (isClassic ? ' list-col-title-classic' : '') + '">' + esc(col.name || listKindLabel(cid)) + '</span>' +
               '</button>' +
             '</div>';
           return;
         }
         html +=
-          '<div class="list-col" data-col-kind="' + esc(cid) + '" draggable="false" ' +
+          '<div class="list-col' + (isClassic ? ' list-col-classic' : '') + (String(cid) === 'personal' ? ' list-col-personal' : '') +
+            '" data-col-kind="' + esc(cid) + '" draggable="false" ' +
             'style="--col-font:' + esc(colors.font) + ';--col-tab:' + esc(colors.tab) + ';--col-bg:' + esc(colors.bg) + ';">' +
-            '<div class="list-col-head" style="background:' + esc(colors.tab) + ';">' +
+            '<div class="list-col-head' + (isClassic ? ' list-col-head-classic' : '') + '" style="background:' + esc(isClassic ? 'linear-gradient(180deg,#3a3420,#2a2418)' : colors.tab) + ';">' +
               '<button type="button" class="list-col-drag" data-col-drag draggable="' + (canEdit ? 'true' : 'false') + '" title="Drag to reorder" ' +
                 (canEdit ? '' : 'disabled') + '>⋮⋮</button>' +
-              '<button type="button" class="list-col-title" data-col-rename="' + esc(cid) + '" ' +
-                'style="color:' + esc(sectionDone ? '#4ade80' : colors.font) + ';" title="' + (canEdit ? 'Click to rename' : esc(col.name || cid)) + '">' +
+              '<button type="button" class="list-col-title' + (isClassic ? ' list-col-title-classic' : '') + '" data-col-rename="' + esc(cid) + '" ' +
+                'style="color:' + esc(titleColor) + ';" title="' + (canEdit && !isClassic ? 'Click to rename' : esc(col.name || listKindLabel(cid))) + '">' +
                 (sectionDone ? '<span class="section-complete-check" title="Section complete">✓</span> ' : '') +
                 esc(col.name || listKindLabel(cid)) +
               '</button>' +
@@ -4303,7 +4330,7 @@
               body +
             '</div>' +
             (String(cid) === 'personal'
-              ? '<div class="list-col-add" style="justify-content:center"><span class="muted" style="font-size:11px;padding:6px 4px">Items you’ve claimed · Got it! on other lists</span></div>'
+              ? '<div class="list-col-add" style="justify-content:center"><span class="muted" style="font-size:11px;padding:6px 4px">Only you see this · Got it! items land here</span></div>'
               : ('<div class="list-col-add">' +
                   '<input type="text" class="list-col-add-input" data-col-add-input="' + esc(cid) + '" placeholder="Type item, press Enter…" autocomplete="off" style="text-transform:capitalize" />' +
                   '<button type="button" class="btn btn-icon list-ocr-cam" data-ocr-list="' + esc(cid) +
@@ -6688,6 +6715,85 @@
     }
   }
 
+  /** Clipboard payload so paste into another list keeps item settings */
+  function itemToClipboardPayload(item) {
+    if (!item) return null;
+    return {
+      v: 1,
+      type: 'plan_slayer_item',
+      item: {
+        title: item.title || 'Item',
+        qty: Math.max(1, Number(item.qty) || 1),
+        qualifier: item.qualifier || 'other',
+        priority: item.priority || 0,
+        due_mode: item.due_mode || 'anytime_before',
+        due_days: item.due_days || 0,
+        highlight: !!item.highlight,
+        highlight_color: item.highlight_color || 'red',
+        creator_only_edit: !!item.creator_only_edit,
+        require_all: !!item.require_all,
+        notes: item.notes || '',
+        notesList: Array.isArray(item.notesList) ? item.notesList.map(function (n) {
+          return { text: n.text, byName: n.byName, at: n.at };
+        }) : [],
+        shared_expense: !!item.shared_expense,
+        expense_amount: Number(item.expense_amount) || 0
+      }
+    };
+  }
+  function copyItemPayloadToClipboard(item) {
+    var payload = itemToClipboardPayload(item);
+    if (!payload) return Promise.resolve(false);
+    var text = '[[PSITEM]]' + JSON.stringify(payload);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(function () { return true; }).catch(function () {
+        return fallbackCopyText(text);
+      });
+    }
+    return Promise.resolve(fallbackCopyText(text));
+  }
+  function fallbackCopyText(text) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return !!ok;
+    } catch (e) { return false; }
+  }
+  function parseClipboardItem(text) {
+    text = String(text || '').trim();
+    if (text.indexOf('[[PSITEM]]') !== 0) return null;
+    try {
+      var raw = JSON.parse(text.slice('[[PSITEM]]'.length));
+      if (!raw || raw.type !== 'plan_slayer_item' || !raw.item) return null;
+      return raw.item;
+    } catch (e) { return null; }
+  }
+  function itemFromClipboardPayload(payload) {
+    if (!payload) return null;
+    return newItem(payload.title || 'Item', {
+      qty: payload.qty,
+      qualifier: payload.qualifier,
+      priority: payload.priority,
+      due_mode: payload.due_mode,
+      due_days: payload.due_days,
+      highlight: payload.highlight,
+      highlight_color: payload.highlight_color,
+      creator_only_edit: payload.creator_only_edit,
+      require_all: payload.require_all,
+      notes: payload.notes,
+      notesList: payload.notesList,
+      shared_expense: payload.shared_expense,
+      expense_amount: payload.expense_amount,
+      claims: {}
+    });
+  }
+
   function fillMemberSharePick(box, q) {
     if (!box) return;
     q = String(q || '').trim();
@@ -7162,8 +7268,29 @@
       if (triad) list = findNamedListById(triad.getAttribute('data-list-id'));
     }
     if (!list) list = findNamedListById(state.activeNamedListId);
+    // Paste of a shared item payload keeps all settings from the source list
+    var pasted = parseClipboardItem(title);
+    var extras = null;
+    if (pasted) {
+      extras = {
+        qty: pasted.qty,
+        qualifier: pasted.qualifier,
+        priority: pasted.priority,
+        due_mode: pasted.due_mode,
+        due_days: pasted.due_days,
+        highlight: pasted.highlight,
+        highlight_color: pasted.highlight_color,
+        creator_only_edit: pasted.creator_only_edit,
+        require_all: pasted.require_all,
+        notes: pasted.notes,
+        notesList: pasted.notesList,
+        shared_expense: pasted.shared_expense,
+        expense_amount: pasted.expense_amount
+      };
+      title = pasted.title || title;
+    }
     // Named list path
-    if (list && addItemToListColumn(list, colId, title)) {
+    if (list && addItemToListColumn(list, colId, title, extras)) {
       if (inp) inp.value = '';
       // Keep the open list id stable so re-render never drops the pack
       if (list.id) state.activeNamedListId = String(list.id);
@@ -7255,8 +7382,22 @@
       function refresh() {
         fillMemberSharePick(pick, search.value);
       }
-      search.addEventListener('input', refresh);
-      search.addEventListener('focus', refresh);
+      search.addEventListener('input', function (e) {
+        e.stopPropagation();
+        refresh();
+      });
+      search.addEventListener('focus', function (e) {
+        e.stopPropagation();
+        refreshMapPartnersFromCloud().then(function () { refresh(); }).catch(function () { refresh(); });
+        refresh();
+      });
+      search.addEventListener('keydown', function (e) { e.stopPropagation(); });
+      search.addEventListener('click', function (e) { e.stopPropagation(); });
+      pick.addEventListener('mousedown', function (e) {
+        // Keep focus from leaving the search when clicking a match
+        e.preventDefault();
+        e.stopPropagation();
+      });
       pick.addEventListener('click', function (e) {
         var b = e.target.closest && e.target.closest('[data-share-to-member], [data-share-to-new]');
         if (!b) return;
@@ -7272,19 +7413,32 @@
           }
           addListMemberFromPick(list, key, isNew);
           search.value = '';
+          state.membersAddOpenKey = state.membersDrawerKey;
           render();
           return;
         }
         if (scope === 'event') {
           addEventMemberFromPick(key, isNew);
           search.value = '';
+          state.membersAddOpenKey = state.membersDrawerKey;
           render();
         }
       });
     }
-    // If form is open, seed suggestions
-    if (search.offsetParent !== null || (search.closest && search.closest('.inline-add-members-form.is-open'))) {
+    // If form is open, seed suggestions and restore focus after re-render
+    var formOpen = search.closest && search.closest('.inline-add-members-form.is-open');
+    if (formOpen) {
       try { fillMemberSharePick(pick, search.value); } catch (eF) {}
+      if (state._keepMemberSearchFocus) {
+        setTimeout(function () {
+          try {
+            search.focus();
+            var v = search.value || '';
+            search.setSelectionRange(v.length, v.length);
+          } catch (e2) {}
+          state._keepMemberSearchFocus = false;
+        }, 20);
+      }
     }
   }
 
@@ -9277,6 +9431,7 @@
       list.name = name;
       var linkEv = ($('edit-list-link-event') && $('edit-list-link-event').value) || '';
       list.eventId = linkEv || null;
+      list.showExpense = !($('edit-list-show-expense') && !$('edit-list-show-expense').checked);
       // Explicit re-link means user wants a pack for this event again
       if (linkEv) {
         clearTombstone('eventList', linkEv);
@@ -9382,6 +9537,16 @@
       if (!ev) return;
       if ($('edit-ev-name')) ev.name = autoCap(($('edit-ev-name').value || '').trim()) || ev.name;
       if ($('edit-ev-type')) ev.event_type = ($('edit-ev-type').value || '').trim() || ev.event_type;
+      if (!ev.state) ev.state = {};
+      ev.state.showExpense = !($('edit-ev-show-expense') && !$('edit-ev-show-expense').checked);
+      // Mirror onto linked packing list so $ button matches
+      try {
+        var linkedEx = listsForEvent(ev.id);
+        if (linkedEx[0]) {
+          linkedEx[0].showExpense = ev.state.showExpense;
+          saveNamedList(linkedEx[0]);
+        }
+      } catch (eL) {}
       if (ev._personalOnly) {
         var board = loadPersonalBoard();
         var idx = (board.events || []).findIndex(function (e) { return String(e.id) === String(ev.id); });
@@ -9390,6 +9555,8 @@
           board.events[idx].event_type = ev.event_type;
           board.events[idx].start_at = ev.start_at;
           board.events[idx].end_at = ev.end_at;
+          board.events[idx].state = board.events[idx].state || {};
+          board.events[idx].state.showExpense = ev.state.showExpense;
           savePersonalBoard(board);
         }
       } else {
@@ -9591,13 +9758,32 @@
         }
         if (state.membersDrawerKey === '') return;
         if (!state.activeEventId && !state.activeNamedListId) return;
-        if (e.target.closest && e.target.closest('.event-card-wrap.is-active, .member-pop, .modal-overlay.is-open, [data-member-chip], [data-inline-add-toggle]')) return;
-        // Keep drawer if interacting with right-side edit that needs members
-        if (e.target.closest && e.target.closest('#edit-event-modal, #share-people-chooser, #share-people-members')) return;
+        // Never steal focus from member typeahead / pick list
+        if (e.target.closest && e.target.closest(
+          '.event-card-wrap.is-active, .member-pop, .modal-overlay.is-open, [data-member-chip], [data-inline-add-toggle],' +
+          '.inline-members-block, .inline-add-members-form, .inline-member-search, .inline-member-pick,' +
+          '#edit-event-modal, #edit-list-modal, #share-people-chooser, #share-people-members,' +
+          '.share-person-btn, [data-share-to-member], [data-share-to-new]'
+        )) return;
+        // If add-members form is open, only collapse when clicking well outside the card
+        if (state.membersAddOpenKey) return;
         state.membersDrawerKey = '';
         state.membersAddOpenKey = null;
         render();
       }, false);
+      // Paste shared item into a column add box
+      document.addEventListener('paste', function (e) {
+        var inp = e.target && e.target.closest && e.target.closest('[data-col-add-input], [data-event-col-add-input]');
+        if (!inp) return;
+        var clip = '';
+        try {
+          clip = (e.clipboardData && e.clipboardData.getData('text')) || '';
+        } catch (eC) { clip = ''; }
+        if (!clip || clip.indexOf('[[PSITEM]]') !== 0) return;
+        e.preventDefault();
+        inp.value = clip;
+        submitColumnAddFromUi(inp);
+      }, true);
       // Live auto-save when changing options inside an expanded item (no Save required)
       document.addEventListener('change', function (e) {
         var t = e.target;
@@ -10882,9 +11068,14 @@
         var dk = addToggle.getAttribute('data-inline-add-toggle');
         if (state.membersAddOpenKey && String(state.membersAddOpenKey) === String(dk)) {
           state.membersAddOpenKey = null;
+          state._keepMemberSearchFocus = false;
         } else {
           state.membersAddOpenKey = dk;
           state.membersDrawerKey = dk;
+          state._keepMemberSearchFocus = true;
+          state._skipMembersCollapseOnce = true;
+          // Warm partners so typeahead has people
+          try { refreshMapPartnersFromCloud(); } catch (eR) {}
         }
         render();
         return;
@@ -10991,6 +11182,10 @@
           }
           return 'rerender-only';
         } else if (action === 'expense') {
+          if (!showExpenseEnabled(findNamedListById(state.activeNamedListId), activeEvent())) {
+            appToast('$ is turned off for this list — enable it in Edit list/event');
+            return 'abort';
+          }
           openExpenseFlow(item, kind, scope, id);
           return 'abort-modal';
         } else if (action === 'cancel-detail') {
@@ -11012,8 +11207,14 @@
           openDelegateModal(item, kind, scope);
           return 'abort-modal';
         } else if (action === 'share-item') {
-          openItemShareToMemberModal(item, kind);
-          return 'abort-modal';
+          // Auto-copy full item settings to clipboard for paste into another list
+          try { commitExpandedItemDetail(row); } catch (eSh) {}
+          copyItemPayloadToClipboard(item).then(function (ok) {
+            appToast(ok
+              ? 'Shared to clipboard — paste in another list’s add box'
+              : 'Could not copy');
+          });
+          return 'abort';
         } else if (action === 'category') {
           openItemCategoryModal(item, kind, scope);
           return 'abort-modal';

@@ -1,5 +1,5 @@
 /* PlanSlayer service worker — shell cache + offline map tiles */
-const SHELL_CACHE = 'plan-slayer-shell-v43';
+const SHELL_CACHE = 'plan-slayer-shell-v44';
 const TILE_CACHE = 'plan-slayer-tiles-v1';
 const SHELL_ASSETS = [
   './',

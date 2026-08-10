@@ -1,0 +1,19 @@
+PlanSlayer V1.3.11 → V1.3.12
+============================
+
+1. Report an issue
+- GITHUB_ISSUE_TOKEN set on PlanSlayer Vercel (files to Hunt-Slayer inbox).
+- Labels: from-site + from-planslayer.
+- Optional email confirmation via RESEND_API_KEY when contact is an email.
+- Optional REPORT_NOTIFY_EMAIL for owner alerts; REPORT_EMAIL_FROM for from-address.
+
+2. My lists
+- Bigger, high-contrast My lists control (no My events tab at top).
+
+3. Calendar / events (Hunt-style)
+- My events tab removed from header.
+- “+ Add Event” sits under the calendar with a Trips and Events list.
+- Minimize calendar hides calendar + Add Event together; expand restores both.
+- Join code button stays available in the header.
+
+Version: 1.3.12 · shell plan-slayer-shell-v44

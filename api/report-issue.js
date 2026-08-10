@@ -1,14 +1,12 @@
 /**
- * PlanSlayer → GitHub Issues bridge.
- * Token stays server-side only (Vercel env GITHUB_ISSUE_TOKEN).
- * Never embed a token in client JS.
+ * PlanSlayer → GitHub Issues (shared Hunt-Slayer inbox).
+ * Token server-side only: Vercel env GITHUB_ISSUE_TOKEN
+ *   (needs issues:write on RockitSaucer/Hunt-Slayer)
  *
  * POST JSON: { message, title?, contact?, site?: 'plan', appVersion? }
- * Default: RockitSaucer/Hunt-Slayer (shared inbox) with from-site + from-planslayer.
- * Fallback: RockitSaucer/PlanSlayer if Hunt create fails (permissions / missing labels).
- *
- * Workflow (same as Hunt):
- *   agent plans → ready-for-review → Rockit marks ready-to-commit or revised-changes
+ * Labels: from-site + from-planslayer
+ * Optional email confirmation when contact is an email:
+ *   RESEND_API_KEY + REPORT_EMAIL_FROM (or default)
  */
 
 const PRIMARY_REPO = process.env.GITHUB_ISSUE_REPO || 'RockitSaucer/Hunt-Slayer';
@@ -68,6 +66,10 @@ function sanitize(s, max) {
     .slice(0, max);
 }
 
+function looksLikeEmail(s) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || '').trim());
+}
+
 async function createIssue(token, repo, title, issueBody, labels) {
   const payload = { title: title, body: issueBody };
   if (labels && labels.length) payload.labels = labels;
@@ -84,6 +86,82 @@ async function createIssue(token, repo, title, issueBody, labels) {
   });
   const data = await ghRes.json().catch(function () { return {}; });
   return { ghRes: ghRes, data: data };
+}
+
+/**
+ * Email confirmation to the reporter (contact field).
+ * Uses Resend when RESEND_API_KEY is set.
+ */
+async function sendReporterConfirmation(to, issueNumber, issueUrl) {
+  if (!looksLikeEmail(to)) return { sent: false, reason: 'no_email' };
+  const key = process.env.RESEND_API_KEY || '';
+  if (!key) return { sent: false, reason: 'no_resend_key' };
+
+  const from = process.env.REPORT_EMAIL_FROM || 'PlanSlayer Reports <onboarding@resend.dev>';
+  try {
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + key,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: from,
+        to: [to],
+        subject: 'PlanSlayer report received' + (issueNumber ? (' (#' + issueNumber + ')') : ''),
+        text: [
+          'Thanks for reporting a problem on PlanSlayer.',
+          '',
+          issueNumber ? ('Issue number: #' + issueNumber) : '',
+          issueUrl ? ('Track it: ' + issueUrl) : '',
+          '',
+          'Your report was filed in the shared Hunt Slayer issues inbox (tagged from-planslayer).',
+          '',
+          '— PlanSlayer'
+        ].filter(Boolean).join('\n')
+      })
+    });
+    if (!r.ok) {
+      const errBody = await r.text().catch(function () { return ''; });
+      console.error('Resend confirm failed', r.status, errBody.slice(0, 300));
+      return { sent: false, reason: 'resend_' + r.status };
+    }
+    return { sent: true };
+  } catch (e) {
+    console.error('Resend confirm error', e);
+    return { sent: false, reason: 'network' };
+  }
+}
+
+/** Optional: notify Rockit when a Plan report lands */
+async function sendOwnerNotify(issueNumber, issueUrl, message, contact) {
+  const key = process.env.RESEND_API_KEY || '';
+  const owner = process.env.REPORT_NOTIFY_EMAIL || '';
+  if (!key || !looksLikeEmail(owner)) return;
+  const from = process.env.REPORT_EMAIL_FROM || 'PlanSlayer Reports <onboarding@resend.dev>';
+  try {
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + key,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: from,
+        to: [owner],
+        subject: '[PlanSlayer] New site report' + (issueNumber ? (' #' + issueNumber) : ''),
+        text: [
+          'New PlanSlayer report in Hunt-Slayer inbox.',
+          issueUrl || '',
+          contact ? ('Contact: ' + contact) : '',
+          '',
+          message
+        ].join('\n')
+      })
+    });
+  } catch (e) {
+    console.error('owner notify', e);
+  }
 }
 
 module.exports = async function handler(req, res) {
@@ -109,7 +187,7 @@ module.exports = async function handler(req, res) {
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({
       ok: false,
-      error: 'Issue reporting is not configured on the server. Set Vercel env GITHUB_ISSUE_TOKEN (GitHub PAT with issues:write on Hunt-Slayer and/or PlanSlayer) and redeploy PlanSlayer.'
+      error: 'Issue reporting is not configured. Set Vercel env GITHUB_ISSUE_TOKEN (GitHub PAT with issues:write on Hunt-Slayer) and redeploy PlanSlayer.'
     }));
     return;
   }
@@ -149,6 +227,7 @@ module.exports = async function handler(req, res) {
     '## User report (from site)',
     '',
     '**Site:** ' + siteName + ' (`plan`)',
+    '**Origin label:** `from-planslayer`',
     appVersion ? ('**App version:** ' + appVersion) : '**App version:** _(unknown)_',
     contact ? ('**Contact:** ' + contact) : '**Contact:** _(not provided)_',
     '**Submitted:** ' + new Date().toISOString(),
@@ -159,9 +238,8 @@ module.exports = async function handler(req, res) {
     '',
     '---',
     '',
-    '_Workflow: agent plans → label `ready-for-review` → Rockit labels `ready-to-commit` or `revised-changes`. Do not implement without `ready-to-commit`._',
-    '',
-    '_Code path: `Desktop/PlanSlayer/` → push **RockitSaucer/PlanSlayer** only (not Hunt/Reg)._'
+    '_Shared inbox: Hunt-Slayer. Fix in **Desktop/PlanSlayer/** → push **RockitSaucer/PlanSlayer** only._',
+    '_Workflow: agent plans → `ready-for-review` → Rockit `ready-to-commit` / `revised-changes`._'
   ].join('\n');
 
   const labels = ['from-site', siteLabel];
@@ -173,46 +251,56 @@ module.exports = async function handler(req, res) {
     for (let r = 0; r < reposToTry.length; r++) {
       const repo = reposToTry[r];
       let result = await createIssue(token, repo, title, issueBody, labels);
-      // Retry without labels if labels missing
+
       if (!result.ghRes.ok && result.ghRes.status === 422 &&
-          result.data && /label/i.test(String(result.data.message || ''))) {
-        result = await createIssue(
-          token,
-          repo,
-          title,
-          issueBody + '\n\n_(Note: labels `from-site` / `from-planslayer` were missing on ' + repo + '.)_',
-          undefined
-        );
-        // createIssue always sends labels key — handle bare body
-        if (!result.ghRes.ok) {
-          const bare = await fetch('https://api.github.com/repos/' + repo + '/issues', {
-            method: 'POST',
-            headers: {
-              Authorization: 'Bearer ' + token,
-              Accept: 'application/vnd.github+json',
-              'X-GitHub-Api-Version': '2022-11-28',
-              'User-Agent': 'plan-slayer-report-api',
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              title: title,
-              body: issueBody + '\n\n_(Note: labels missing on ' + repo + '.)_'
-            })
-          });
-          const bareData = await bare.json().catch(function () { return {}; });
-          result = { ghRes: bare, data: bareData };
-        }
+          result.data && /label/i.test(String(result.data.message || JSON.stringify(result.data.errors || '')))) {
+        // Retry without labels
+        const bare = await fetch('https://api.github.com/repos/' + repo + '/issues', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ' + token,
+            Accept: 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+            'User-Agent': 'plan-slayer-report-api',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            title: title,
+            body: issueBody + '\n\n_(Labels `from-site` / `from-planslayer` missing on ' + repo + ' — create them.)_'
+          })
+        });
+        const bareData = await bare.json().catch(function () { return {}; });
+        result = { ghRes: bare, data: bareData };
       }
 
       if (result.ghRes.ok) {
+        const number = result.data.number;
+        const url = result.data.html_url;
+        let emailSent = false;
+        let emailNote = '';
+        if (looksLikeEmail(contact)) {
+          const em = await sendReporterConfirmation(contact, number, url);
+          emailSent = !!em.sent;
+          if (!em.sent && em.reason === 'no_resend_key') {
+            emailNote = ' (Add RESEND_API_KEY on Vercel to email confirmations to reporters.)';
+          } else if (!em.sent) {
+            emailNote = ' (Could not send confirmation email.)';
+          }
+        }
+        try {
+          await sendOwnerNotify(number, url, message, contact);
+        } catch (eN) {}
+
         res.statusCode = 200;
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({
           ok: true,
-          number: result.data.number,
-          url: result.data.html_url,
+          number: number,
+          url: url,
           repo: repo,
-          usedFallback: repo !== PRIMARY_REPO
+          usedFallback: repo !== PRIMARY_REPO,
+          emailSent: emailSent,
+          emailNote: emailNote
         }));
         return;
       }
@@ -225,7 +313,7 @@ module.exports = async function handler(req, res) {
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({
       ok: false,
-      error: lastErr || 'GitHub rejected the report. Check GITHUB_ISSUE_TOKEN scopes on Hunt-Slayer and PlanSlayer.'
+      error: lastErr || 'GitHub rejected the report. Token needs issues:write on Hunt-Slayer.'
     }));
   } catch (e) {
     console.error('report-issue', e);

@@ -539,7 +539,7 @@
     .left-stack {
       display: flex; flex-direction: column; gap: 10px; min-height: 0;
     }
-    /* My lists / My events — each tab has its own + to the right */
+    /* My lists header — bigger, stands out (no My events tab) */
     .card-head-left-tabs {
       display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
     }
@@ -547,39 +547,89 @@
       display: flex; gap: 8px; flex: 1 1 auto; min-width: 0;
     }
     .left-tab-unit {
-      flex: 1 1 0;
-      display: flex; align-items: center; gap: 6px;
+      flex: 1 1 auto;
+      display: flex; align-items: center; gap: 10px;
       min-width: 0;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 4px 6px 4px 4px;
+      background: linear-gradient(180deg, #2a3220 0%, #1a2014 55%, #12160f 100%);
+      border: 2px solid rgba(229,154,24,0.55);
+      border-radius: 12px;
+      padding: 6px 8px 6px 6px;
+      box-shadow:
+        0 1px 0 rgba(255,255,255,0.06) inset,
+        0 2px 0 #0a0c09,
+        0 6px 16px rgba(0,0,0,0.35);
     }
     .left-tab-unit:has(.left-tab.is-active) {
-      border-color: rgba(229,154,24,0.55);
-      background: linear-gradient(180deg, #2a2618 0%, #1a1810 100%);
+      border-color: var(--accent);
+      background: linear-gradient(180deg, #3a3420 0%, #2a2414 50%, #1a1810 100%);
     }
     .left-tab {
       flex: 1 1 auto;
       appearance: none; border: 0;
-      background: transparent; color: var(--muted);
-      font-weight: 800; font-size: 13px; letter-spacing: 0.02em;
-      padding: 8px 10px; cursor: pointer; font-family: inherit;
-      text-align: left; border-radius: 8px;
+      background: transparent; color: var(--accent);
+      font-weight: 900; font-size: 17px; letter-spacing: 0.03em;
+      padding: 12px 14px; cursor: pointer; font-family: inherit;
+      text-align: left; border-radius: 10px;
+      text-transform: none;
     }
-    .left-tab:hover { color: var(--ink); }
+    .left-tab:hover { color: #fff; filter: brightness(1.06); }
     .left-tab.is-active {
-      color: var(--accent);
+      color: #fff;
       background: transparent;
       box-shadow: none;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.45);
     }
+    /* Hunt-style events block under calendar */
+    .plan-cal-events-box {
+      margin-top: 8px;
+      padding: 8px 8px 6px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(0,0,0,0.22);
+    }
+    .plan-cal-events-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .plan-cal-events-title {
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    #add-event-tab-btn {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--accent);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-weight: 800;
+      cursor: pointer;
+      font-size: 11px;
+      font-family: inherit;
+    }
+    #add-event-tab-btn:hover {
+      border-color: var(--accent);
+      filter: brightness(1.06);
+    }
+    #calendar-events-list {
+      font-size: 12px;
+      max-height: 220px;
+      overflow: auto;
+    }
+    #calendar-events-list .event-card-wrap { margin-bottom: 6px; }
+    #side-cal-block.is-collapsed { display: none !important; }
     /* 3D raised + buttons (same language as .btn) */
     .btn-plus-3d {
       flex: 0 0 auto;
-      width: 36px !important; height: 36px !important; min-width: 36px !important;
+      width: 42px !important; height: 42px !important; min-width: 42px !important;
       padding: 0 !important;
-      border-radius: 9px !important;
-      font-size: 22px !important; font-weight: 700 !important; line-height: 1 !important;
+      border-radius: 10px !important;
+      font-size: 26px !important; font-weight: 700 !important; line-height: 1 !important;
       display: inline-flex !important; align-items: center; justify-content: center;
       appearance: none;
       border: 1px solid #1a2014 !important;
@@ -2942,7 +2992,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.11</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.12</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -2973,13 +3023,13 @@
   <div id="report-issue-overlay" class="report-issue-overlay" aria-hidden="true">
     <div class="report-issue-modal" role="dialog" aria-modal="true" aria-labelledby="report-issue-title">
       <h3 id="report-issue-title">Report an issue</h3>
-      <p class="ri-sub">Describe what went wrong. This creates a ticket for the developer (no password or list data is sent).</p>
+      <p class="ri-sub">Creates a ticket in the Hunt Slayer issues inbox, tagged <strong>from-planslayer</strong>. No passwords or list data are sent.</p>
       <label for="report-issue-title-in">Title (optional)</label>
       <input id="report-issue-title-in" type="text" maxlength="120" placeholder="Short summary" autocomplete="off" />
       <label for="report-issue-msg">What happened?</label>
       <textarea id="report-issue-msg" maxlength="4000" placeholder="What were you doing? What did you expect? What happened instead?"></textarea>
-      <label for="report-issue-contact">Contact (optional)</label>
-      <input id="report-issue-contact" type="text" maxlength="120" placeholder="Email or username if you want a reply" autocomplete="email" />
+      <label for="report-issue-contact">Email for confirmation (optional)</label>
+      <input id="report-issue-contact" type="email" maxlength="120" placeholder="you@email.com — confirmation if mail is configured" autocomplete="email" />
       <p class="ri-status" id="report-issue-status" role="status"></p>
       <div class="ri-actions">
         <button type="button" id="report-issue-cancel">Cancel</button>
@@ -2993,17 +3043,13 @@
 <!-- LEFT: My lists / My events tabs → calendar → content → map -->
       <section class="card card-planner" id="card-planner">
         <div class="card-head card-head-left-tabs">
-          <div class="left-main-tabs" id="left-main-tabs" role="tablist" aria-label="My lists or My events">
+          <div class="left-main-tabs" id="left-main-tabs" role="tablist" aria-label="My lists">
             <div class="left-tab-unit">
               <button type="button" class="left-tab is-active" data-left-tab="lists" role="tab" aria-selected="true">My lists</button>
               <button type="button" class="btn btn-plus-3d" id="btn-create-list" title="Add list" aria-label="Add list">+</button>
             </div>
-            <div class="left-tab-unit">
-              <button type="button" class="left-tab" data-left-tab="events" role="tab" aria-selected="false">My events</button>
-              <button type="button" class="btn btn-plus-3d" id="btn-create-event" title="Add event" aria-label="Add event">+</button>
-            </div>
           </div>
-          <button type="button" class="btn btn-accent" id="btn-join-event" title="Join with code" style="display:none">Join</button>
+          <button type="button" class="btn btn-accent" id="btn-join-event" title="Join event or list with code">Join</button>
         </div>
         <div class="card-body" id="planner-body">
           <div class="left-stack">
@@ -3015,17 +3061,28 @@
 
             <div class="map-context-bar" id="map-context-bar" aria-label="Map context (party / personal)"></div>
             <div class="event-pins-banner" id="event-pins-banner" hidden></div>
-            <!-- Tabs sit right above the calendar -->
-            <div class="calendar-container side-cal" id="side-cal">
-              <div class="calendar-header">
-                <button type="button" class="cal-nav-btn" id="side-cal-prev" aria-label="Previous month">&lt; Prev</button>
-                <h3 id="side-cal-label">—</h3>
-                <button type="button" class="cal-nav-btn" id="side-cal-next" aria-label="Next month">Next &gt;</button>
-                <button type="button" class="cal-nav-btn cal-collapse-btn" id="side-cal-collapse" title="Minimize calendar" aria-label="Minimize calendar">−</button>
+            <!-- Calendar + Add Event (Hunt-style): collapse together -->
+            <div id="side-cal-block">
+              <div class="calendar-container side-cal" id="side-cal">
+                <div class="calendar-header">
+                  <button type="button" class="cal-nav-btn" id="side-cal-prev" aria-label="Previous month">&lt; Prev</button>
+                  <h3 id="side-cal-label">—</h3>
+                  <button type="button" class="cal-nav-btn" id="side-cal-next" aria-label="Next month">Next &gt;</button>
+                  <button type="button" class="cal-nav-btn cal-collapse-btn" id="side-cal-collapse" title="Minimize calendar" aria-label="Minimize calendar">−</button>
+                </div>
+                <div class="calendar-grid" id="side-cal-grid" role="grid" aria-label="Event calendar"></div>
               </div>
-              <div class="calendar-grid" id="side-cal-grid" role="grid" aria-label="Event calendar"></div>
+              <div class="plan-cal-events-box" id="plan-cal-events-box">
+                <div class="plan-cal-events-head">
+                  <span class="plan-cal-events-title" id="events-title-date">Trips and Events</span>
+                  <button type="button" id="add-event-tab-btn" title="Add event">+ Add Event</button>
+                </div>
+                <div id="calendar-events-list" aria-label="Events list"></div>
+              </div>
             </div>
             <button type="button" class="btn cal-collapsed-btn" id="cal-collapsed-btn" style="display:none" title="Show calendar" aria-hidden="true">📅 Calendar</button>
+            <!-- legacy id kept for openCreateModal wiring -->
+            <button type="button" id="btn-create-event" hidden aria-hidden="true" tabindex="-1"></button>
             <div class="cal-map-row" id="cal-map-row" hidden aria-hidden="true"></div>
             <div id="panel-events-block">
               <div class="events-filter-row" id="events-filter-row" style="display:none">

@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.11';
+  var APP_VERSION = '1.3.12';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -4355,61 +4355,84 @@
   }
 
   function renderHomeList() {
-    // My lists: personal lists + event-linked lists (same card chrome as events)
-    if (state.leftTab === 'lists') {
-      var personal = personalListsOnly();
-      var eventLists = eventLinkedListsAll().filter(function (n) {
-        return eventNameById(n.eventId); // has a known event
-      });
-      var orphanLists = eventLinkedListsAll().filter(function (n) {
-        return !eventNameById(n.eventId);
-      });
-      var htmlL = '';
-      htmlL += '<div class="section-label">Personal</div>';
-      if (!personal.length) {
-        htmlL += '<p class="empty" style="margin:0 0 10px">No personal lists yet. Tap <strong>+</strong> — shopping, home, etc. stay here.</p>';
-      } else {
-        htmlL += personal.map(function (n) { return renderListCardHtml(n); }).join('');
-      }
-      htmlL += '<div class="section-label" style="margin-top:12px">Event lists</div>';
-      if (!eventLists.length && !orphanLists.length) {
-        htmlL += '<p class="empty">No event packing lists yet. Open or create an event — its To do / To buy / To bring pack appears here.</p>';
-      } else {
-        htmlL += eventLists.map(function (n) {
-          return renderListCardHtml(n, { badge: eventNameById(n.eventId) || 'event' });
-        }).join('');
-        if (orphanLists.length) {
-          htmlL += '<div class="section-label" style="margin-top:10px">Event lists (event not loaded)</div>' +
-            orphanLists.map(function (n) { return renderListCardHtml(n); }).join('');
-        }
-      }
-      return htmlL;
+    // Always My lists under the calendar (events live under calendar like Hunt)
+    state.leftTab = 'lists';
+    var personal = personalListsOnly();
+    var eventLists = eventLinkedListsAll().filter(function (n) {
+      return eventNameById(n.eventId);
+    });
+    var orphanLists = eventLinkedListsAll().filter(function (n) {
+      return !eventNameById(n.eventId);
+    });
+    var htmlL = '';
+    htmlL += '<div class="section-label">Personal</div>';
+    if (!personal.length) {
+      htmlL += '<p class="empty" style="margin:0 0 10px">No personal lists yet. Tap <strong>+</strong> — shopping, home, etc. stay here.</p>';
+    } else {
+      htmlL += personal.map(function (n) { return renderListCardHtml(n); }).join('');
     }
+    htmlL += '<div class="section-label" style="margin-top:12px">Event lists</div>';
+    if (!eventLists.length && !orphanLists.length) {
+      htmlL += '<p class="empty">No event packing lists yet. Use <strong>+ Add Event</strong> under the calendar — its To do / To buy / To bring pack appears here.</p>';
+    } else {
+      htmlL += eventLists.map(function (n) {
+        return renderListCardHtml(n, { badge: eventNameById(n.eventId) || 'event' });
+      }).join('');
+      if (orphanLists.length) {
+        htmlL += '<div class="section-label" style="margin-top:10px">Event lists (event not loaded)</div>' +
+          orphanLists.map(function (n) { return renderListCardHtml(n); }).join('');
+      }
+    }
+    return htmlL;
+  }
 
-    // My events tab: events only (packing list opens on the right when you open an event)
+  /** Compact event rows under the calendar (Hunt “Trips and Events”). */
+  function renderCalendarEventsList() {
+    var box = $('calendar-events-list');
+    var titleEl = $('events-title-date');
+    if (!box) return;
     var list = sortedEvents();
-    if (!list.length) {
-      return '<p class="empty">No events yet. Create one or join with a code.</p>';
+    // Prefer month of side cal if scoped
+    if (state.eventsScope === 'month' && state.sideCal) {
+      var y = state.sideCal.y;
+      var m = state.sideCal.m;
+      list = list.filter(function (e) {
+        if (!e.start_at) return true;
+        try {
+          var d = new Date(e.start_at);
+          return d.getFullYear() === y && d.getMonth() === m;
+        } catch (err) { return true; }
+      });
     }
-    return list.map(function (e) { return renderEventCardHtml(e); }).join('');
+    if (titleEl) {
+      if (state.sideCal && state.sideCal.selectedDay) {
+        titleEl.textContent = 'Events · ' + state.sideCal.selectedDay;
+      } else {
+        titleEl.textContent = 'Trips and Events';
+      }
+    }
+    if (!list.length) {
+      box.innerHTML = '<p class="empty" style="margin:4px 0;font-size:11px">No events yet. Tap <strong>+ Add Event</strong>.</p>';
+      return;
+    }
+    // Slim cards under calendar
+    box.innerHTML = list.slice(0, 40).map(function (e) {
+      return renderEventCardHtml(e);
+    }).join('');
   }
 
   function syncLeftTabChrome() {
-    var isLists = state.leftTab === 'lists';
+    // Single My lists chrome — events are under the calendar
+    state.leftTab = 'lists';
     document.querySelectorAll('[data-left-tab]').forEach(function (b) {
-      var on = b.getAttribute('data-left-tab') === state.leftTab;
-      b.classList.toggle('is-active', on);
-      b.setAttribute('aria-selected', on ? 'true' : 'false');
+      b.classList.add('is-active');
+      b.setAttribute('aria-selected', 'true');
     });
-    // Both + buttons always visible next to their tab labels
     if ($('btn-create-list')) $('btn-create-list').style.display = '';
-    if ($('btn-create-event')) $('btn-create-event').style.display = '';
-    if ($('btn-join-event')) $('btn-join-event').style.display = isLists ? 'none' : '';
-    if ($('events-filter-row')) $('events-filter-row').style.display = isLists ? 'none' : '';
-    if ($('home-controls')) $('home-controls').style.display = isLists ? 'none' : '';
-    if ($('search-input')) {
-      $('search-input').placeholder = isLists ? 'Search lists…' : 'Search events…';
-    }
+    if ($('btn-join-event')) $('btn-join-event').style.display = '';
+    if ($('events-filter-row')) $('events-filter-row').style.display = 'none';
+    if ($('home-controls')) $('home-controls').style.display = 'none';
+    if ($('search-input')) $('search-input').placeholder = 'Search lists…';
   }
 
   function currentListBucket() {
@@ -4534,7 +4557,12 @@
       }
     } catch (eCal) {}
     var sideCal = $('side-cal');
+    var sideCalBlock = $('side-cal-block');
     var calFab = $('cal-collapsed-btn');
+    if (sideCalBlock) {
+      sideCalBlock.classList.toggle('is-collapsed', !!state.calCollapsed);
+      sideCalBlock.style.display = state.calCollapsed ? 'none' : '';
+    }
     if (sideCal) {
       sideCal.classList.toggle('is-collapsed', !!state.calCollapsed);
       sideCal.style.display = state.calCollapsed ? 'none' : '';
@@ -4544,10 +4572,11 @@
       calFab.setAttribute('aria-hidden', state.calCollapsed ? 'false' : 'true');
     }
     renderSideCalendar();
+    try { renderCalendarEventsList(); } catch (eCel) {}
     setMapMode(state.mapMode);
     ensureCountdownTicker();
 
-    // Left: My lists | My events tabs above calendar
+    // Left: My lists (events under calendar like Hunt)
     var eventsBlock = $('panel-events-block');
     var friendsPanel = $('panel-friends');
     if (eventsBlock) eventsBlock.style.display = '';
@@ -7390,10 +7419,15 @@
         });
       }).then(function (r) {
         if (r.res.ok && r.data && r.data.ok) {
-          setStatus('Thanks — report filed' + (r.data.number ? (' (#' + r.data.number + ')') : '') + '.', 'ok');
+          var okMsg = 'Thanks — filed on Hunt-Slayer' +
+            (r.data.number ? (' (#' + r.data.number + ')') : '') +
+            ' · from-planslayer';
+          if (r.data.emailSent) okMsg += ' · confirmation emailed';
+          else if (r.data.emailNote) okMsg += r.data.emailNote;
+          setStatus(okMsg, 'ok');
           if (msgEl) msgEl.value = '';
           if (titleEl) titleEl.value = '';
-          setTimeout(closeReport, 1400);
+          setTimeout(closeReport, 2200);
         } else {
           var err = (r.data && r.data.error) ? r.data.error : 'Could not send report. Try again later.';
           // Local static serve has no /api — give a clear hint
@@ -7424,34 +7458,15 @@
     try { wireOcrReviewModal(); } catch (eOcrW) {}
 
     click('btn-create-event', openCreateModal);
+    click('add-event-tab-btn', openCreateModal);
     click('create-cancel', closeCreateModal);
     // Do NOT close create-event by clicking the overlay — Cancel only
     click('btn-create-list', openListModal);
 
-    // Left top tabs: My lists | My events
+    // My lists only (events are under the calendar like Hunt)
     document.querySelectorAll('[data-left-tab]').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        var tab = btn.getAttribute('data-left-tab') || 'lists';
-        if (state.leftTab === tab) return;
-        state.leftTab = tab;
-        // Keep open list on the right when switching tabs.
-        // Only clear event selection when switching to My lists if no list is open.
-        if (tab === 'lists') {
-          if (!state.activeNamedListId) {
-            state.view = 'home';
-            state.activeEventId = null;
-          } else {
-            // Keep event id if the open pack is event-linked (selection highlight can use it)
-            var openNl = findNamedListById(state.activeNamedListId);
-            if (openNl && openNl.eventId) {
-              state.activeEventId = String(openNl.eventId);
-              state.view = 'event';
-            } else {
-              state.activeEventId = null;
-              state.view = 'home';
-            }
-          }
-        }
+        state.leftTab = 'lists';
         render();
       });
     });

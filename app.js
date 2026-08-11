@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.33';
+  var APP_VERSION = '1.3.34';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -452,21 +452,24 @@
         try {
           var colId = hit.colId || kind;
           if (String(colId) !== 'personal' && !isPersonalEventShadowList(list)) {
-            // Keep private checklist column on shared/event packs too
             try {
               if (listWantsPersonalChecklist(list) || list.eventId || activeEvent()) {
                 ensurePersonalColumn(list);
                 syncClaimToPrivateChecklist(list, hit.item, claimQty, colId);
               }
             } catch (ePc) {}
-            // Personal list (e.g. “Personal Gator”) — resolves event from list or active event
+            // Always ensure personal list exists + copy claim (even if eventId was missing)
+            try {
+              var evHint = resolveEventForList(list) || activeEvent();
+              if (evHint) ensurePersonalEventList(evHint, list);
+              else ensurePersonalEventList(null, list);
+            } catch (eEns) {}
             var pList = syncClaimToPersonalEventList(list, hit.item, claimQty, colId);
             if (pList && claimQty > 0) {
-              try {
-                appToast('Added to ' + (pList.name || 'personal list'));
-              } catch (eT) {}
+              try { appToast('Added to ' + (pList.name || 'personal list')); } catch (eT) {}
             } else if (claimQty > 0 && !pList) {
-              console.warn('[PlanSlayer] Got it! did not create personal list', list.id, list.eventId);
+              console.warn('[PlanSlayer] Got it! did not create personal list', list && list.id, list && list.eventId);
+              try { appToast('Could not add to personal list — try again'); } catch (eT2) {}
             }
           }
         } catch (ePriv) {
@@ -1219,9 +1222,14 @@
       colsIn.forEach(function (c) {
         if (!c || typeof c !== 'object') return;
         var id = c.id != null ? String(c.id) : ('col_' + uid());
-        var items = Array.isArray(c.items)
+        var fromCol = Array.isArray(c.items)
           ? c.items.filter(function (it) { return it && typeof it === 'object'; })
-          : (Array.isArray(bucketSrc[id]) ? bucketSrc[id].filter(function (it) { return it && typeof it === 'object'; }) : []);
+          : [];
+        var fromBucket = Array.isArray(bucketSrc[id])
+          ? bucketSrc[id].filter(function (it) { return it && typeof it === 'object'; })
+          : [];
+        // Prefer column items; if empty, heal from buckets (cloud packs often leave [] items)
+        var items = fromCol.length ? fromCol : fromBucket;
         // Sanitize each item lightly (preserve chore_* calendar fields)
         items = items.map(function (it) {
           try {
@@ -3737,53 +3745,66 @@
     var existing = listsForEvent(eid).filter(function (n) {
       return n && !isTombstoned('list', n.id);
     });
-    if (existing.length) return existing[0];
-    var store = loadFreeListsStore();
-    // Double-check store after tombstone filter
-    var still = (store.named || []).filter(function (n) {
-      return n && n.eventId && String(n.eventId) === eid && !isTombstoned('list', n.id);
-    });
-    if (still.length) return still[0];
-    var nl = normalizeNamedList({
-      id: uid(),
-      name: (ev.name || 'Event') + ' · lists',
-      kind: 'todo',
-      items: [],
-      buckets: { todo: [], buy: [], bring: [] },
-      columnOrder: ['todo', 'buy', 'bring'],
-      eventId: eid,
-      owner_id: myId() || 'local',
-      creators: [],
-      members: [{
-        user_id: myId() || 'local',
-        display_name: myName(),
-        role: 'owner'
-      }],
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    });
-    // Seed from event packing lists into column items (not just buckets — columns win on reload)
-    try {
-      if (ev.state && ev.state.lists) {
-        ['todo', 'buy', 'bring'].forEach(function (k) {
-          var group = (ev.state.lists[k] && ev.state.lists[k].group) || [];
-          if (Array.isArray(group) && group.length) {
-            var seeded = group.map(function (it) {
-              return Object.assign({}, it, { id: it.id || uid() });
-            });
-            var col = getListColumn(nl, k);
-            if (col) col.items = seeded;
-            nl.buckets[k] = seeded;
-          }
+    var pack = null;
+    if (existing.length) {
+      pack = existing[0];
+    } else {
+      var store = loadFreeListsStore();
+      // Double-check store after tombstone filter
+      var still = (store.named || []).filter(function (n) {
+        return n && n.eventId && String(n.eventId) === eid && !isTombstoned('list', n.id) &&
+          !isPersonalEventShadowList(n);
+      });
+      if (still.length) {
+        pack = still[0];
+      } else {
+        var nl = normalizeNamedList({
+          id: uid(),
+          name: (ev.name || 'Event') + ' · lists',
+          kind: 'todo',
+          items: [],
+          buckets: { todo: [], buy: [], bring: [] },
+          columnOrder: ['todo', 'buy', 'bring'],
+          eventId: eid,
+          owner_id: myId() || 'local',
+          creators: [],
+          members: [{
+            user_id: myId() || 'local',
+            display_name: myName(),
+            role: 'owner'
+          }],
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
         });
-        normalizeNamedList(nl);
+        // Seed from event packing lists into column items (not just buckets — columns win on reload)
+        try {
+          if (ev.state && ev.state.lists) {
+            ['todo', 'buy', 'bring'].forEach(function (k) {
+              var group = (ev.state.lists[k] && ev.state.lists[k].group) || [];
+              if (Array.isArray(group) && group.length) {
+                var seeded = group.map(function (it) {
+                  return Object.assign({}, it, { id: it.id || uid() });
+                });
+                var col = getListColumn(nl, k);
+                if (col) col.items = seeded;
+                nl.buckets[k] = seeded;
+              }
+            });
+            normalizeNamedList(nl);
+          }
+        } catch (eS) {}
+        store.named = store.named || [];
+        store.named.push(nl);
+        saveFreeListsStore(store);
+        try { publishEventListBridge(nl); } catch (eP) {}
+        pack = findNamedListById(nl.id) || nl;
       }
-    } catch (eS) {}
-    store.named = store.named || [];
-    store.named.push(nl);
-    saveFreeListsStore(store);
-    try { publishEventListBridge(nl); } catch (eP) {}
-    return nl;
+    }
+    // Always ensure a non-shared Personal {Event} list exists for claims
+    try { ensurePersonalEventList(ev, pack); } catch (ePers) {
+      console.warn('ensurePersonalEventList on pack', ePers);
+    }
+    return pack;
   }
 
   /** Link a personal list to an event (combine) */
@@ -4139,6 +4160,16 @@
         if (list) state.activeNamedListId = list.id;
       } catch (e2) {}
     }
+    // Heal from raw store if named lookup lost items
+    if (list && list.id) {
+      try {
+        var rawStore = loadFreeListsStoreRaw();
+        var rawList = (rawStore.named || []).find(function (n) { return n && String(n.id) === String(list.id); });
+        if (rawList) list = sanitizeNamedList(rawList);
+      } catch (eRaw) {
+        try { list = sanitizeNamedList(list); } catch (eS) {}
+      }
+    }
     if (!list) {
       if ($('mls-title')) $('mls-title').textContent = 'Lists';
       if ($('mls-tabs')) $('mls-tabs').innerHTML = '';
@@ -4146,10 +4177,17 @@
       return;
     }
     sanitizeNamedList(list);
+    // Event packs: ensure personal claim list exists (empty until Got it!)
+    try {
+      if (list.eventId || (ev && ev.id)) {
+        var evForP = resolveEventForList(list) || ev;
+        if (evForP) ensurePersonalEventList(evForP, list);
+      }
+    } catch (ePe) {}
     if ($('mls-title')) {
       $('mls-title').textContent = list.name || (ev && ev.name) || 'List';
     }
-    // Tabs — one section at a time
+    // Section jump tabs (same columns as desktop triad)
     var tabs = $('mls-tabs');
     if (tabs) {
       var activeTab = state.listTab || (list.columns[0] && list.columns[0].id) || 'todo';
@@ -4158,46 +4196,59 @@
         state.listTab = activeTab;
       }
       tabs.innerHTML = (list.columns || []).map(function (c) {
+        if (!c || String(c.id) === 'personal') return '';
         var on = String(c.id) === String(activeTab);
+        var count = 0;
+        try {
+          var ci = Array.isArray(c.items) ? c.items : [];
+          count = ci.filter(function (it) { return it && typeof it === 'object'; }).length;
+        } catch (eC) {}
         return '<button type="button" class="mls-tab' + (on ? ' is-active' : '') +
-          '" data-mls-tab="' + esc(c.id) + '">' + esc(c.name || listKindLabel(c.id)) + '</button>';
+          '" data-mls-tab="' + esc(c.id) + '">' + esc(c.name || listKindLabel(c.id)) +
+          (count ? (' · ' + count) : '') + '</button>';
       }).join('');
     }
-    // Single column body (same items + add bar as desktop)
+    // Same triad as desktop (CSS stacks columns on narrow screens)
     var body = $('mls-body');
     if (body) {
-      var col = getListColumn(list, state.listTab) || (list.columns && list.columns[0]);
-      if (!col) {
-        body.innerHTML = '<p class="empty">Nothing here yet.</p>';
-        return;
-      }
       var qEv = { state: { qualifiers: DEFAULT_QUALIFIERS.map(function (q) { return Object.assign({}, q); }) } };
-      var colItems = Array.isArray(col.items) ? col.items.filter(function (it) { return it && typeof it === 'object'; }) : [];
-      var itemsHtml = '';
       try {
-        itemsHtml = renderSplitLists(colItems, col.id, 'free-list', qEv);
+        var aevQ = list.eventId ? findEventById(list.eventId) : (ev || null);
+        if (aevQ && aevQ.state && aevQ.state.qualifiers) qEv.state.qualifiers = aevQ.state.qualifiers;
+      } catch (eQ) {}
+      try {
+        body.innerHTML = renderListTriad(list, qEv);
+        // If triad rendered empty but store has items, force-heal columns from buckets
+        if (!body.querySelector('.list-item')) {
+          var healed = false;
+          (list.columns || []).forEach(function (c) {
+            if (!c || !c.id) return;
+            if ((!c.items || !c.items.length) && list.buckets && Array.isArray(list.buckets[c.id]) && list.buckets[c.id].length) {
+              c.items = list.buckets[c.id].slice();
+              healed = true;
+            }
+          });
+          if (healed) {
+            try { saveNamedList(list); } catch (eH) {}
+            body.innerHTML = renderListTriad(list, qEv);
+          }
+        }
+        if (!body.innerHTML || !body.innerHTML.trim()) {
+          body.innerHTML = '<p class="empty">Nothing here yet.</p>';
+        }
       } catch (eR) {
-        itemsHtml = colItems.map(function (it) { return renderItemRow(it, col.id, 'free-list', qEv); }).join('');
+        console.warn('renderMobileListSheet triad', eR);
+        body.innerHTML = '<p class="empty">Could not render list. Try reopening.</p>';
       }
-      var colors = col.colors || DEFAULT_COL_COLORS;
-      body.innerHTML =
-        '<div class="list-triad mls-single-triad" id="list-triad" data-list-id="' + esc(list.id) + '">' +
-          '<div class="list-col" data-col-kind="' + esc(col.id) + '" ' +
-            'style="--col-font:' + esc(colors.font) + ';--col-tab:' + esc(colors.tab) + ';--col-bg:' + esc(colors.bg) + ';">' +
-            '<div class="list-col-body" data-col-body="' + esc(col.id) + '" data-col-focus-add="' + esc(col.id) + '" ' +
-              'style="background:' + esc(colors.bg) + ';color:' + esc(colors.font) + ';">' +
-              itemsHtml +
-            '</div>' +
-            '<div class="list-col-add">' +
-              '<input type="text" class="list-col-add-input" data-col-add-input="' + esc(col.id) +
-                '" placeholder="Type item, press Enter…" autocomplete="off" style="text-transform:capitalize" />' +
-              '<button type="button" class="btn btn-icon list-ocr-cam" data-ocr-list="' + esc(col.id) +
-                '" title="Photo of handwritten list → items"><img src="icons/pins/camera.png" alt="" width="18" height="18" /></button>' +
-              '<button type="button" class="btn btn-primary list-col-add-btn" data-col-add="' + esc(col.id) + '">Add</button>' +
-            '</div>' +
-          '</div>' +
-        '</div>';
       try { wireListColumnUi(list); } catch (eW) {}
+      // Scroll to active section when jumping via tabs
+      try {
+        var want = state.listTab;
+        if (want) {
+          var colEl = body.querySelector('.list-col[data-col-kind="' + String(want).replace(/"/g, '') + '"]');
+          if (colEl && colEl.scrollIntoView) colEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        }
+      } catch (eSc) {}
     }
   }
 

@@ -1,0 +1,14 @@
+PlanSlayer V1.3.34 — Mobile lists = desktop triad + auto Personal {Event}
+
+Mobile
+- List sheet now renders the same To do / To buy / To bring triad as desktop
+  (stacked columns; section tabs jump/scroll to a column)
+- Heal empty column.items from buckets (cloud packs often left [] items)
+- CSS so list items stay visible (no overflow:hidden collapse)
+
+Personal claim lists
+- Creating/opening any group event packing pack also creates Personal {EventName}
+  under Personal lists (empty until Got it!)
+- Got it! still copies claims into that personal list with toast
+
+Shell: plan-slayer-shell-v67

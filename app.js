@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.39';
+  var APP_VERSION = '1.3.40';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -5730,7 +5730,6 @@
                 (showExpenseEnabled(findNamedListById(state.activeNamedListId), activeEvent())
                   ? '<button type="button" class="btn btn-expense" data-act="expense" title="Shared expense">$</button>'
                   : '') +
-                '<button type="button" class="btn btn-icon drag-handle" data-act="drag" title="Drag to reorder">⋮⋮</button>' +
               '</div>' +
             '</div>' +
             '<div class="li-detail"></div>' +
@@ -5877,7 +5876,6 @@
               ? ('<button type="button" class="btn btn-expense' + (item.shared_expense ? ' is-on' : '') +
                 '" data-act="expense" title="Shared expense">$</button>')
               : '') +
-            '<button type="button" class="btn btn-icon drag-handle" data-act="drag" title="Hold and drag to reorder" aria-label="Hold and drag to reorder">⋮⋮</button>' +
           '</div>' +
         '</div>' +
         '<div class="li-detail">' +
@@ -6098,8 +6096,11 @@
             '</div>';
           return;
         }
+        var isActiveCol = String(cid) === String(state.listTab || '');
+        if (!state.listTab && (list.columns[0] && String(list.columns[0].id) === String(cid))) isActiveCol = true;
         html +=
           '<div class="list-col' + (isClassic ? ' list-col-classic' : '') + (String(cid) === 'personal' ? ' list-col-personal' : '') +
+            (isActiveCol ? ' is-active-col' : '') +
             '" data-col-kind="' + esc(cid) + '" draggable="false" ' +
             'style="--col-font:' + esc(colors.font) + ';--col-tab:' + esc(colors.tab) + ';--col-bg:' + esc(colors.bg) + ';">' +
             '<div class="list-col-head' + (isClassic ? ' list-col-head-classic' : '') + '" style="background:' + esc(isClassic ? 'linear-gradient(180deg,#3a3420,#2a2418)' : colors.tab) + ';">' +
@@ -8230,73 +8231,140 @@
       }
     }
 
-    function isDragHandleEvent(e) {
-      var t = e.target;
-      if (!t || !t.closest) return null;
-      var handle = t.closest('[data-act="drag"]');
-      if (!handle) return null;
-      var row = handle.closest('.list-item');
-      if (!row) return null;
-      if (!handle.closest('#ev-list, #lists-active, #mobile-list-sheet, .list-col-body, .list-triad, #mls-body')) {
-        return null;
+    var _pressTimer = null;
+    var _pressCandidate = null;
+    var ROW_HOLD_MS = 300;
+    var ROW_HOLD_SLOP = 12;
+
+    function clearPressCandidate() {
+      if (_pressTimer) {
+        try { clearTimeout(_pressTimer); } catch (eT) {}
+        _pressTimer = null;
       }
-      return { handle: handle, row: row };
+      _pressCandidate = null;
     }
 
-    // --- Pointer events (desktop + modern mobile) ---
+    function isListRowHost(el) {
+      return !!(el && el.closest &&
+        el.closest('#ev-list, #lists-active, #mobile-list-sheet, .list-col-body, .list-triad, #mls-body'));
+    }
+
+    /** Hold-and-drag: press anywhere on the row (not buttons/inputs/detail). */
+    function isRowHoldTarget(e) {
+      var t = e.target;
+      if (!t || !t.closest) return null;
+      if (t.closest('button, input, select, textarea, a, label, .li-detail, .li-actions')) return null;
+      var row = t.closest('.list-item');
+      if (!row) return null;
+      if (!isListRowHost(row)) return null;
+      // Expanded detail edits should not start a drag
+      if (row.classList.contains('is-expanded') && t.closest('.li-detail')) return null;
+      return { handle: row, row: row };
+    }
+
+    function startHoldThenDrag(hit, xy, pointerId, e) {
+      clearPressCandidate();
+      _pressCandidate = {
+        handle: hit.handle,
+        row: hit.row,
+        startX: xy.x || 0,
+        startY: xy.y || 0,
+        pointerId: pointerId
+      };
+      _pressTimer = setTimeout(function () {
+        var cand = _pressCandidate;
+        _pressTimer = null;
+        _pressCandidate = null;
+        if (!cand || !cand.row || !cand.row.isConnected) return;
+        beginDrag(cand.handle, cand.row, { x: cand.startX, y: cand.startY }, cand.pointerId);
+        try {
+          if (cand.handle.setPointerCapture && cand.pointerId != null && cand.pointerId !== 'touch') {
+            cand.handle.setPointerCapture(cand.pointerId);
+          }
+        } catch (err) {}
+        // prevent the synthetic click that follows a long-press
+        state._suppressItemClick = true;
+        setTimeout(function () { state._suppressItemClick = false; }, 200);
+      }, ROW_HOLD_MS);
+    }
+
+    // --- Pointer events (desktop + modern mobile): hold row → drag ---
     document.addEventListener('pointerdown', function (e) {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
-      var hit = isDragHandleEvent(e);
+      var hit = isRowHoldTarget(e);
       if (!hit) return;
-      e.preventDefault();
-      e.stopPropagation();
-      var xy = clientXY(e);
-      beginDrag(hit.handle, hit.row, xy, e.pointerId);
-      try { hit.handle.setPointerCapture(e.pointerId); } catch (err) {}
-    }, { capture: true, passive: false });
+      startHoldThenDrag(hit, clientXY(e), e.pointerId, e);
+    }, { capture: true, passive: true });
 
     document.addEventListener('pointermove', function (e) {
+      if (_pressCandidate) {
+        if (_pressCandidate.pointerId != null && e.pointerId != null && e.pointerId !== _pressCandidate.pointerId) return;
+        var xy0 = clientXY(e);
+        var dx0 = (xy0.x || 0) - _pressCandidate.startX;
+        var dy0 = (xy0.y || 0) - _pressCandidate.startY;
+        // Finger moved before hold completed → user is scrolling; cancel drag arm
+        if (Math.abs(dx0) > ROW_HOLD_SLOP || Math.abs(dy0) > ROW_HOLD_SLOP) {
+          clearPressCandidate();
+        }
+        return;
+      }
       if (!_dragState) return;
       if (_dragState.pointerId != null && e.pointerId != null && e.pointerId !== _dragState.pointerId) return;
       moveDrag(clientXY(e), e);
     }, { capture: true, passive: false });
 
     function onPointerEnd(e) {
+      if (_pressCandidate) {
+        if (_pressCandidate.pointerId != null && e.pointerId != null && e.pointerId !== _pressCandidate.pointerId) return;
+        clearPressCandidate();
+        return;
+      }
       if (!_dragState) return;
       if (_dragState.pointerId != null && e.pointerId != null && e.pointerId !== _dragState.pointerId) return;
       try {
-        if (_dragState.handle) _dragState.handle.releasePointerCapture(e.pointerId);
+        if (_dragState.handle && _dragState.handle.releasePointerCapture) {
+          _dragState.handle.releasePointerCapture(e.pointerId);
+        }
       } catch (errR) {}
       endDrag(clientXY(e), false);
     }
     document.addEventListener('pointerup', onPointerEnd, { capture: true, passive: false });
     document.addEventListener('pointercancel', function (e) {
+      clearPressCandidate();
       if (!_dragState) return;
       endDrag(null, true);
     }, { capture: true, passive: false });
 
     // --- Touch fallback (older iOS / when pointer events flake) ---
     document.addEventListener('touchstart', function (e) {
-      if (_dragState) return; // pointer path already active
-      var hit = isDragHandleEvent(e);
+      if (_dragState || _pressCandidate) return;
+      var hit = isRowHoldTarget(e);
       if (!hit) return;
-      e.preventDefault();
-      e.stopPropagation();
-      beginDrag(hit.handle, hit.row, clientXY(e), 'touch');
-    }, { capture: true, passive: false });
+      startHoldThenDrag(hit, clientXY(e), 'touch', e);
+    }, { capture: true, passive: true });
 
     document.addEventListener('touchmove', function (e) {
+      if (_pressCandidate) {
+        var xy1 = clientXY(e);
+        var dx1 = (xy1.x || 0) - _pressCandidate.startX;
+        var dy1 = (xy1.y || 0) - _pressCandidate.startY;
+        if (Math.abs(dx1) > ROW_HOLD_SLOP || Math.abs(dy1) > ROW_HOLD_SLOP) {
+          clearPressCandidate();
+        }
+        return;
+      }
       if (!_dragState) return;
       moveDrag(clientXY(e), e);
     }, { capture: true, passive: false });
 
     document.addEventListener('touchend', function (e) {
-      // Always finish if still active (iOS may skip pointerup)
+      if (_pressCandidate) { clearPressCandidate(); return; }
       if (!_dragState) return;
       endDrag(clientXY(e), false);
     }, { capture: true, passive: false });
 
     document.addEventListener('touchcancel', function () {
+      clearPressCandidate();
       if (!_dragState) return;
       endDrag(null, true);
     }, { capture: true, passive: false });

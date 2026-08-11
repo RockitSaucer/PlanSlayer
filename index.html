@@ -1732,7 +1732,30 @@
       overflow-y: hidden;
     }
     @media (max-width: 900px) {
-      .list-triad { flex-direction: column; min-height: 360px; overflow-y: auto; }
+      /* Single active section + tabs (mobile) — hide other columns */
+      .list-triad {
+        flex-direction: column;
+        min-height: 280px;
+        overflow-y: auto;
+        overflow-x: hidden;
+      }
+      .list-triad .list-col:not(.is-active-col) {
+        display: none !important;
+      }
+      .list-triad .list-col.is-active-col {
+        flex: 1 1 auto !important;
+        min-width: 100% !important;
+        max-width: 100% !important;
+        width: 100% !important;
+        height: auto !important;
+        min-height: 260px;
+      }
+      .list-triad .list-col.is-active-col .list-col-head {
+        min-height: 36px !important;
+        padding: 4px 6px !important;
+      }
+      .list-item .li-actions .btn { padding: 4px 6px !important; font-size: 11px !important; }
+      .list-item .li-actions .btn-got { font-size: 11px !important; }
     }
     .list-col {
       background: var(--col-bg, var(--bg));
@@ -3111,20 +3134,66 @@
     }
     .li-title {
       font-weight: 750 !important;
-      font-size: 32px !important; /* ~2× previous 16–18px */
-      line-height: 1.15 !important;
+      /* Scale to fit: larger when room, never clip below ~11px (#54) */
+      font-size: clamp(11px, 2.4vw + 0.35rem, 18px) !important;
+      line-height: 1.2 !important;
       letter-spacing: 0.01em;
       font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif !important;
       text-shadow: 0 1px 2px rgba(0,0,0,0.55);
       text-rendering: optimizeLegibility;
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
-      flex: 0 1 auto;
+      flex: 1 1 auto;
       min-width: 0;
+      max-width: 100%;
       overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      white-space: normal;
     }
+    @media (min-width: 901px) {
+      .li-title {
+        font-size: clamp(12px, 1.1vw + 0.45rem, 17px) !important;
+      }
+    }
+    /* Desktop: slightly smaller list chrome so titles get more room */
+    @media (min-width: 901px) {
+      #lists-head-actions .btn,
+      #qualifier-filters .filter-chip,
+      .filter-row .btn {
+        padding: 4px 8px !important;
+        font-size: 11px !important;
+      }
+      .list-col-head-classic,
+      .list-col[data-col-kind="todo"] .list-col-head,
+      .list-col[data-col-kind="buy"] .list-col-head,
+      .list-col[data-col-kind="bring"] .list-col-head {
+        min-height: 36px !important;
+      }
+      .list-col-title-classic,
+      .list-col-classic .list-col-title,
+      .list-col[data-col-kind="todo"] .list-col-title,
+      .list-col[data-col-kind="buy"] .list-col-title,
+      .list-col[data-col-kind="bring"] .list-col-title {
+        font-size: 14px !important;
+      }
+    }
+    /* Hold-to-drag affordance (no separate Move/⋮⋮ button) */
+    .list-item .li-face,
+    .list-item .li-main {
+      touch-action: pan-y;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    body.ps-list-dragging {
+      cursor: grabbing !important;
+      user-select: none !important;
+      -webkit-user-select: none !important;
+    }
+    body.ps-list-dragging .list-item { cursor: grabbing; }
     .event-card.is-active {
       outline: 2px solid var(--accent);
       border-color: rgba(229,154,24,0.55);
@@ -3702,7 +3771,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.39</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.40</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">

@@ -1,0 +1,10 @@
+PlanSlayer V1.3.31 — Share in Edit list/event + mobile list share
+
+- Share button inside Edit list and Edit event modals (invite code / add members)
+- Mobile list sheet: Share next to Close
+  · This section only (current tab, e.g. To do)
+  · All sections (To do, To buy, To bring, customs)
+  · Invite code / add members
+- Uses native share sheet when available, else copy to clipboard
+
+Shell: plan-slayer-shell-v64

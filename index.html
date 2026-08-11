@@ -3264,6 +3264,14 @@
     #expense-modal {
       z-index: 25000 !important;
     }
+    /* Share this-section / all-sections above mobile list sheet */
+    #share-scope-modal {
+      z-index: 25500 !important;
+    }
+    #share-people-chooser,
+    #share-people-members {
+      z-index: 26000 !important;
+    }
     /* Confirm / alert / prompt always above edit/create modals */
     #app-confirm-modal, #app-alert-modal, #app-prompt-modal {
       z-index: 30000 !important;
@@ -3372,11 +3380,20 @@
       white-space: nowrap;
       padding-right: 4px;
     }
-    #mls-close {
+    .mls-head-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
       flex: 0 0 auto;
       margin-left: auto;
       order: 2;
       z-index: 3;
+    }
+    #mls-share {
+      flex: 0 0 auto;
+    }
+    #mls-close {
+      flex: 0 0 auto;
     }
     /* Section tabs — own row fully below the title (never under list name) */
     .mls-tabs {
@@ -3560,7 +3577,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.30</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.31</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -4167,10 +4184,33 @@
   <div class="mobile-list-sheet" id="mobile-list-sheet" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="mls-title">
     <div class="mls-head">
       <h3 id="mls-title">List</h3>
-      <button type="button" class="btn" id="mls-close" aria-label="Close list">Close</button>
+      <div class="mls-head-actions">
+        <button type="button" class="btn btn-accent" id="mls-share" title="Share list">Share</button>
+        <button type="button" class="btn" id="mls-close" aria-label="Close list">Close</button>
+      </div>
     </div>
     <div class="mls-tabs" id="mls-tabs" role="tablist" aria-label="List sections"></div>
     <div class="mls-body" id="mls-body"></div>
+  </div>
+
+  <!-- Mobile / list: share this section vs all sections -->
+  <div class="modal-overlay" id="share-scope-modal" aria-hidden="true">
+    <div class="modal" role="dialog" style="max-width:360px">
+      <h3 id="share-scope-title">Share list</h3>
+      <p class="muted" id="share-scope-sub" style="font-size:12px;margin:0 0 12px">What do you want to share?</p>
+      <div class="modal-actions" style="flex-direction:column;align-items:stretch;gap:8px">
+        <button type="button" class="btn btn-primary" id="share-scope-section" style="width:100%;text-align:left;padding:12px 14px">
+          <strong id="share-scope-section-label" style="display:block;font-size:14px">This section only</strong>
+          <span class="muted" style="font-size:11px;font-weight:600">Just the tab you’re viewing (e.g. To do)</span>
+        </button>
+        <button type="button" class="btn btn-accent" id="share-scope-all" style="width:100%;text-align:left;padding:12px 14px">
+          <strong style="display:block;font-size:14px">All sections</strong>
+          <span class="muted" style="font-size:11px;font-weight:600">To do, To buy, To bring, and any custom sections</span>
+        </button>
+        <button type="button" class="btn" id="share-scope-invite" style="width:100%">Invite code / add members</button>
+        <button type="button" class="btn" id="share-scope-cancel" style="width:100%">Cancel</button>
+      </div>
+    </div>
   </div>
 
   <!-- In-app dialogs (no browser alert/confirm/prompt) -->
@@ -4311,8 +4351,9 @@
           <button type="button" class="btn" id="edit-list-merge-go" style="width:100%;margin-top:4px">Merge now</button>
         </div>
       </div>
-      <div class="modal-actions">
+      <div class="modal-actions" style="flex-wrap:wrap;gap:8px">
         <button type="button" class="btn" style="color:#fca5a5;border-color:rgba(252,165,165,0.4)" id="edit-list-delete">Delete list</button>
+        <button type="button" class="btn btn-accent" id="edit-list-share" title="Share this list">Share</button>
         <button type="button" class="btn" id="edit-list-cancel">Cancel</button>
         <button type="button" class="btn btn-primary" id="edit-list-save">Save</button>
       </div>
@@ -4411,6 +4452,7 @@
       </div>
       <div class="modal-actions" style="flex-wrap:wrap;gap:8px">
         <button type="button" class="btn" style="color:#fca5a5;border-color:rgba(252,165,165,0.4)" id="edit-ev-delete">Delete event</button>
+        <button type="button" class="btn btn-accent" id="edit-ev-share" title="Share this event">Share</button>
         <button type="button" class="btn" id="edit-ev-cancel">Cancel</button>
         <button type="button" class="btn btn-primary" id="edit-ev-save">Save</button>
       </div>

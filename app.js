@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.30';
+  var APP_VERSION = '1.3.31';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -6721,14 +6721,91 @@
   }
 
   function listAsText(bucket, kind) {
-    var lines = [(kind === 'todo' ? 'To Do' : kind === 'buy' ? 'To Buy' : 'To Bring') + ':'];
+    var heading = listKindLabel(kind) || String(kind || 'List');
+    var lines = [heading + ':'];
     (bucket || []).forEach(function (it) {
-      var c = claimsFilled(it);
+      if (!it) return;
+      var c = { total: 0, need: Math.max(1, Number(it.qty) || 1) };
+      try { c = claimsFilled(it); } catch (eC) {}
       var mark = c.total >= c.need ? '[x]' : '[ ]';
       lines.push(mark + ' ' + (it.title || 'Item') + (it.qty > 1 ? ' ×' + it.qty : ''));
       if (it.notes) lines.push('    note: ' + it.notes);
     });
+    if (lines.length === 1) lines.push('(empty)');
     return lines.join('\n');
+  }
+  /** One column of a named list as plain text */
+  function listSectionAsText(list, colId) {
+    if (!list) return '';
+    try { sanitizeNamedList(list); } catch (e) {}
+    var col = getListColumn(list, colId);
+    var items = (col && col.items) || [];
+    var heading = (col && col.name) || listKindLabel(colId) || 'Section';
+    var title = (list.name || 'List') + ' · ' + heading;
+    return title + '\n\n' + listAsText(items, colId || heading);
+  }
+  /** Full named list: all sections except private My checklist */
+  function fullListAsText(list) {
+    if (!list) return '';
+    try { sanitizeNamedList(list); } catch (e) {}
+    var parts = [list.name || 'List'];
+    (list.columns || []).forEach(function (c) {
+      if (!c || String(c.id) === 'personal') return;
+      parts.push('');
+      parts.push(listAsText(c.items || [], c.id));
+    });
+    return parts.join('\n');
+  }
+  /** Copy or native-share text (mobile prefers share sheet when available) */
+  function shareOrCopyText(text, title) {
+    text = String(text || '').trim();
+    if (!text) {
+      appToast('Nothing to share yet');
+      return Promise.resolve(false);
+    }
+    title = title || 'Plan Slayer list';
+    if (navigator.share) {
+      return navigator.share({ title: title, text: text }).then(function () {
+        return true;
+      }).catch(function (err) {
+        // User cancelled share sheet — don't fall through as error spam
+        if (err && (err.name === 'AbortError' || err.name === 'NotAllowedError')) return false;
+        return copyText(text);
+      });
+    }
+    return copyText(text);
+  }
+  var _shareScopeCtx = { listId: null, colId: null };
+  function openShareScopeModal(list, colId) {
+    if (!list) {
+      appToast('Open a list first');
+      return;
+    }
+    try { sanitizeNamedList(list); } catch (e) {}
+    var col = colId ? getListColumn(list, colId) : null;
+    if (!col) {
+      colId = state.listTab || (list.columns[0] && list.columns[0].id) || 'todo';
+      col = getListColumn(list, colId);
+    }
+    _shareScopeCtx = { listId: list.id, colId: colId };
+    var secName = (col && col.name) || listKindLabel(colId) || 'This section';
+    if ($('share-scope-title')) $('share-scope-title').textContent = 'Share · ' + (list.name || 'List');
+    if ($('share-scope-sub')) {
+      $('share-scope-sub').textContent = 'Send the section you’re viewing, or the whole pack.';
+    }
+    if ($('share-scope-section-label')) {
+      $('share-scope-section-label').textContent = 'This section only · ' + secName;
+    }
+    if ($('share-scope-modal')) {
+      $('share-scope-modal').classList.add('is-open');
+      $('share-scope-modal').setAttribute('aria-hidden', 'false');
+    }
+  }
+  function closeShareScopeModal() {
+    if ($('share-scope-modal')) {
+      $('share-scope-modal').classList.remove('is-open');
+      $('share-scope-modal').setAttribute('aria-hidden', 'true');
+    }
   }
 
   function copyText(text) {
@@ -10415,6 +10492,27 @@
       deleteActiveEvent();
     });
     click('edit-list-cancel', closeEditListModal);
+    click('edit-list-share', function () {
+      var list = findNamedListById(state.activeNamedListId) || resolveOpenNamedList(null);
+      // Prefer list being edited if id is on modal context
+      if (!list && state.activeNamedListId) list = findNamedListById(state.activeNamedListId);
+      if (!list) { appToast('No list to share'); return; }
+      // Close edit first so share sits on top
+      try { closeEditListModal(); } catch (e) {}
+      openSharePeopleChooser('list', list.id);
+    });
+    click('edit-ev-share', function () {
+      var ev = activeEvent();
+      if (!ev && state.activeEventId) ev = findEventById(state.activeEventId);
+      if (!ev) { appToast('No event to share'); return; }
+      try {
+        if ($('edit-event-modal')) {
+          $('edit-event-modal').classList.remove('is-open');
+          $('edit-event-modal').setAttribute('aria-hidden', 'true');
+        }
+      } catch (e) {}
+      openSharePeopleChooser('event', ev.id);
+    });
     click('edit-list-add-people', function () {
       var list = findNamedListById(state.activeNamedListId);
       if (!list) return;
@@ -11436,6 +11534,42 @@
     });
     // Mobile list sheet
     click('mls-close', function () { closeMobileListSheet(true); });
+    click('mls-share', function () {
+      var list = resolveOpenNamedList(null) || findNamedListById(state.activeNamedListId);
+      if (!list) { appToast('Open a list first'); return; }
+      openShareScopeModal(list, state.listTab || 'todo');
+    });
+    click('share-scope-cancel', closeShareScopeModal);
+    on('share-scope-modal', 'click', function (e) {
+      if (e.target === $('share-scope-modal')) closeShareScopeModal();
+    });
+    click('share-scope-section', function () {
+      var list = findNamedListById(_shareScopeCtx.listId);
+      if (!list) { appToast('List not found'); return; }
+      var colId = _shareScopeCtx.colId || state.listTab || 'todo';
+      var text = listSectionAsText(list, colId);
+      var col = getListColumn(list, colId);
+      var title = (list.name || 'List') + ' · ' + ((col && col.name) || listKindLabel(colId));
+      closeShareScopeModal();
+      shareOrCopyText(text, title).then(function (ok) {
+        appToast(ok ? ('Shared “' + ((col && col.name) || listKindLabel(colId)) + '”') : 'Could not share');
+      });
+    });
+    click('share-scope-all', function () {
+      var list = findNamedListById(_shareScopeCtx.listId);
+      if (!list) { appToast('List not found'); return; }
+      var text = fullListAsText(list);
+      closeShareScopeModal();
+      shareOrCopyText(text, list.name || 'List').then(function (ok) {
+        appToast(ok ? 'Shared all sections' : 'Could not share');
+      });
+    });
+    click('share-scope-invite', function () {
+      var list = findNamedListById(_shareScopeCtx.listId);
+      closeShareScopeModal();
+      if (!list) { appToast('List not found'); return; }
+      openSharePeopleChooser('list', list.id);
+    });
     on('mls-tabs', 'click', function (e) {
       var t = e.target.closest && e.target.closest('[data-mls-tab]');
       if (!t) return;

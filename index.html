@@ -596,13 +596,22 @@
       flex-wrap: wrap;
     }
     .plan-cal-events-title {
-      font-size: 12px;
+      font-size: 18px;
       font-weight: 900;
       color: var(--accent);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
+      text-transform: none;
+      letter-spacing: 0.02em;
       width: 100%;
-      margin: 0 0 8px;
+      margin: 0 0 10px;
+      line-height: 1.2;
+    }
+    .section-label.section-label-lists {
+      font-size: 16px;
+      font-weight: 900;
+      color: var(--ink);
+      text-transform: none;
+      letter-spacing: 0.02em;
+      margin: 4px 0 8px;
     }
     /* Show events / Show chores selector (Hunt Public/Private style) */
     .cal-mode-switch {
@@ -705,6 +714,14 @@
     .left-events .section-label {
       margin: 10px 0 6px; font-size: 11px; font-weight: 800; color: var(--muted);
       text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .left-events .section-label.section-label-lists {
+      font-size: 16px;
+      font-weight: 900;
+      color: var(--ink);
+      text-transform: none;
+      letter-spacing: 0.02em;
+      margin: 6px 0 8px;
     }
     .event-linked-lists { margin: 4px 0 10px 8px; display: flex; flex-direction: column; gap: 4px; }
     .event-linked-lists .my-list-row { padding: 8px 10px; font-size: 12px; }
@@ -3522,7 +3539,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.25</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.26</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -3603,7 +3620,7 @@
                 <div class="calendar-grid" id="side-cal-grid" role="grid" aria-label="Event calendar"></div>
               </div>
               <div class="plan-cal-events-header-card" id="plan-cal-events-header">
-                <div class="plan-cal-events-title" id="events-title-date">Trips and Events</div>
+                <div class="plan-cal-events-title" id="events-title-date">Events</div>
                 <div class="plan-cal-events-head">
                   <div class="cal-mode-switch" role="group" aria-label="Calendar list mode">
                     <button type="button" class="cal-mode-btn is-active" data-cal-mode="events">Events</button>

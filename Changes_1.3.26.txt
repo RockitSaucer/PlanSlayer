@@ -1,0 +1,10 @@
+PlanSlayer V1.3.26 — Chore calendar store + labels
+
+- Chores always dual-written to plan_slayer_standalone_chores_v1 (calendar source of truth)
+  so dots + Chores list no longer depend on list-pack shape alone
+- Store plain chore_ymd for reliable day matching (no TZ off-by-one)
+- After Save: switch to Chores, clear day filter, re-render
+- Labels: “Personal lists” (larger) above personal lists
+- Events / Chores title above the switch is larger (18px)
+
+Shell: plan-slayer-shell-v59

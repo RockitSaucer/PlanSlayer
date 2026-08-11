@@ -1,0 +1,8 @@
+PlanSlayer V1.3.25 — Chore options: single-screen Save/Cancel
+
+- Removed multi-step day → start → end wizard
+- Day, start time, and end time all visible at once
+- Save (enabled after a day is selected) + Cancel
+- Clear only when editing an existing chore from the Chores list (or re-edit)
+
+Shell: plan-slayer-shell-v58

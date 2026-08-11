@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.24';
+  var APP_VERSION = '1.3.25';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -1768,31 +1768,34 @@
     savePrivateChecklist(list.id, items);
   }
 
-  function setChoreWhenStep(step) {
-    state.choreWhen.step = step || 'day';
-    var cal = $('chore-when-cal-step');
-    var st = $('chore-when-start-step');
-    var en = $('chore-when-end-step');
-    var lab = $('chore-when-step-label');
-    if (cal) cal.style.display = step === 'day' ? '' : 'none';
-    if (st) st.style.display = step === 'start' ? '' : 'none';
-    if (en) en.style.display = step === 'end' ? '' : 'none';
-    if (lab) {
-      if (step === 'day') lab.textContent = 'Pick a day (required)';
-      else if (step === 'start') lab.textContent = 'Start time is optional — skip or set one';
-      else lab.textContent = 'End time is optional — skip or set one';
-    }
-    updateChoreWhenSummary();
-  }
   function updateChoreWhenSummary() {
     var el = $('chore-when-summary');
     if (!el) return;
-    var c = state.choreWhen;
-    if (!c.date) { el.textContent = ''; return; }
+    var c = state.choreWhen || {};
+    var startVal = ($('chore-when-start') && $('chore-when-start').value) || c.start || '';
+    var endVal = ($('chore-when-end') && $('chore-when-end').value) || c.end || '';
+    if (!c.date) {
+      el.textContent = 'Select a day to enable Save';
+      return;
+    }
     var bits = [c.date];
-    if (c.start) bits.push('start ' + c.start);
-    if (c.end) bits.push('end ' + c.end);
+    if (startVal) bits.push(startVal);
+    if (endVal) bits.push('– ' + endVal);
     el.textContent = 'Selected: ' + bits.join(' · ');
+  }
+  function syncChoreWhenSaveEnabled() {
+    var saveBtn = $('chore-when-save');
+    if (!saveBtn) return;
+    var hasDay = !!(state.choreWhen && state.choreWhen.date);
+    saveBtn.disabled = !hasDay;
+    saveBtn.title = hasDay ? 'Save chore schedule' : 'Pick a day first';
+    updateChoreWhenSummary();
+  }
+  function syncChoreWhenClearVisible() {
+    var clearBtn = $('chore-when-clear');
+    if (!clearBtn) return;
+    // Clear only when editing an existing scheduled chore (e.g. from Chores list)
+    clearBtn.style.display = (state.choreWhen && state.choreWhen.hasExistingSchedule) ? '' : 'none';
   }
   function renderChoreWhenGrid() {
     var c = state.choreWhen;
@@ -1856,12 +1859,14 @@
     var linkWrap = $('chore-when-link-wrap');
     var isStandalone = c.mode === 'standalone' || !c.itemId;
     if (titleEl) {
-      titleEl.textContent = isStandalone ? 'Schedule chore' : 'Chore options';
+      titleEl.textContent = isStandalone
+        ? (c.hasExistingSchedule ? 'Edit chore' : 'Schedule chore')
+        : 'Chore options';
     }
     if (stepLabel) {
       stepLabel.textContent = isStandalone
-        ? 'Name · day · color (list item optional)'
-        : (c.title ? (c.title + ' · pick day & color') : 'Pick day · color · show on calendar');
+        ? 'Name · day · start/end · Save'
+        : (c.title ? (c.title + ' · day · start/end · Save') : 'Day · start/end · Save');
     }
     if (titleField) {
       titleField.value = c.title || '';
@@ -1871,6 +1876,8 @@
     if (titleFieldWrap) titleFieldWrap.style.display = isStandalone ? '' : 'none';
     if (linkWrap) linkWrap.style.display = isStandalone ? '' : 'none';
     if (isStandalone) fillChoreLinkSelect(c.linkItemKey || '');
+    syncChoreWhenClearVisible();
+    syncChoreWhenSaveEnabled();
   }
   /**
    * Open chore builder.
@@ -1932,6 +1939,11 @@
     if (!seedDate && state.sideCal && state.sideCal.selectedDay) {
       seedDate = state.sideCal.selectedDay;
     }
+    // Existing schedule → show Clear (from Chores list / re-edit). New schedule → no Clear.
+    var hasExisting = !!(seedDate && (item || standaloneId || extra.fromChoresList));
+    if (extra.fromChoresList) hasExisting = true;
+    if (item && item.chore_at) hasExisting = true;
+    if (standaloneId) hasExisting = true;
     state.choreWhen = {
       itemId: item ? item.id : null,
       kind: kind || null,
@@ -1941,7 +1953,7 @@
       standaloneId: standaloneId,
       title: seedTitle,
       linkItemKey: linkKey,
-      step: 'day',
+      step: 'all',
       y: 0,
       m: 0,
       date: seedDate,
@@ -1949,7 +1961,9 @@
       end: seedEnd,
       color: seedColor,
       showOnCalendar: seedShow,
-      mode: item ? 'item' : 'standalone'
+      mode: item ? 'item' : 'standalone',
+      hasExistingSchedule: hasExisting,
+      fromChoresList: !!extra.fromChoresList
     };
     if (state.choreWhen.date) {
       try {
@@ -1962,12 +1976,12 @@
       state.choreWhen.y = n.getFullYear();
       state.choreWhen.m = n.getMonth();
     }
-    if ($('chore-when-start')) $('chore-when-start').value = state.choreWhen.start || '09:00';
+    // Leave times blank unless already scheduled (optional fields)
+    if ($('chore-when-start')) $('chore-when-start').value = state.choreWhen.start || '';
     if ($('chore-when-end')) $('chore-when-end').value = state.choreWhen.end || '';
     if ($('chore-when-show-cal')) $('chore-when-show-cal').checked = state.choreWhen.showOnCalendar !== false;
     renderChoreColorPickers(state.choreWhen.color);
     syncChoreModalChrome();
-    setChoreWhenStep('day');
     renderChoreWhenGrid();
     if ($('chore-when-modal')) {
       $('chore-when-modal').classList.add('is-open');
@@ -1979,7 +1993,8 @@
     opts = opts || {};
     openChoreWhenPicker(null, null, null, {
       title: opts.title || '',
-      standaloneId: opts.standaloneId || null
+      standaloneId: opts.standaloneId || null,
+      fromChoresList: !!opts.fromChoresList
     });
   }
   function renderChoreColorPickers(selected) {
@@ -1994,8 +2009,9 @@
     state.choreWhen = {
       itemId: null, kind: null, scope: null, listId: null, colId: null,
       standaloneId: null, title: '', linkItemKey: '',
-      step: 'day', y: 0, m: 0, date: null, start: '', end: '',
-      color: DEFAULT_CHORE_COLOR, showOnCalendar: true, mode: 'item'
+      step: 'all', y: 0, m: 0, date: null, start: '', end: '',
+      color: DEFAULT_CHORE_COLOR, showOnCalendar: true, mode: 'item',
+      hasExistingSchedule: false, fromChoresList: false
     };
   }
   function readChoreWhenFormIntoState() {
@@ -10431,7 +10447,7 @@
       renderSideCalendar();
       renderCalendarEventsList();
     });
-    // Chore when picker
+    // Chore options — single screen: day + start/end + Save/Cancel (Clear only when editing)
     click('chore-when-cancel', closeChoreWhenPicker);
     on('chore-when-modal', 'click', function (e) {
       if (e.target === $('chore-when-modal')) closeChoreWhenPicker();
@@ -10451,32 +10467,20 @@
       if (!b) return;
       state.choreWhen.date = b.getAttribute('data-chore-day');
       renderChoreWhenGrid();
+      syncChoreWhenSaveEnabled();
+    });
+    on('chore-when-start', 'input', function () {
+      if (state.choreWhen) state.choreWhen.start = this.value || '';
       updateChoreWhenSummary();
-      setChoreWhenStep('start');
     });
-    click('chore-when-skip-start', function () {
-      state.choreWhen.start = '';
-      if ($('chore-when-start')) $('chore-when-start').value = '';
-      setChoreWhenStep('end');
-    });
-    click('chore-when-next-start', function () {
-      state.choreWhen.start = ($('chore-when-start') && $('chore-when-start').value) || '';
-      setChoreWhenStep('end');
-    });
-    click('chore-when-skip-end', function () {
-      state.choreWhen.end = '';
-      if ($('chore-when-end')) $('chore-when-end').value = '';
-      finishChoreWhenSave(false);
-    });
-    click('chore-when-done', function () {
-      state.choreWhen.end = ($('chore-when-end') && $('chore-when-end').value) || '';
-      finishChoreWhenSave(false);
+    on('chore-when-end', 'input', function () {
+      if (state.choreWhen) state.choreWhen.end = this.value || '';
+      updateChoreWhenSummary();
     });
     function finishChoreWhenSave(clear) {
       readChoreWhenFormIntoState();
       if (!clear && !state.choreWhen.date) {
         appToast('Pick a day first');
-        setChoreWhenStep('day');
         return;
       }
       // Standalone needs a name (or a linked list item)
@@ -10491,13 +10495,18 @@
       }
       if (applyChoreWhenToItem(!!clear)) {
         closeChoreWhenPicker();
-        appToast(clear ? 'Chore schedule cleared' : 'Chore scheduled');
+        appToast(clear ? 'Chore schedule cleared' : 'Chore saved');
         render();
       } else {
         appToast(clear ? 'Could not clear chore' : 'Could not save chore — try again');
       }
     }
+    click('chore-when-save', function () {
+      finishChoreWhenSave(false);
+    });
     click('chore-when-clear', function () {
+      // Only available when editing an existing chore (Chores list / re-edit)
+      if (!(state.choreWhen && state.choreWhen.hasExistingSchedule)) return;
       finishChoreWhenSave(true);
     });
     on('chore-when-colors', 'click', function (e) {
@@ -11213,7 +11222,7 @@
         e.preventDefault();
         e.stopPropagation();
         var sid = openStand.getAttribute('data-open-standalone-chore');
-        if (sid) openScheduleChoreBuilder({ standaloneId: sid });
+        if (sid) openScheduleChoreBuilder({ standaloneId: sid, fromChoresList: true });
         return;
       }
       var openCh = e.target.closest && e.target.closest('[data-open-chore]');
@@ -11222,11 +11231,11 @@
         e.stopPropagation();
         var lidCh = openCh.getAttribute('data-open-chore');
         var iidCh = openCh.getAttribute('data-chore-item');
-        // Prefer reopening chore options directly
+        // Prefer reopening chore options directly (from Chores list → show Clear)
         if (iidCh) {
           var foundCh = findItemAcrossNamedLists(iidCh);
           if (foundCh && foundCh.item) {
-            openChoreWhenPicker(foundCh.item, foundCh.colId || 'todo', 'free-list');
+            openChoreWhenPicker(foundCh.item, foundCh.colId || 'todo', 'free-list', { fromChoresList: true });
             return;
           }
         }
@@ -12238,7 +12247,7 @@
         ev.preventDefault();
         ev.stopPropagation();
         var sid2 = openStand2.getAttribute('data-open-standalone-chore');
-        if (sid2) openScheduleChoreBuilder({ standaloneId: sid2 });
+        if (sid2) openScheduleChoreBuilder({ standaloneId: sid2, fromChoresList: true });
         return;
       }
       var openChore = ev.target.closest('[data-open-chore]');
@@ -12250,7 +12259,7 @@
         if (itemCh) {
           var foundCh2 = findItemAcrossNamedLists(itemCh);
           if (foundCh2 && foundCh2.item) {
-            openChoreWhenPicker(foundCh2.item, foundCh2.colId || 'todo', 'free-list');
+            openChoreWhenPicker(foundCh2.item, foundCh2.colId || 'todo', 'free-list', { fromChoresList: true });
             return;
           }
         }

@@ -1202,9 +1202,34 @@
       padding: 6px 10px;
       font-size: 12px;
     }
-    #chore-when-modal #chore-when-start-step,
-    #chore-when-modal #chore-when-end-step {
-      margin-top: 4px;
+    #chore-when-modal .chore-when-times {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      margin: 8px 0 0;
+      align-items: flex-end;
+    }
+    #chore-when-modal .chore-when-time-field {
+      margin: 0 !important;
+      flex: 1 1 8rem;
+      min-width: 7.5rem;
+    }
+    #chore-when-modal .chore-when-time-field input[type="time"] {
+      width: auto;
+      max-width: 12ch;
+      display: block;
+      margin: 0;
+      padding: 6px 8px;
+    }
+    #chore-when-modal .chore-when-actions {
+      align-items: center;
+    }
+    #chore-when-modal .chore-when-actions-spacer {
+      flex: 1 1 auto;
+    }
+    #chore-when-modal #chore-when-save:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
     }
     .chore-color-row {
       display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
@@ -3497,7 +3522,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.24</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.25</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -4026,11 +4051,11 @@
     </div>
   </div>
 
-  <!-- Schedule chore / Chore options — compact, no scroll -->
+  <!-- Schedule chore / Chore options — single screen: day + times + Save/Cancel -->
   <div class="modal-overlay" id="chore-when-modal" aria-hidden="true">
     <div class="modal modal-tight" role="dialog" aria-labelledby="chore-when-title">
       <h3 id="chore-when-title">Schedule chore</h3>
-      <p class="muted" id="chore-when-step-label">Pick a day · optional time · color</p>
+      <p class="muted" id="chore-when-step-label">Pick a day, set times, Save</p>
 
       <div class="field" id="chore-when-title-field">
         <label for="chore-when-title-input">Chore name</label>
@@ -4060,26 +4085,24 @@
         </div>
         <div class="cal-grid" id="chore-when-grid"></div>
       </div>
-      <div id="chore-when-start-step" style="display:none">
-        <label for="chore-when-start" style="font-size:11px">Start time <span class="muted">(optional)</span></label>
-        <input type="time" id="chore-when-start" value="09:00" style="width:auto;max-width:12ch;margin:4px 0 6px;display:block" />
-        <div class="modal-actions" style="justify-content:flex-start">
-          <button type="button" class="btn" id="chore-when-skip-start">Skip</button>
-          <button type="button" class="btn btn-primary" id="chore-when-next-start">Next</button>
+
+      <div class="chore-when-times" id="chore-when-times">
+        <div class="field chore-when-time-field">
+          <label for="chore-when-start">Start time <span class="muted">(optional)</span></label>
+          <input type="time" id="chore-when-start" value="" />
+        </div>
+        <div class="field chore-when-time-field">
+          <label for="chore-when-end">End time <span class="muted">(optional)</span></label>
+          <input type="time" id="chore-when-end" value="" />
         </div>
       </div>
-      <div id="chore-when-end-step" style="display:none">
-        <label for="chore-when-end" style="font-size:11px">End time <span class="muted">(optional)</span></label>
-        <input type="time" id="chore-when-end" value="" style="width:auto;max-width:12ch;margin:4px 0 6px;display:block" />
-        <div class="modal-actions" style="justify-content:flex-start">
-          <button type="button" class="btn" id="chore-when-skip-end">Skip end</button>
-          <button type="button" class="btn btn-primary" id="chore-when-done">Done</button>
-        </div>
-      </div>
+
       <p class="muted" id="chore-when-summary"></p>
-      <div class="modal-actions">
-        <button type="button" class="btn" id="chore-when-clear" style="color:#fca5a5;border-color:rgba(252,165,165,0.4)">Clear</button>
+      <div class="modal-actions chore-when-actions">
+        <button type="button" class="btn" id="chore-when-clear" style="display:none;color:#fca5a5;border-color:rgba(252,165,165,0.4)">Clear</button>
+        <span class="chore-when-actions-spacer"></span>
         <button type="button" class="btn" id="chore-when-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="chore-when-save">Save</button>
       </div>
     </div>
   </div>

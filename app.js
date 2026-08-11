@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.32';
+  var APP_VERSION = '1.3.33';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -448,16 +448,25 @@
         if (isBuyColumnKind(kind, list) || isBuyColumnKind(hit.colId, list)) {
           syncBuyGotToBringOnNamedList(list, hit.item, claimQty, hit.colId || kind);
         }
-        // Got it! on shared event pack → Personal {Event} list (e.g. Personal Gator)
+        // Got it! → Personal {Event/List} under Personal lists (always for packing packs)
         try {
           var colId = hit.colId || kind;
           if (String(colId) !== 'personal' && !isPersonalEventShadowList(list)) {
-            // Keep private checklist column on the shared pack too
-            ensurePersonalColumn(list);
-            syncClaimToPrivateChecklist(list, hit.item, claimQty, colId);
-            // Main request: personal list under My lists for this event
-            if (list.eventId) {
-              syncClaimToPersonalEventList(list, hit.item, claimQty, colId);
+            // Keep private checklist column on shared/event packs too
+            try {
+              if (listWantsPersonalChecklist(list) || list.eventId || activeEvent()) {
+                ensurePersonalColumn(list);
+                syncClaimToPrivateChecklist(list, hit.item, claimQty, colId);
+              }
+            } catch (ePc) {}
+            // Personal list (e.g. “Personal Gator”) — resolves event from list or active event
+            var pList = syncClaimToPersonalEventList(list, hit.item, claimQty, colId);
+            if (pList && claimQty > 0) {
+              try {
+                appToast('Added to ' + (pList.name || 'personal list'));
+              } catch (eT) {}
+            } else if (claimQty > 0 && !pList) {
+              console.warn('[PlanSlayer] Got it! did not create personal list', list.id, list.eventId);
             }
           }
         } catch (ePriv) {
@@ -643,7 +652,9 @@
           store.named = (store.named || []).filter(function (n) {
             if (!n) return false;
             if (String(n.id) === String(payload.id)) return false;
-            // Drop packs for the same event so they can't reappear under My lists
+            // Never delete Personal {Event} claim lists when a shared pack is deleted
+            if (n.isPersonalEventList || n.personalForEventId) return true;
+            // Drop other shared packs for the same event so they can't reappear
             if (payload.eventId && n.eventId && String(n.eventId) === String(payload.eventId)) {
               markTombstone('list', n.id);
               return false;
@@ -1383,8 +1394,11 @@
     }).filter(function (n) {
       if (!n || !n.id) return false;
       if (deadLists[String(n.id)]) return false;
-      // User deleted this event's packing list pack — keep it gone
-      if (n.eventId && deadEventLists[String(n.eventId)]) return false;
+      // User deleted this event's packing pack — drop shared packs only
+      // (never drop Personal {Event} claim lists)
+      if (n.eventId && deadEventLists[String(n.eventId)] && !n.isPersonalEventList && !n.personalForEventId) {
+        return false;
+      }
       return true;
     });
     return s;
@@ -2280,12 +2294,16 @@
       try {
         snapshot = sanitizeNamedList(JSON.parse(JSON.stringify(list)));
       } catch (eJ) {
-        // Manual minimal clone
+        // Manual minimal clone — preserve personal-for-event + expense flags
         snapshot = sanitizeNamedList({
           id: list.id,
           name: list.name,
           owner_id: list.owner_id,
           eventId: list.eventId || null,
+          personalForEventId: list.personalForEventId || null,
+          isPersonalEventList: !!list.isPersonalEventList,
+          showExpense: list.showExpense,
+          choreColor: list.choreColor || null,
           members: list.members || [],
           creators: list.creators || [],
           columns: (list.columns || []).map(function (c) {
@@ -2303,11 +2321,20 @@
           updated_at: list.updated_at
         });
       }
+      // Always re-attach flags sanitize may not know about
+      if (list.personalForEventId) snapshot.personalForEventId = String(list.personalForEventId);
+      if (list.isPersonalEventList) snapshot.isPersonalEventList = true;
+      if (list.showExpense != null) snapshot.showExpense = list.showExpense;
+      if (list.choreColor) snapshot.choreColor = list.choreColor;
       if (isTombstoned('list', snapshot.id)) return false;
+      // Never tombstone-skip personal claim lists on save
+      if (snapshot.isPersonalEventList || snapshot.personalForEventId) {
+        try { clearTombstone('list', snapshot.id); } catch (eT) {}
+      }
       var store = loadFreeListsStoreRaw();
+      if (!Array.isArray(store.named)) store.named = [];
       var deadLists = loadTombstones().lists;
-      var deadEventLists = loadTombstones().eventLists;
-      var idx = (store.named || []).findIndex(function (n) { return n && String(n.id) === String(snapshot.id); });
+      var idx = store.named.findIndex(function (n) { return n && String(n.id) === String(snapshot.id); });
       if (idx >= 0) store.named[idx] = snapshot;
       else store.named.push(snapshot);
       // Heal every other list too so store can't stay permanently broken
@@ -2315,9 +2342,9 @@
         try { return sanitizeNamedList(n); } catch (e) { return n; }
       }).filter(function (n) {
         if (!n || !n.id) return false;
+        // Keep personal-for-event lists even if something marked them dead by mistake
+        if (n.isPersonalEventList || n.personalForEventId) return true;
         if (deadLists[String(n.id)]) return false;
-        // Drop auto-packs for events whose list pack was intentionally deleted
-        // (only when this save isn't an explicit user re-link of a non-tombstoned list)
         return true;
       });
       var ok = saveJson(LOCAL_FREE_LISTS_KEY, store);
@@ -2453,8 +2480,11 @@
         var idx = (store.named || []).findIndex(function (n) { return n && String(n.id) === String(listId); });
         if (idx >= 0) store.named[idx] = rebuilt;
         else {
+          // Replace shared packs for this event only — never remove Personal {Event} lists
           store.named = (store.named || []).filter(function (n) {
-            return !(n && n.eventId && String(n.eventId) === String(ev.id));
+            if (!n) return false;
+            if (n.isPersonalEventList || n.personalForEventId) return true;
+            return !(n.eventId && String(n.eventId) === String(ev.id));
           });
           store.named.push(rebuilt);
         }
@@ -2878,76 +2908,146 @@
     });
   }
   /**
-   * My private list of stuff I Got it! from a shared event packing list.
+   * My private list of stuff I Got it! from a shared packing list.
    * Named “Personal {EventName}” (e.g. event “Gator” → “Personal Gator”).
-   * Lives under Personal lists; countdown uses the event dates.
+   * Lives under Personal lists; countdown uses the event dates when known.
    */
-  function personalEventListName(ev) {
-    var base = autoCap((ev && ev.name) || 'Event') || 'Event';
-    // Avoid “Personal Personal …” if event already starts that way
+  function personalEventListName(evOrName) {
+    var base = '';
+    if (evOrName && typeof evOrName === 'object') base = evOrName.name || '';
+    else base = String(evOrName || '');
+    base = String(base).replace(/\s*[·•]\s*lists?\s*$/i, '').trim();
+    base = autoCap(base) || 'List';
     if (/^personal\s/i.test(base)) return base;
     return 'Personal ' + base;
   }
-  function ensurePersonalEventList(ev) {
-    if (!ev || !ev.id) return null;
-    var eid = String(ev.id);
-    // Find existing shadow list for this event + me
-    var existing = allMyLists().find(function (n) {
+  /**
+   * Resolve event for a packing list (eventId, active event, or name match).
+   */
+  function resolveEventForList(list) {
+    if (!list) return activeEvent() || null;
+    if (list.eventId) {
+      var ev = findEventById(list.eventId);
+      if (ev) return ev;
+    }
+    if (list.personalForEventId) {
+      var pev = findEventById(list.personalForEventId);
+      if (pev) return pev;
+    }
+    var ae = activeEvent();
+    if (ae) return ae;
+    // Name match: “Gator · lists” → event “Gator”
+    try {
+      var nm = String(list.name || '').replace(/\s*[·•]\s*lists?\s*$/i, '').trim().toLowerCase();
+      if (nm) {
+        var hit = allEventsCombined().find(function (e) {
+          return e && String(e.name || '').trim().toLowerCase() === nm;
+        });
+        if (hit) return hit;
+      }
+    } catch (eN) {}
+    return null;
+  }
+  function ensurePersonalEventList(ev, sourceList) {
+    var eid = ev && ev.id ? String(ev.id) : null;
+    var me = String(myId() || 'local');
+    var wantName = personalEventListName(ev || (sourceList && sourceList.name) || 'List');
+    // Stable id so we don't create duplicates / lose the list
+    var stableId = eid
+      ? ('personal_ev_' + eid + '_' + me.replace(/[^a-zA-Z0-9_-]/g, ''))
+      : ('personal_src_' + String((sourceList && sourceList.id) || 'x') + '_' + me.replace(/[^a-zA-Z0-9_-]/g, ''));
+
+    // Prefer raw store so we never miss a list due to heal/filter
+    var store = loadFreeListsStoreRaw();
+    if (!Array.isArray(store.named)) store.named = [];
+    var existing = store.named.find(function (n) {
       if (!n) return false;
-      normalizeNamedList(n);
-      return isPersonalEventShadowList(n) && String(n.personalForEventId || n.eventId) === eid;
+      if (String(n.id) === String(stableId)) return true;
+      if (n.isPersonalEventList || n.personalForEventId) {
+        if (eid && String(n.personalForEventId || n.eventId) === eid) return true;
+        if (!eid && sourceList && String(n.sourcePackListId) === String(sourceList.id)) return true;
+      }
+      return false;
     });
     if (existing) {
-      // Keep name in sync with event rename
-      var wantName = personalEventListName(ev);
-      if (existing.name !== wantName) {
-        existing.name = wantName;
-        try { saveNamedList(existing); } catch (eN) {}
+      existing.isPersonalEventList = true;
+      if (eid) existing.personalForEventId = eid;
+      // Never re-link as shared pack
+      if (existing.eventId && isPersonalEventShadowList(existing)) existing.eventId = null;
+      if (existing.name !== wantName) existing.name = wantName;
+      if (sourceList && sourceList.id) existing.sourcePackListId = sourceList.id;
+      try { clearTombstone('list', existing.id); } catch (eC) {}
+      sanitizeNamedList(existing);
+      existing.isPersonalEventList = true;
+      if (eid) existing.personalForEventId = eid;
+      existing.eventId = null;
+      var okEx = saveNamedList(existing);
+      if (!okEx) {
+        // Force write via raw store
+        var ix = store.named.findIndex(function (n) { return n && String(n.id) === String(existing.id); });
+        if (ix >= 0) store.named[ix] = existing;
+        saveJson(LOCAL_FREE_LISTS_KEY, store);
       }
-      return existing;
+      return findNamedListById(existing.id) || existing;
     }
-    var nl = normalizeNamedList({
-      id: uid(),
-      name: personalEventListName(ev),
+
+    var nl = {
+      id: stableId,
+      name: wantName,
       kind: 'todo',
       items: [],
       buckets: { todo: [], buy: [], bring: [] },
       columnOrder: ['todo', 'buy', 'bring'],
-      // Not a shared pack — personal shadow; still store event id for dates
       eventId: null,
       personalForEventId: eid,
       isPersonalEventList: true,
-      owner_id: myId() || 'local',
+      sourcePackListId: sourceList && sourceList.id ? sourceList.id : null,
+      owner_id: me,
       creators: [],
       members: [{
-        user_id: myId() || 'local',
+        user_id: me,
         display_name: myName() || 'You',
         role: 'owner'
       }],
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
-    });
-    var store = loadFreeListsStore();
-    store.named = store.named || [];
+    };
+    sanitizeNamedList(nl);
+    nl.isPersonalEventList = true;
+    nl.personalForEventId = eid;
+    nl.eventId = null;
+    nl.name = wantName;
+    try { clearTombstone('list', nl.id); } catch (eC2) {}
     store.named.push(nl);
-    saveFreeListsStore(store);
+    saveJson(LOCAL_FREE_LISTS_KEY, store);
+    // Also through saveNamedList for consistency
+    try { saveNamedList(nl); } catch (eS) {}
     return findNamedListById(nl.id) || nl;
   }
   /**
-   * Copy a claimed item from shared event pack → Personal {Event} list.
+   * Copy a claimed item from a packing list → Personal {Event/List} under Personal lists.
    * claimQty 0 removes the mirrored row.
    */
   function syncClaimToPersonalEventList(sourceList, sourceItem, claimQty, sourceColId) {
     if (!sourceList || !sourceItem) return null;
-    var eid = sourceList.eventId || sourceList.personalForEventId;
-    if (!eid) return null;
     // Don't recurse if we're already on a personal shadow list
     if (isPersonalEventShadowList(sourceList)) return null;
-    var ev = findEventById(eid);
-    if (!ev) return null;
-    var plist = ensurePersonalEventList(ev);
-    if (!plist) return null;
+    // Skip private checklist column itself
+    if (sourceColId && String(sourceColId) === 'personal') return null;
+
+    var ev = resolveEventForList(sourceList);
+    var plist = ensurePersonalEventList(ev, sourceList);
+    if (!plist) {
+      console.warn('[PlanSlayer] ensurePersonalEventList failed', sourceList && sourceList.id);
+      return null;
+    }
+    // Re-load live copy from store so we don't mutate a stale object
+    plist = findNamedListById(plist.id) || plist;
     sanitizeNamedList(plist);
+    plist.isPersonalEventList = true;
+    if (ev && ev.id) plist.personalForEventId = String(ev.id);
+    plist.eventId = null;
+
     claimQty = Math.max(0, Number(claimQty) || 0);
     var me = String(myId() || 'local');
     var srcId = String(sourceItem.id);
@@ -2961,11 +3061,16 @@
       col = getListColumn(plist, 'todo');
       colId = 'todo';
     }
+    if (!col) {
+      // Force classic columns
+      sanitizeNamedList(plist);
+      col = getListColumn(plist, 'todo');
+      colId = 'todo';
+    }
     if (!col) return null;
     if (!Array.isArray(col.items)) col.items = [];
     var idx = col.items.findIndex(function (it) {
-      return it && (String(it.source_item_id) === srcId ||
-        (String(it.source_list_id || '') === String(sourceList.id) && String(it.source_item_id) === srcId));
+      return it && String(it.source_item_id) === srcId;
     });
     if (claimQty <= 0) {
       if (idx >= 0) col.items.splice(idx, 1);
@@ -3008,7 +3113,12 @@
     row.updated_at = new Date().toISOString();
     if (!plist.buckets) plist.buckets = {};
     plist.buckets[colId] = col.items;
-    saveNamedList(plist);
+    // Keep flags through save
+    plist.isPersonalEventList = true;
+    if (ev && ev.id) plist.personalForEventId = String(ev.id);
+    plist.eventId = null;
+    var ok = saveNamedList(plist);
+    if (!ok) console.warn('[PlanSlayer] save personal claim list failed', plist.id);
     return plist;
   }
   function findNamedListById(id) {

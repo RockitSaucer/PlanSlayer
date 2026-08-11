@@ -1,0 +1,16 @@
+PlanSlayer V1.3.33 — List persistence + Got it! → Personal list (fixed)
+
+Lists disappearing
+- Never drop Personal {Event} lists when shared pack / eventList tombstone fires
+- saveNamedList preserves isPersonalEventList + personalForEventId
+- Cloud pack merge no longer wipes personal claim lists
+- Cross-tab delete-list no longer deletes Personal {Event} shadows
+
+Got it! → personal list
+- Always create/update Personal {EventName} (or Personal {ListName}) under Personal lists
+- Resolves event from list.eventId, active event, or name match
+- Stable list id per user+event so it doesn’t vanish/duplicate
+- Toast: “Added to Personal …”
+- Works even when packing list eventId was missing
+
+Shell: plan-slayer-shell-v66

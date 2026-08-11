@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.41';
+  var APP_VERSION = '1.3.42';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -1393,8 +1393,24 @@
         var fromBucket = Array.isArray(bucketSrc[id])
           ? bucketSrc[id].filter(function (it) { return it && typeof it === 'object'; })
           : [];
-        // Prefer column items; if empty, heal from buckets (cloud packs often leave [] items)
-        var items = fromCol.length ? fromCol : fromBucket;
+        // Merge column + bucket by id so a partial column never wipes the rest (#63)
+        var itemMap = {};
+        var itemOrder = [];
+        function takeItem(it) {
+          if (!it || typeof it !== 'object') return;
+          if (!it.id) it.id = uid();
+          var iid = String(it.id);
+          if (!itemMap[iid]) {
+            itemMap[iid] = it;
+            itemOrder.push(iid);
+          } else {
+            // Keep richer / later fields without dropping the row
+            try { itemMap[iid] = Object.assign({}, itemMap[iid], it); } catch (eM) { itemMap[iid] = it; }
+          }
+        }
+        fromCol.forEach(takeItem);
+        fromBucket.forEach(takeItem);
+        var items = itemOrder.map(function (iid) { return itemMap[iid]; });
         // Sanitize each item lightly (preserve chore_* calendar fields)
         items = items.map(function (it) {
           try {
@@ -2752,6 +2768,37 @@
   function saveNamedList(list) {
     if (!list) return false;
     try {
+      // Guard: refuse writes that would wipe most items (category/type glitches) (#63)
+      try {
+        var prevSnap = null;
+        var store0 = loadFreeListsStoreRaw && loadFreeListsStoreRaw();
+        if (store0 && Array.isArray(store0.named)) {
+          prevSnap = store0.named.find(function (n) { return n && String(n.id) === String(list.id); });
+        }
+        if (prevSnap) {
+          function countItems(n) {
+            var c = 0;
+            try {
+              (n.columns || []).forEach(function (col) {
+                if (col && Array.isArray(col.items)) c += col.items.length;
+              });
+              if (!c && n.buckets && typeof n.buckets === 'object') {
+                Object.keys(n.buckets).forEach(function (k) {
+                  if (Array.isArray(n.buckets[k])) c += n.buckets[k].length;
+                });
+              }
+            } catch (eC) {}
+            return c;
+          }
+          var beforeN = countItems(prevSnap);
+          var afterN = countItems(list);
+          if (beforeN >= 3 && afterN < Math.max(1, Math.floor(beforeN * 0.35))) {
+            console.warn('[PlanSlayer] blocked saveNamedList wipe', list.id, beforeN, '→', afterN);
+            try { appToast('Save blocked — list looked empty after an edit. Refresh and try again.'); } catch (eT) {}
+            return false;
+          }
+        }
+      } catch (eGuard) {}
       sanitizeNamedList(list);
       // Never re-save a deleted list (or a pack for an event whose list was deleted)
       if (isTombstoned('list', list.id)) {
@@ -6803,7 +6850,8 @@
           else {
             ev.state.shareLocations[uid] = {
               lat: loc.lat, lng: loc.lng, at: loc.at,
-              name: myName(), color: myColor()
+              name: myName(), color: myColor(),
+              iconId: loc.iconId || null
             };
           }
           saveActiveEvent();

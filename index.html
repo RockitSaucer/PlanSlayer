@@ -1733,6 +1733,42 @@
     .map-bottom-bar .mbb-icon-btn.mbb-share-loc {
       color: #ef4444 !important; border-color: rgba(239, 68, 68, 0.45) !important;
     }
+    /* Live share presence markers (Hunt-like labeled pins) (#65) */
+    .ps-share-loc-icon { background: transparent !important; border: 0 !important; }
+    .ps-share-loc-marker {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      pointer-events: auto;
+      filter: drop-shadow(0 2px 4px rgba(0,0,0,0.45));
+    }
+    .ps-share-loc-marker .ps-share-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 2px solid #fff;
+      background: var(--share-c, #4a6d9a);
+      flex: 0 0 auto;
+    }
+    .ps-share-loc-marker .ps-share-pin-img {
+      width: 28px;
+      height: 28px;
+      object-fit: contain;
+      flex: 0 0 auto;
+    }
+    .ps-share-loc-marker .ps-share-label {
+      max-width: 88px;
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: rgba(12, 16, 10, 0.88);
+      border: 1px solid rgba(255,255,255,0.12);
+      color: #f0f4ee;
+      font-size: 10px;
+      font-weight: 800;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .map-bottom-bar .mbb-icon-btn.mbb-share-loc.is-sharing,
     .map-bottom-bar .mbb-icon-btn.mbb-share-loc.is-pulse {
       color: #ff4d4d !important; border-color: #f87171 !important;
@@ -3309,10 +3345,45 @@
     }
     .li-claimer:hover { filter: brightness(1.15); }
     .btn-got {
-      border-radius: 8px; padding: 6px 10px; font-size: 11px; font-weight: 800;
+      border-radius: 7px; padding: 4px 8px; font-size: 10px; font-weight: 800;
       color: #bbf7d0;
       background: linear-gradient(180deg, #2a4a1c 0%, #1a2a14 50%, #121c0e 100%);
       border-color: #1e3014;
+      min-height: 28px;
+      line-height: 1.15;
+    }
+    /* Minimize (−): tiny chip top-right of each list item (#62) */
+    .list-item {
+      position: relative;
+    }
+    .list-item .li-actions [data-act="minimize"],
+    .list-item .li-actions button[data-act="minimize"] {
+      position: absolute !important;
+      top: 3px !important;
+      right: 3px !important;
+      width: 18px !important;
+      height: 18px !important;
+      min-width: 18px !important;
+      min-height: 18px !important;
+      max-width: 18px !important;
+      max-height: 18px !important;
+      padding: 0 !important;
+      margin: 0 !important;
+      font-size: 12px !important;
+      line-height: 16px !important;
+      border-radius: 4px !important;
+      z-index: 5;
+      opacity: 0.85;
+    }
+    .list-item .li-actions [data-act="minimize"]:hover {
+      opacity: 1;
+      border-color: var(--accent);
+    }
+    .list-item .li-row {
+      padding-right: 22px; /* room for top-right minimize */
+    }
+    .list-item .li-actions {
+      padding-right: 2px;
     }
     .btn-got.is-on {
       color: #fff;
@@ -3498,6 +3569,18 @@
     /* Confirm / alert / prompt always above edit/create modals */
     #app-confirm-modal, #app-alert-modal, #app-prompt-modal {
       z-index: 30000 !important;
+    }
+    /* How many / Got it qty must sit above mobile list sheet (#64) */
+    #got-modal {
+      z-index: 35000 !important;
+    }
+    #got-modal.is-open,
+    #got-modal.modal-overlay.is-open {
+      z-index: 35000 !important;
+    }
+    /* Item category picker also above mobile sheet */
+    #item-cat-modal {
+      z-index: 34000 !important;
     }
     /* Date picker must sit above Edit event / Create event when choosing TBD/start/end */
     #date-pick-modal {
@@ -3817,7 +3900,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.41</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.42</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">

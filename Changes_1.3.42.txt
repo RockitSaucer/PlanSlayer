@@ -1,0 +1,16 @@
+PlanSlayer V1.3.42 — list chrome, vanish guard, got modal z-index, share markers
+================================================================================
+Date: 2026-08-11
+
+Shell: plan-slayer-shell-v75
+
+Issues
+------
+- #62 Smaller Got it! + tiny minimize top-right
+- #63 Items vanishing: merge col+bucket; block wipe saves
+- #64 How many / got-modal above mobile list sheet
+- #65 Live share markers Hunt-like (label + optional icon)
+
+Files
+-----
+- app.js, plan-map.js, index.html, sw.js, AGENTS.md

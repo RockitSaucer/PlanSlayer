@@ -1850,17 +1850,61 @@
     if (!navigator.geolocation) { api.toast('Location not available'); setShareLocation(false); return; }
     shareWatch = navigator.geolocation.watchPosition(function (pos) {
       var lat = pos.coords.latitude, lng = pos.coords.longitude;
-      api.onShareLocation({ lat: lat, lng: lng, at: new Date().toISOString(), name: api.getMyName(), color: api.getMyColor() });
+      var shareIconId = null;
+      try { shareIconId = localStorage.getItem('ps_share_loc_icon') || null; } catch (eIc) {}
+      api.onShareLocation({
+        lat: lat,
+        lng: lng,
+        at: new Date().toISOString(),
+        name: api.getMyName(),
+        color: api.getMyColor(),
+        iconId: shareIconId
+      });
       if (gpsMarker) try { map.removeLayer(gpsMarker); } catch (e) {}
       if (map) {
-        gpsMarker = L.circleMarker([lat, lng], {
-          radius: 8, color: '#fff', weight: 2, fillColor: api.getMyColor(), fillOpacity: 1
-        }).bindPopup('You (sharing)').addTo(map);
+        try {
+          gpsMarker = L.marker([lat, lng], {
+            icon: shareLocDivIcon({ name: 'You', color: api.getMyColor(), iconId: shareIconId }),
+            interactive: true
+          }).bindPopup('You (sharing)').addTo(map);
+        } catch (eMk) {
+          gpsMarker = L.circleMarker([lat, lng], {
+            radius: 8, color: '#fff', weight: 2, fillColor: api.getMyColor(), fillOpacity: 1
+          }).bindPopup('You (sharing)').addTo(map);
+        }
       }
       redrawShareLocations();
     }, function () { api.toast('Could not get location'); setShareLocation(false); },
     { enableHighAccuracy: true, maximumAge: 3000 });
   }
+  /** Hunt-like labeled presence marker for live share (#65) */
+  function shareLocDivIcon(Lx) {
+    var color = (Lx && Lx.color) || '#4a6d9a';
+    var name = (Lx && (Lx.name || Lx.display_name)) || 'Member';
+    var iconId = (Lx && (Lx.iconId || Lx.icon)) || null;
+    var iconSrc = '';
+    if (iconId) {
+      try {
+        var found = (PIN_CATALOG || []).find(function (p) { return p && String(p.id) === String(iconId); });
+        if (found && found.src) iconSrc = found.src;
+      } catch (eI) {}
+    }
+    var inner = iconSrc
+      ? ('<img class="ps-share-pin-img" src="' + String(iconSrc).replace(/"/g, '') + '" alt="" />')
+      : '<span class="ps-share-dot" style="background:' + String(color).replace(/"/g, '') + '"></span>';
+    var html =
+      '<div class="ps-share-loc-marker" style="--share-c:' + String(color).replace(/"/g, '') + '">' +
+        inner +
+        '<span class="ps-share-label">' + esc(name) + '</span>' +
+      '</div>';
+    return L.divIcon({
+      className: 'ps-share-loc-icon',
+      html: html,
+      iconSize: [96, 40],
+      iconAnchor: [14, 14]
+    });
+  }
+
   function redrawShareLocations() {
     if (!shareLayer) return;
     shareLayer.clearLayers();
@@ -1870,9 +1914,15 @@
       var Lx = locs[uid];
       if (!Lx || Lx.lat == null) return;
       if (String(uid) === String(me) && shareLocOn) return;
-      L.circleMarker([Lx.lat, Lx.lng], {
-        radius: 8, color: '#fff', weight: 2, fillColor: Lx.color || '#4a6d9a', fillOpacity: 0.95
-      }).bindPopup(esc(Lx.name || 'Member')).addTo(shareLayer);
+      try {
+        L.marker([Lx.lat, Lx.lng], { icon: shareLocDivIcon(Lx), interactive: true })
+          .bindPopup('<strong>' + esc(Lx.name || 'Member') + '</strong><br><span class="muted">Live location</span>')
+          .addTo(shareLayer);
+      } catch (eM) {
+        L.circleMarker([Lx.lat, Lx.lng], {
+          radius: 8, color: '#fff', weight: 2, fillColor: Lx.color || '#4a6d9a', fillOpacity: 0.95
+        }).bindPopup(esc(Lx.name || 'Member')).addTo(shareLayer);
+      }
     });
   }
   function goGps() {

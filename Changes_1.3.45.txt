@@ -1,0 +1,10 @@
+PlanSlayer V1.3.45 — coordinate HUD truly off at launch
+======================================================
+Date: 2026-08-11
+
+Shell: plan-slayer-shell-v78
+
+- Coordinates chip hidden by default (CSS + HTML + JS)
+- New setting key showCoordHud — old coordHud:true no longer re-shows HUD
+- updateCoordHud in app.js + plan-map.js no-ops unless enabled
+- Map settings → “Show coordinate HUD” is the only way to bring it back

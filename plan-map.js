@@ -384,9 +384,26 @@
     }
     if ($('map-labels-toggle')) $('map-labels-toggle').checked = labelsOn;
   }
+  var coordHudEnabled = false;
+  function setCoordHudEnabled(on) {
+    coordHudEnabled = !!on;
+    var hud = $('map-coord-hud');
+    if (!hud) return;
+    hud.style.display = coordHudEnabled ? '' : 'none';
+    hud.classList.toggle('is-visible', coordHudEnabled);
+    hud.setAttribute('aria-hidden', coordHudEnabled ? 'false' : 'true');
+  }
   function updateCoordHud(lat, lng) {
     var hud = $('map-coord-hud');
     if (!hud || lat == null) return;
+    // Opt-in only (Map settings → Show coordinate HUD)
+    if (!coordHudEnabled) {
+      hud.style.display = 'none';
+      hud.classList.remove('is-visible');
+      return;
+    }
+    hud.style.display = '';
+    hud.classList.add('is-visible');
     hud.textContent = Number(lat).toFixed(5) + ', ' + Number(lng).toFixed(5);
   }
 
@@ -405,7 +422,8 @@
     toolLayer = L.layerGroup().addTo(map);
     map.on('click', onMapClick);
     map.on('mousemove', function (e) { updateCoordHud(e.latlng.lat, e.latlng.lng); });
-    updateCoordHud(HUNT_CENTER[0], HUNT_CENTER[1]);
+    // Start hidden until host enables via Map settings
+    setCoordHudEnabled(false);
     redrawAll();
     setTimeout(function () { try { map.invalidateSize(); } catch (e) {} }, 80);
     return map;
@@ -2417,6 +2435,7 @@
     stopRadar: stopRadar,
     setShareLocation: setShareLocation,
     isSharing: function () { return shareLocOn; },
+    setCoordHudEnabled: setCoordHudEnabled,
     fillShareIconSettingsGrid: fillShareIconSettingsGrid,
     getShareLocIconId: getShareLocIconId,
     setShareLocIconId: setShareLocIconId,

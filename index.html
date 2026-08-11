@@ -1702,7 +1702,8 @@
     /* Keep top-right placement; do not pull Max/Min toward bottom toolbar */
     .map-fs-btn { z-index: 6000 !important; top: 8px !important; bottom: auto !important; }
     .map-search-chrome { z-index: 5005 !important; }
-    .map-coord-hud { z-index: 4990 !important; bottom: calc(var(--mbb-bar-h) + 10px) !important; }
+    .map-coord-hud { z-index: 4990 !important; bottom: calc(var(--mbb-bar-h) + 10px) !important; display: none !important; }
+    .map-coord-hud.is-visible { display: block !important; }
     .map-draw-hint {
       position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
       z-index: 5010; background: rgba(229,154,24,0.95); color: #111;
@@ -2568,6 +2569,11 @@
       font-size: 10px; font-weight: 700; color: #fff;
       background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.12);
       border-radius: 6px; padding: 3px 7px; pointer-events: none;
+      /* Opt-in only — Map settings “Show coordinate HUD” */
+      display: none !important;
+    }
+    .map-coord-hud.is-visible {
+      display: block !important;
     }
     .map-draw-hint {
       position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
@@ -4000,7 +4006,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge" id="ver-badge">V1.3.44</span></div>
+      <div class="brand-sub"><span class="ver-badge" id="ver-badge">V1.3.45</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -4151,7 +4157,7 @@
                 </div>
 
                 <div id="plan-map"></div>
-                <div class="map-coord-hud" id="map-coord-hud">—</div>
+                <div class="map-coord-hud" id="map-coord-hud" style="display:none" aria-hidden="true">—</div>
 
                 <div class="mdt-tools-panel" id="mdt-tools-panel">
                   <button type="button" class="mdt-btn" id="mdt-undo" disabled>Undo point</button>

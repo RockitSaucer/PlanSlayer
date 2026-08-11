@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.44';
+  var APP_VERSION = '1.3.45';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -6600,16 +6600,33 @@
 
   function loadMapSettings() {
     var s = loadJson(LOCAL_MAP_SETTINGS_KEY, null) || {};
+    // #73 / V1.3.45 — use showCoordHud only (ignore old coordHud:true from prior defaults)
+    var hudOn = s.showCoordHud === true;
     return {
       defaultBasemap: s.defaultBasemap || 'topo',
       labelsDefault: !!s.labelsDefault,
-      // #73 — coordinates HUD off by default; opt-in via Map settings
-      coordHud: s.coordHud === true,
+      coordHud: hudOn,
+      showCoordHud: hudOn,
       softBounds: s.softBounds !== false
     };
   }
   function saveMapSettings(s) {
     saveJson(LOCAL_MAP_SETTINGS_KEY, s || loadMapSettings());
+  }
+  /** Coordinate HUD is opt-in only — never flash at launch */
+  function applyCoordHudVisibility(forceOn) {
+    var on = forceOn != null ? !!forceOn : !!loadMapSettings().coordHud;
+    var hud = $('map-coord-hud');
+    if (!hud) return on;
+    hud.style.display = on ? '' : 'none';
+    hud.classList.toggle('is-visible', on);
+    hud.setAttribute('aria-hidden', on ? 'false' : 'true');
+    try {
+      if (window.PlanMap && typeof window.PlanMap.setCoordHudEnabled === 'function') {
+        window.PlanMap.setCoordHudEnabled(on);
+      }
+    } catch (ePm) {}
+    return on;
   }
 
   function setMapMode(mode) {
@@ -6936,8 +6953,7 @@
       updateCoordHud(HUNT_MAP_CENTER[0], HUNT_MAP_CENTER[1]);
       updateMapChromeLabels();
     }
-    var hud = $('map-coord-hud');
-    if (hud) hud.style.display = ms.coordHud ? '' : 'none';
+    applyCoordHudVisibility(!!ms.coordHud);
     var ev = activeEvent();
     if (ev && ev.lat != null && ev.lng != null && !state._mapFollowedEvent) {
       try {
@@ -7086,6 +7102,14 @@
   function updateCoordHud(lat, lng) {
     var hud = $('map-coord-hud');
     if (!hud || lat == null || lng == null) return;
+    // Never show coords unless Map settings → Show coordinate HUD is checked
+    if (!loadMapSettings().coordHud) {
+      hud.style.display = 'none';
+      hud.classList.remove('is-visible');
+      return;
+    }
+    hud.style.display = '';
+    hud.classList.add('is-visible');
     hud.textContent = Number(lat).toFixed(5) + ', ' + Number(lng).toFixed(5);
   }
 
@@ -12927,7 +12951,7 @@
       var s = loadMapSettings();
       if ($('ms-default-basemap')) $('ms-default-basemap').value = s.defaultBasemap || 'topo';
       if ($('ms-labels')) $('ms-labels').checked = !!s.labelsDefault;
-      if ($('ms-coord-hud')) $('ms-coord-hud').checked = s.coordHud === true;
+      if ($('ms-coord-hud')) $('ms-coord-hud').checked = s.showCoordHud === true || s.coordHud === true;
       if ($('ms-soft-bounds')) $('ms-soft-bounds').checked = s.softBounds !== false;
       try {
         if (window.PlanMap && typeof window.PlanMap.fillShareIconSettingsGrid === 'function') {
@@ -12946,10 +12970,13 @@
       }
     });
     click('ms-save', function () {
+      var hudChecked = !!( $('ms-coord-hud') && $('ms-coord-hud').checked );
       var s = {
         defaultBasemap: ($('ms-default-basemap') && $('ms-default-basemap').value) || 'topo',
         labelsDefault: !!( $('ms-labels') && $('ms-labels').checked ),
-        coordHud: !!( $('ms-coord-hud') && $('ms-coord-hud').checked ),
+        // New key only — old coordHud ignored so prior default-on does not stick
+        showCoordHud: hudChecked,
+        coordHud: hudChecked,
         softBounds: !!( $('ms-soft-bounds') && $('ms-soft-bounds').checked )
       };
       saveMapSettings(s);
@@ -12960,7 +12987,7 @@
         window.PlanMap.setBasemap(bm);
         window.PlanMap.setLabels(!!s.labelsDefault);
       }
-      if ($('map-coord-hud')) $('map-coord-hud').style.display = s.coordHud ? '' : 'none';
+      applyCoordHudVisibility(hudChecked);
       appToast('Map settings saved');
     });
 
@@ -14232,6 +14259,11 @@
     maybeCleanSlateThisBuild();
     loadFriends();
     configurePlanMap();
+    // Hide coords immediately (before map open) — only Map settings can re-enable
+    try { applyCoordHudVisibility(false); } catch (eHud) {}
+    try {
+      if (loadMapSettings().coordHud) applyCoordHudVisibility(true);
+    } catch (eHud2) {}
     wireCrossTabSync();
     wire();
     setMapMode('button'); // default: Map button (minimized), not open

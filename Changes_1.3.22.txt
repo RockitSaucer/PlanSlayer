@@ -1,0 +1,12 @@
+PlanSlayer V1.3.22 — Chore calendar save fix + Show on calendar
+
+- Fix: chores not sticking on the main calendar
+  · Stronger item lookup when saving Choose when (active list + all lists)
+  · Save no longer clears chore_at when hidden date fields are empty
+  · Verify-after-save + toast if schedule fails
+- New: “Show on calendar” checkbox under Chore options (and in Choose when)
+  · Checked (default) → colored dot on main calendar
+  · Unchecked → still scheduled, listed under Chores tab, but no calendar dots
+- Chore fields (chore_at / end / color / show flag) preserved through sanitize
+
+Shell: plan-slayer-shell-v55

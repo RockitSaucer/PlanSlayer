@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.21';
+  var APP_VERSION = '1.3.22';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -105,7 +105,7 @@
     /** Item id whose Make Chore panel is expanded */
     makeChoreOpenId: null,
     /** Multi-step chore schedule picker */
-    choreWhen: { itemId: null, kind: null, scope: null, step: 'day', y: 0, m: 0, date: null, start: '', end: '' },
+    choreWhen: { itemId: null, kind: null, scope: null, listId: null, step: 'day', y: 0, m: 0, date: null, start: '', end: '', color: DEFAULT_CHORE_COLOR, showOnCalendar: true },
     /** Mobile full-screen list sheet open */
     mobileSheetOpen: false,
     /** Expanded members drawer under left event/list card (id key) */
@@ -1181,7 +1181,7 @@
         var items = Array.isArray(c.items)
           ? c.items.filter(function (it) { return it && typeof it === 'object'; })
           : (Array.isArray(bucketSrc[id]) ? bucketSrc[id].filter(function (it) { return it && typeof it === 'object'; }) : []);
-        // Sanitize each item lightly
+        // Sanitize each item lightly (preserve chore_* calendar fields)
         items = items.map(function (it) {
           try {
             if (!it.id) it.id = uid();
@@ -1190,6 +1190,19 @@
             if (!Array.isArray(it.notesList)) it.notesList = [];
             it.notesList = it.notesList.filter(function (x) { return x && typeof x === 'object'; });
             it.qty = Math.max(1, parseInt(it.qty, 10) || 1);
+            // Keep chore schedule + show-on-calendar flag (default show when scheduled)
+            if (it.chore_at != null && it.chore_at !== '') {
+              it.chore_at = String(it.chore_at);
+              if (it.chore_end_at != null && it.chore_end_at !== '') it.chore_end_at = String(it.chore_end_at);
+              else it.chore_end_at = it.chore_end_at || null;
+              if (it.chore_color) it.chore_color = String(it.chore_color);
+              // undefined → true (legacy chores show on calendar); explicit false stays off
+              if (it.chore_show_on_calendar === false || it.chore_show_on_calendar === 0 || it.chore_show_on_calendar === 'false') {
+                it.chore_show_on_calendar = false;
+              } else if (it.chore_show_on_calendar != null) {
+                it.chore_show_on_calendar = true;
+              }
+            }
             return it;
           } catch (eI) {
             return { id: uid(), title: 'Item', qty: 1, claims: {}, notesList: [], qualifier: 'other' };
@@ -1412,8 +1425,21 @@
     if (isNaN(d.getTime())) return null;
     return d.toISOString();
   }
-  /** All list items scheduled as chores (have chore_at) */
-  function collectAllChores() {
+  /** True when a chore should paint on the main calendar (default: yes) */
+  function choreShowsOnCalendar(it) {
+    if (!it || !it.chore_at) return false;
+    if (it.chore_show_on_calendar === false || it.chore_show_on_calendar === 0 || it.chore_show_on_calendar === 'false') {
+      return false;
+    }
+    return true;
+  }
+  /**
+   * All list items scheduled as chores (have chore_at).
+   * @param {{ includeHidden?: boolean }} opts — includeHidden=true includes chores with show-on-calendar off (for Chores list). Calendar dots always use default (hidden filtered out).
+   */
+  function collectAllChores(opts) {
+    opts = opts || {};
+    var includeHidden = !!opts.includeHidden;
     var out = [];
     try {
       var store = loadFreeListsStore();
@@ -1424,6 +1450,7 @@
           if (!c || String(c.id) === 'personal') return;
           (c.items || []).forEach(function (it) {
             if (!it || !it.chore_at) return;
+            if (!includeHidden && !choreShowsOnCalendar(it)) return;
             out.push({
               id: 'chore_' + list.id + '_' + it.id,
               itemId: it.id,
@@ -1435,6 +1462,7 @@
               chore_at: it.chore_at,
               chore_end_at: it.chore_end_at || null,
               color: it.chore_color || list.choreColor || DEFAULT_CHORE_COLOR,
+              showOnCalendar: choreShowsOnCalendar(it),
               item: it
             });
           });
@@ -1445,6 +1473,31 @@
       return new Date(a.chore_at).getTime() - new Date(b.chore_at).getTime();
     });
     return out;
+  }
+  /** Find a list item by id across every named list (chore save fallback) */
+  function findItemAcrossNamedLists(itemId) {
+    if (itemId == null || itemId === '') return null;
+    var sid = String(itemId);
+    try {
+      var store = loadFreeListsStore();
+      var found = null;
+      (store.named || []).some(function (list) {
+        if (!list) return false;
+        try { sanitizeNamedList(list); } catch (e) {}
+        return (list.columns || []).some(function (col) {
+          if (!col) return false;
+          var it = (col.items || []).find(function (x) { return x && String(x.id) === sid; });
+          if (it) {
+            found = { item: it, list: list, colId: col.id, scope: 'free-list', bucket: col.items };
+            return true;
+          }
+          return false;
+        });
+      });
+      return found;
+    } catch (eF) {
+      return null;
+    }
   }
   function choreColor(ch) {
     if (ch && ch.color) return ch.color;
@@ -1589,17 +1642,24 @@
   function openChoreWhenPicker(item, kind, scope) {
     if (!item) return;
     var listForColor = findNamedListById(state.activeNamedListId);
+    var listId = state.activeNamedListId || (listForColor && listForColor.id) || null;
+    try {
+      var openL = resolveOpenNamedList(null);
+      if (openL && openL.id) listId = openL.id;
+    } catch (eL) {}
     state.choreWhen = {
       itemId: item.id,
       kind: kind,
       scope: scope || 'free-list',
+      listId: listId,
       step: 'day',
       y: 0,
       m: 0,
       date: choreDateVal(item) || null,
       start: choreTimeVal(item) || '',
       end: choreEndTimeVal(item) || '',
-      color: item.chore_color || (listForColor && listForColor.choreColor) || DEFAULT_CHORE_COLOR
+      color: item.chore_color || (listForColor && listForColor.choreColor) || DEFAULT_CHORE_COLOR,
+      showOnCalendar: item.chore_show_on_calendar === false ? false : true
     };
     if (state.choreWhen.date) {
       try {
@@ -1614,6 +1674,7 @@
     }
     if ($('chore-when-start')) $('chore-when-start').value = state.choreWhen.start || '09:00';
     if ($('chore-when-end')) $('chore-when-end').value = state.choreWhen.end || '';
+    if ($('chore-when-show-cal')) $('chore-when-show-cal').checked = state.choreWhen.showOnCalendar !== false;
     renderChoreColorPickers(state.choreWhen.color);
     setChoreWhenStep('day');
     renderChoreWhenGrid();
@@ -1631,15 +1692,27 @@
       $('chore-when-modal').classList.remove('is-open');
       $('chore-when-modal').setAttribute('aria-hidden', 'true');
     }
-    state.choreWhen = { itemId: null, kind: null, scope: null, step: 'day', y: 0, m: 0, date: null, start: '', end: '', color: DEFAULT_CHORE_COLOR };
+    state.choreWhen = { itemId: null, kind: null, scope: null, listId: null, step: 'day', y: 0, m: 0, date: null, start: '', end: '', color: DEFAULT_CHORE_COLOR, showOnCalendar: true };
   }
   function applyChoreWhenToItem(clear) {
     var c = state.choreWhen;
     if (!c.itemId) return false;
     var found = findItemAny(c.kind, c.scope, c.itemId);
+    // Prefer the list we opened the picker from
+    if ((!found || !found.item) && c.listId) {
+      var byList = findNamedListById(c.listId);
+      if (byList) {
+        sanitizeNamedList(byList);
+        (byList.columns || []).some(function (col) {
+          var it = (col.items || []).find(function (x) { return x && String(x.id) === String(c.itemId); });
+          if (it) { found = { item: it, list: byList, colId: col.id, scope: 'free-list' }; return true; }
+          return false;
+        });
+      }
+    }
     if (!found || !found.item) {
       // Fallback: scan open named list
-      var list = findNamedListById(state.activeNamedListId);
+      var list = findNamedListById(state.activeNamedListId) || resolveOpenNamedList(null);
       if (list) {
         sanitizeNamedList(list);
         (list.columns || []).some(function (col) {
@@ -1649,7 +1722,14 @@
         });
       }
     }
-    if (!found || !found.item) return false;
+    // Last resort: scan every named list
+    if (!found || !found.item) {
+      found = findItemAcrossNamedLists(c.itemId);
+    }
+    if (!found || !found.item) {
+      console.warn('[PlanSlayer] applyChoreWhenToItem: item not found', c.itemId, c.kind, c.scope, c.listId);
+      return false;
+    }
     if (clear || !c.date) {
       found.item.chore_at = null;
       found.item.chore_end_at = null;
@@ -1659,28 +1739,73 @@
       if (!c.start) {
         found.item.chore_at = combineChoreDateTime(c.date, '12:00');
       }
+      if (!found.item.chore_at) {
+        console.warn('[PlanSlayer] applyChoreWhenToItem: bad date/time', c.date, c.start);
+        return false;
+      }
       found.item.chore_end_at = (c.end && c.date) ? combineChoreDateTime(c.date, c.end) : null;
       found.item.chore_color = c.color || found.item.chore_color || DEFAULT_CHORE_COLOR;
+      // Show on calendar: from modal checkbox if present, else picker state, else default true
+      var showCal = true;
+      try {
+        if ($('chore-when-show-cal')) showCal = !!$('chore-when-show-cal').checked;
+        else if (c.showOnCalendar === false) showCal = false;
+      } catch (eSc) {}
+      found.item.chore_show_on_calendar = showCal;
     }
     // Sync hidden fields if detail open
     try {
-      var row = document.querySelector('.list-item[data-item-id="' + c.itemId + '"]');
+      var row = document.querySelector('.list-item[data-item-id="' + String(c.itemId).replace(/"/g, '') + '"]');
       if (row) {
         var hd = row.querySelector('[data-f="chore_date"]');
         var ht = row.querySelector('[data-f="chore_time"]');
         var he = row.querySelector('[data-f="chore_end_time"]');
+        var hc = row.querySelector('[data-f="chore_color"]');
+        var hs = row.querySelector('[data-f="chore_show_on_calendar"]');
         if (hd) hd.value = clear ? '' : (c.date || '');
         if (ht) ht.value = clear ? '' : (c.start || '');
         if (he) he.value = clear ? '' : (c.end || '');
+        if (hc && !clear) hc.value = found.item.chore_color || DEFAULT_CHORE_COLOR;
+        if (hs) {
+          if (hs.type === 'checkbox') hs.checked = !clear && found.item.chore_show_on_calendar !== false;
+          else hs.value = (!clear && found.item.chore_show_on_calendar !== false) ? '1' : '0';
+        }
       }
     } catch (eH) {}
-    if (found.list) saveNamedList(found.list);
-    else if (found.scope === 'group') saveActiveEvent();
-    else {
-      try { persistItemByMeta(c.kind, c.scope, c.itemId, null); } catch (eP) {}
+    var saved = false;
+    if (found.list) {
+      saved = !!saveNamedList(found.list);
+      // Verify write stuck (reload + check chore_at)
+      if (saved && !clear && c.date) {
+        try {
+          var verify = findItemAcrossNamedLists(c.itemId);
+          if (!verify || !verify.item || !verify.item.chore_at) {
+            console.warn('[PlanSlayer] chore save verify failed — retry');
+            found.item.chore_at = combineChoreDateTime(c.date, c.start || '12:00');
+            if (!c.start) found.item.chore_at = combineChoreDateTime(c.date, '12:00');
+            found.item.chore_end_at = (c.end && c.date) ? combineChoreDateTime(c.date, c.end) : null;
+            found.item.chore_color = c.color || found.item.chore_color || DEFAULT_CHORE_COLOR;
+            found.item.chore_show_on_calendar = found.item.chore_show_on_calendar !== false;
+            // Re-find list fresh and patch
+            var again = findItemAcrossNamedLists(c.itemId) || found;
+            if (again && again.item && again.list) {
+              again.item.chore_at = found.item.chore_at;
+              again.item.chore_end_at = found.item.chore_end_at;
+              again.item.chore_color = found.item.chore_color;
+              again.item.chore_show_on_calendar = found.item.chore_show_on_calendar;
+              saved = !!saveNamedList(again.list);
+            }
+          }
+        } catch (eV) {}
+      }
+    } else if (found.scope === 'group') {
+      saveActiveEvent();
+      saved = true;
+    } else {
+      try { saved = !!persistItemByMeta(c.kind, c.scope, c.itemId, null); } catch (eP) { saved = false; }
     }
     state.makeChoreOpenId = c.itemId;
-    return true;
+    return saved || !!(found.item && (clear || found.item.chore_at));
   }
 
   /** True when left chrome is fully minimized — only then show Back on the right */
@@ -4545,6 +4670,12 @@
                   })()))
                   : '') +
               '</button>' +
+              '<label class="check-row" style="margin:8px 0 4px">' +
+                '<input type="checkbox" data-f="chore_show_on_calendar" ' +
+                  (item.chore_show_on_calendar === false ? '' : 'checked') +
+                  (canEditSettings ? '' : ' disabled') + ' />' +
+                '<span class="check-row-text">Show on calendar</span>' +
+              '</label>' +
               '<div style="margin:8px 0 4px"><span class="muted" style="font-size:10px;font-weight:800">Dot color</span></div>' +
               '<div class="chore-color-row" data-item-chore-colors>' +
                 choreColorSwatchesHtml(
@@ -4863,6 +4994,7 @@
       if (!e.start_at) return;
       markRange(ymdFromIso(e.start_at), ymdFromIso(e.end_at) || ymdFromIso(e.start_at), eventColor(e));
     });
+    // Only chores with “Show on calendar” checked (default true)
     collectAllChores().forEach(function (ch) {
       if (!ch.chore_at) return;
       markRange(ymdFromIso(ch.chore_at), ymdFromIso(ch.chore_end_at) || ymdFromIso(ch.chore_at), choreColor(ch));
@@ -6007,7 +6139,8 @@
     syncCalModeSwitchUi();
     var mode = state.calListMode === 'chores' ? 'chores' : 'events';
     if (mode === 'chores') {
-      var chores = collectAllChores();
+      // Chores tab lists all scheduled chores (including hidden-from-calendar)
+      var chores = collectAllChores({ includeHidden: true });
       if (state.sideCal && state.sideCal.selectedDay) {
         var day = state.sideCal.selectedDay;
         chores = chores.filter(function (ch) {
@@ -6076,6 +6209,7 @@
       }
     } catch (e) { when = ''; }
     var cd = countdownHtml(ch.chore_at, ch.chore_end_at || ch.chore_at);
+    var hidden = ch.showOnCalendar === false || (ch.item && !choreShowsOnCalendar(ch.item));
     return (
       '<div class="event-card-wrap chore-card-wrap">' +
         '<div class="event-card" data-open-chore="' + esc(ch.listId) + '" data-chore-item="' + esc(ch.itemId) + '" role="button" tabindex="0">' +
@@ -6088,6 +6222,7 @@
           '<div class="ec-meta">Chore · ' + esc(ch.listName) +
             (ch.colName ? (' · ' + esc(ch.colName)) : '') +
             (when ? (' · ' + esc(when)) : '') +
+            (hidden ? ' · <span style="opacity:0.75">hidden from calendar</span>' : '') +
           '</div>' +
         '</div>' +
       '</div>'
@@ -6829,10 +6964,10 @@
       var index = arr.findIndex(function (x) { return x.id === id; });
       return { board: board, bucket: arr, item: index >= 0 ? arr[index] : null, index: index, scope: scope };
     }
-    if (scope === 'free-list') {
+    if (scope === 'free-list' || !scope) {
       var named = resolveOpenNamedList(null) || findNamedListById(state.activeNamedListId);
       if (named) {
-        var hit = findInNamedListColumn(named, kind, id);
+        var hit = findInNamedListColumn(named, kind, id) || findInNamedListColumn(named, null, id);
         if (hit) {
           return {
             list: hit.list,
@@ -6844,12 +6979,25 @@
           };
         }
       }
-      return { item: null, scope: scope };
+      // Scan every named list so chore / detail saves still work if active list id is stale
+      var across = findItemAcrossNamedLists(id);
+      if (across && across.item) return across;
+      return { item: null, scope: scope || 'free-list' };
     }
     var event = activeEvent();
-    if (!event) return { item: null };
+    if (!event) {
+      // Maybe the row said group but item lives on a named packing list
+      var across2 = findItemAcrossNamedLists(id);
+      if (across2 && across2.item) return across2;
+      return { item: null };
+    }
     var found = findItem(event, kind, scope, id);
-    return { event: event, bucket: found.bucket, item: found.item, index: found.index, scope: scope };
+    if (found && found.item) {
+      return { event: event, bucket: found.bucket, item: found.item, index: found.index, scope: scope };
+    }
+    var across3 = findItemAcrossNamedLists(id);
+    if (across3 && across3.item) return across3;
+    return { event: event, bucket: found.bucket, item: null, index: found.index, scope: scope };
   }
 
   function membersForSplitPick() {
@@ -9309,20 +9457,31 @@
     if (get('due_mode')) item.due_mode = get('due_mode').value;
     if (get('due_days')) item.due_days = Math.max(0, parseInt(get('due_days').value, 10) || 0);
     // Chore schedule → calendar
+    // Never wipe an existing chore_at just because hidden fields are empty
+    // (that used to clear chores after Choose when if DOM fields were stale).
     try {
-      var cDate = get('chore_date') ? get('chore_date').value : '';
-      var cTime = get('chore_time') ? get('chore_time').value : '';
-      var cEnd = get('chore_end_time') ? get('chore_end_time').value : '';
-      var cCol = get('chore_color') ? get('chore_color').value : '';
+      var cDateEl = get('chore_date');
+      var cTimeEl = get('chore_time');
+      var cEndEl = get('chore_end_time');
+      var cColEl = get('chore_color');
+      var cShowEl = get('chore_show_on_calendar');
+      var cDate = cDateEl ? String(cDateEl.value || '').trim() : '';
+      var cTime = cTimeEl ? String(cTimeEl.value || '').trim() : '';
+      var cEnd = cEndEl ? String(cEndEl.value || '').trim() : '';
+      var cCol = cColEl ? String(cColEl.value || '').trim() : '';
       if (cCol) item.chore_color = cCol;
+      if (cShowEl) {
+        item.chore_show_on_calendar = cShowEl.type === 'checkbox'
+          ? !!cShowEl.checked
+          : (cShowEl.value !== '0' && cShowEl.value !== 'false');
+      }
       if (cDate) {
         item.chore_at = combineChoreDateTime(cDate, cTime || null);
         if (!cTime) item.chore_at = combineChoreDateTime(cDate, '12:00');
         item.chore_end_at = cEnd ? combineChoreDateTime(cDate, cEnd) : null;
-      } else {
-        item.chore_at = null;
-        item.chore_end_at = null;
+        if (item.chore_show_on_calendar == null) item.chore_show_on_calendar = true;
       }
+      // Empty hidden date: leave existing chore_at alone (clear only via Clear chore)
     } catch (eCh) {}
     var shares = [];
     row.querySelectorAll('[data-share-id]').forEach(function (cb) {
@@ -9935,14 +10094,22 @@
     });
     click('chore-when-skip-end', function () {
       state.choreWhen.end = '';
+      if ($('chore-when-show-cal')) {
+        state.choreWhen.showOnCalendar = !!$('chore-when-show-cal').checked;
+      }
       if (applyChoreWhenToItem(false)) {
         closeChoreWhenPicker();
         appToast('Chore scheduled');
         render();
+      } else {
+        appToast('Could not save chore — try again from the list item');
       }
     });
     click('chore-when-done', function () {
       state.choreWhen.end = ($('chore-when-end') && $('chore-when-end').value) || '';
+      if ($('chore-when-show-cal')) {
+        state.choreWhen.showOnCalendar = !!$('chore-when-show-cal').checked;
+      }
       if (!state.choreWhen.date) {
         appToast('Pick a day first');
         setChoreWhenStep('day');
@@ -9952,6 +10119,8 @@
         closeChoreWhenPicker();
         appToast('Chore scheduled');
         render();
+      } else {
+        appToast('Could not save chore — try again from the list item');
       }
     });
     click('chore-when-clear', function () {
@@ -9959,6 +10128,8 @@
         closeChoreWhenPicker();
         appToast('Chore schedule cleared');
         render();
+      } else {
+        appToast('Could not clear chore');
       }
     });
     on('chore-when-colors', 'click', function (e) {
@@ -9999,8 +10170,30 @@
           found.item.chore_color = color;
           if (found.list) saveNamedList(found.list);
           else if (scope === 'group') saveActiveEvent();
+          try { renderSideCalendar(); renderCalendarEventsList(); } catch (eCal) {}
         }
       } catch (eS) {}
+    }, true);
+    // Item detail: Show on calendar checkbox — persist immediately
+    document.body.addEventListener('change', function (e) {
+      var t = e.target;
+      if (!t || t.getAttribute('data-f') !== 'chore_show_on_calendar') return;
+      var row = t.closest && t.closest('.list-item');
+      if (!row) return;
+      try {
+        var id = row.getAttribute('data-item-id');
+        var kind = row.getAttribute('data-kind');
+        var scope = row.getAttribute('data-scope') || 'free-list';
+        var found = findItemAny(kind, scope, id);
+        if (found && found.item) {
+          found.item.chore_show_on_calendar = !!t.checked;
+          if (found.list) saveNamedList(found.list);
+          else if (scope === 'group') saveActiveEvent();
+          else persistItemByMeta(kind, scope, id, row);
+          try { renderSideCalendar(); renderCalendarEventsList(); } catch (eCal2) {}
+          appToast(t.checked ? 'Chore shows on calendar' : 'Chore hidden from calendar');
+        }
+      } catch (eShow) {}
     }, true);
     click('share-people-chooser-cancel', closeSharePeopleChooser);
     on('share-people-chooser', 'click', function (e) {
@@ -11899,13 +12092,16 @@
         } else if (action === 'clear-chore') {
           item.chore_at = null;
           item.chore_end_at = null;
+          item.chore_show_on_calendar = true;
           try {
             var hd2 = row.querySelector('[data-f="chore_date"]');
             var ht2 = row.querySelector('[data-f="chore_time"]');
             var he2 = row.querySelector('[data-f="chore_end_time"]');
+            var hs2 = row.querySelector('[data-f="chore_show_on_calendar"]');
             if (hd2) hd2.value = '';
             if (ht2) ht2.value = '';
             if (he2) he2.value = '';
+            if (hs2 && hs2.type === 'checkbox') hs2.checked = true;
           } catch (eCl) {}
           try { persistItemByMeta(kind, scope, id, row); } catch (eP2) {}
           state.makeChoreOpenId = id;

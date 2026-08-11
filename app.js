@@ -7796,6 +7796,12 @@
     // Full UI rebuild replaces #ev-list / mobile triad — keep in-progress item typing
     var listAddDraft = captureListAddDrafts();
 
+    // Keep header badge in sync with APP_VERSION (avoid stale index.html hardcode)
+    try {
+      var vb = $('ver-badge');
+      if (vb) vb.textContent = 'V' + APP_VERSION;
+    } catch (eVb) {}
+
     var who = $('user-chip') || $('user-chip-btn');
     if (who) who.textContent = myName();
 

@@ -1,0 +1,10 @@
+PlanSlayer V1.3.20 — Events/Chores switch polish, T minus, Make Chore picker
+
+- Switch labels: Events / Chores (no “Show”)
+- Selected mode always on the left (buttons trade places)
+- Calendar dots always show both events and chores
+- Countdown next to name: “T minus 2d-03h-15m”
+- Item options: Make Chore button reveals options; Choose when opens one popup
+  (pick day → optional start time → optional end time). Date required, times optional.
+
+Shell: plan-slayer-shell-v53

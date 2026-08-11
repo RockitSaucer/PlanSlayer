@@ -1086,9 +1086,37 @@
       cursor: pointer;
     }
     .event-card .ec-top {
-      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     }
-    .event-card .ec-top strong { flex: 1 1 auto; min-width: 0; }
+    .event-card .ec-top strong,
+    .event-card .ec-top .ec-name {
+      flex: 0 1 auto;
+      min-width: 0;
+      max-width: 55%;
+    }
+    .event-card .ec-countdown {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      white-space: nowrap;
+    }
+    .event-card .ec-countdown .cd {
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .cd-tminus {
+      font-weight: 700;
+      opacity: 0.9;
+      margin-right: 2px;
+    }
+    .make-chore-panel { display: none; margin-top: 6px; }
+    .make-chore-panel.is-open { display: block; }
+    #chore-when-modal { z-index: 33000 !important; }
+    #chore-when-modal .cal-day-btn.is-selected {
+      background: var(--accent);
+      border-color: #b87a12;
+      color: #111;
+    }
     .event-card .ec-edit-btn {
       flex: 0 0 auto;
       padding: 4px 10px !important;
@@ -3355,7 +3383,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.19</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.20</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -3439,8 +3467,8 @@
                 <div class="plan-cal-events-title" id="events-title-date">Trips and Events</div>
                 <div class="plan-cal-events-head">
                   <div class="cal-mode-switch" role="group" aria-label="Calendar list mode">
-                    <button type="button" class="cal-mode-btn is-active" id="cal-mode-events" data-cal-mode="events">Show events</button>
-                    <button type="button" class="cal-mode-btn" id="cal-mode-chores" data-cal-mode="chores">Show chores</button>
+                    <button type="button" class="cal-mode-btn is-active" data-cal-mode="events">Events</button>
+                    <button type="button" class="cal-mode-btn" data-cal-mode="chores">Chores</button>
                   </div>
                   <button type="button" id="add-event-tab-btn" title="Add event">+ Add Event</button>
                 </div>
@@ -3881,6 +3909,43 @@
       <h3>Are you on this list?</h3>
       <p class="muted" style="font-size:12px;margin:0 0 10px">Someone added names. Tap yours so shared items go to you. Or “None of these are me.”</p>
       <div id="claim-member-list"></div>
+    </div>
+  </div>
+
+  <!-- Make Chore: choose day → start time → end time (same popup) -->
+  <div class="modal-overlay" id="chore-when-modal" aria-hidden="true">
+    <div class="modal modal-tight" role="dialog" aria-labelledby="chore-when-title" style="max-width:360px">
+      <h3 id="chore-when-title">Choose when</h3>
+      <p class="muted" id="chore-when-step-label" style="font-size:12px;margin:0 0 8px">Pick a day on the calendar</p>
+      <div id="chore-when-cal-step">
+        <div class="cal-head">
+          <button type="button" class="btn" id="chore-when-prev">‹</button>
+          <strong id="chore-when-label">—</strong>
+          <button type="button" class="btn" id="chore-when-next">›</button>
+        </div>
+        <div class="cal-grid" id="chore-when-grid"></div>
+      </div>
+      <div id="chore-when-start-step" style="display:none">
+        <label for="chore-when-start">Start time <span class="muted">(optional)</span></label>
+        <input type="time" id="chore-when-start" value="09:00" style="width:auto;max-width:12ch;margin:6px 0 10px" />
+        <div class="modal-actions" style="justify-content:flex-start;gap:8px">
+          <button type="button" class="btn" id="chore-when-skip-start">Skip time</button>
+          <button type="button" class="btn btn-primary" id="chore-when-next-start">Next</button>
+        </div>
+      </div>
+      <div id="chore-when-end-step" style="display:none">
+        <label for="chore-when-end">End time <span class="muted">(optional)</span></label>
+        <input type="time" id="chore-when-end" value="" style="width:auto;max-width:12ch;margin:6px 0 10px" />
+        <div class="modal-actions" style="justify-content:flex-start;gap:8px">
+          <button type="button" class="btn" id="chore-when-skip-end">Skip end</button>
+          <button type="button" class="btn btn-primary" id="chore-when-done">Done</button>
+        </div>
+      </div>
+      <p class="muted" id="chore-when-summary" style="font-size:11px;margin:10px 0 0"></p>
+      <div class="modal-actions" style="margin-top:10px">
+        <button type="button" class="btn" id="chore-when-clear" style="color:#fca5a5;border-color:rgba(252,165,165,0.4)">Clear</button>
+        <button type="button" class="btn" id="chore-when-cancel">Cancel</button>
+      </div>
     </div>
   </div>
 

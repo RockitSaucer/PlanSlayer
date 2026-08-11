@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.19';
+  var APP_VERSION = '1.3.20';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -98,6 +98,10 @@
     calCollapsed: false,
     /** Under-calendar list: events | chores */
     calListMode: 'events',
+    /** Item id whose Make Chore panel is expanded */
+    makeChoreOpenId: null,
+    /** Multi-step chore schedule picker */
+    choreWhen: { itemId: null, kind: null, scope: null, step: 'day', y: 0, m: 0, date: null, start: '', end: '' },
     /** Mobile full-screen list sheet open */
     mobileSheetOpen: false,
     /** Expanded members drawer under left event/list card (id key) */
@@ -1427,6 +1431,155 @@
   }
   function choreColor(ch) {
     return (ch && ch.color) || '#6a8ab8';
+  }
+
+  function setChoreWhenStep(step) {
+    state.choreWhen.step = step || 'day';
+    var cal = $('chore-when-cal-step');
+    var st = $('chore-when-start-step');
+    var en = $('chore-when-end-step');
+    var lab = $('chore-when-step-label');
+    if (cal) cal.style.display = step === 'day' ? '' : 'none';
+    if (st) st.style.display = step === 'start' ? '' : 'none';
+    if (en) en.style.display = step === 'end' ? '' : 'none';
+    if (lab) {
+      if (step === 'day') lab.textContent = 'Pick a day (required)';
+      else if (step === 'start') lab.textContent = 'Start time is optional — skip or set one';
+      else lab.textContent = 'End time is optional — skip or set one';
+    }
+    updateChoreWhenSummary();
+  }
+  function updateChoreWhenSummary() {
+    var el = $('chore-when-summary');
+    if (!el) return;
+    var c = state.choreWhen;
+    if (!c.date) { el.textContent = ''; return; }
+    var bits = [c.date];
+    if (c.start) bits.push('start ' + c.start);
+    if (c.end) bits.push('end ' + c.end);
+    el.textContent = 'Selected: ' + bits.join(' · ');
+  }
+  function renderChoreWhenGrid() {
+    var c = state.choreWhen;
+    if (!c.y) {
+      var n = new Date();
+      c.y = n.getFullYear();
+      c.m = n.getMonth();
+    }
+    if ($('chore-when-label')) {
+      $('chore-when-label').textContent = new Date(c.y, c.m, 1).toLocaleString(undefined, {
+        month: 'long', year: 'numeric'
+      });
+    }
+    var grid = $('chore-when-grid');
+    if (!grid) return;
+    var first = new Date(c.y, c.m, 1);
+    var startPad = first.getDay();
+    var daysInMonth = new Date(c.y, c.m + 1, 0).getDate();
+    var html = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(function (d) {
+      return '<div class="dow">' + d + '</div>';
+    }).join('');
+    var today = new Date();
+    for (var i = 0; i < startPad; i++) html += '<button type="button" class="cal-day-btn" disabled></button>';
+    for (var d = 1; d <= daysInMonth; d++) {
+      var iso = c.y + '-' + pad2(c.m + 1) + '-' + pad2(d);
+      var isSel = c.date === iso;
+      var isToday = today.getFullYear() === c.y && today.getMonth() === c.m && today.getDate() === d;
+      html += '<button type="button" class="cal-day-btn' +
+        (isSel ? ' is-selected' : '') +
+        (isToday ? ' is-today' : '') +
+        '" data-chore-day="' + iso + '">' + d + '</button>';
+    }
+    grid.innerHTML = html;
+  }
+  function openChoreWhenPicker(item, kind, scope) {
+    if (!item) return;
+    state.choreWhen = {
+      itemId: item.id,
+      kind: kind,
+      scope: scope || 'free-list',
+      step: 'day',
+      y: 0,
+      m: 0,
+      date: choreDateVal(item) || null,
+      start: choreTimeVal(item) || '',
+      end: choreEndTimeVal(item) || ''
+    };
+    if (state.choreWhen.date) {
+      try {
+        var p = state.choreWhen.date.split('-');
+        state.choreWhen.y = Number(p[0]);
+        state.choreWhen.m = Number(p[1]) - 1;
+      } catch (e) {}
+    } else {
+      var n = new Date();
+      state.choreWhen.y = n.getFullYear();
+      state.choreWhen.m = n.getMonth();
+    }
+    if ($('chore-when-start')) $('chore-when-start').value = state.choreWhen.start || '09:00';
+    if ($('chore-when-end')) $('chore-when-end').value = state.choreWhen.end || '';
+    setChoreWhenStep('day');
+    renderChoreWhenGrid();
+    if ($('chore-when-modal')) {
+      $('chore-when-modal').classList.add('is-open');
+      $('chore-when-modal').setAttribute('aria-hidden', 'false');
+    }
+  }
+  function closeChoreWhenPicker() {
+    if ($('chore-when-modal')) {
+      $('chore-when-modal').classList.remove('is-open');
+      $('chore-when-modal').setAttribute('aria-hidden', 'true');
+    }
+    state.choreWhen = { itemId: null, kind: null, scope: null, step: 'day', y: 0, m: 0, date: null, start: '', end: '' };
+  }
+  function applyChoreWhenToItem(clear) {
+    var c = state.choreWhen;
+    if (!c.itemId) return false;
+    var found = findItemAny(c.kind, c.scope, c.itemId);
+    if (!found || !found.item) {
+      // Fallback: scan open named list
+      var list = findNamedListById(state.activeNamedListId);
+      if (list) {
+        sanitizeNamedList(list);
+        (list.columns || []).some(function (col) {
+          var it = (col.items || []).find(function (x) { return x && String(x.id) === String(c.itemId); });
+          if (it) { found = { item: it, list: list, colId: col.id, scope: 'free-list' }; return true; }
+          return false;
+        });
+      }
+    }
+    if (!found || !found.item) return false;
+    if (clear || !c.date) {
+      found.item.chore_at = null;
+      found.item.chore_end_at = null;
+    } else {
+      found.item.chore_at = combineChoreDateTime(c.date, c.start || null);
+      // If no start time, store noon so date still marks the day cleanly
+      if (!c.start) {
+        found.item.chore_at = combineChoreDateTime(c.date, '12:00');
+        // Flag all-day-ish: keep time as midday but UX can still show date-only
+      }
+      found.item.chore_end_at = (c.end && c.date) ? combineChoreDateTime(c.date, c.end) : null;
+    }
+    // Sync hidden fields if detail open
+    try {
+      var row = document.querySelector('.list-item[data-item-id="' + c.itemId + '"]');
+      if (row) {
+        var hd = row.querySelector('[data-f="chore_date"]');
+        var ht = row.querySelector('[data-f="chore_time"]');
+        var he = row.querySelector('[data-f="chore_end_time"]');
+        if (hd) hd.value = clear ? '' : (c.date || '');
+        if (ht) ht.value = clear ? '' : (c.start || '');
+        if (he) he.value = clear ? '' : (c.end || '');
+      }
+    } catch (eH) {}
+    if (found.list) saveNamedList(found.list);
+    else if (found.scope === 'group') saveActiveEvent();
+    else {
+      try { persistItemByMeta(c.kind, c.scope, c.itemId, null); } catch (eP) {}
+    }
+    state.makeChoreOpenId = c.itemId;
+    return true;
   }
 
   /** True when left chrome is fully minimized — only then show Back on the right */
@@ -3919,13 +4072,13 @@
     var p = countdownParts(startAt, endAt);
     if (!p) return '';
     if (p.mode === 'now') {
-      return '<span class="cd cd-now" title="Event is happening">Happening now!</span>';
+      return '<span class="cd cd-now" title="Happening now">Happening now!</span>';
     }
     if (p.mode === 'past') return '';
     return '<span class="cd cd-live' + (p.urgent ? ' is-urgent' : '') +
       '" data-cd-start="' + esc(startAt) +
       '" data-cd-end="' + esc(endAt || '') +
-      '" title="Countdown to start">' + esc(p.text) + '</span>';
+      '" title="Countdown to start"><span class="cd-tminus">T minus</span> ' + esc(p.text) + '</span>';
   }
 
   var _countdownTimer = null;
@@ -3943,7 +4096,7 @@
         el.style.display = 'none';
         return;
       }
-      el.textContent = p.text;
+      el.innerHTML = '<span class="cd-tminus">T minus</span> ' + esc(p.text);
       el.classList.toggle('is-urgent', !!p.urgent);
     });
   }
@@ -4247,21 +4400,37 @@
               '</select></div>' +
             '<div class="field field-days"><label>Days</label><input data-f="due_days" type="number" min="0" value="' + (item.due_days || 0) + '"' + lockAttr + ' /></div>' +
           '</div>' +
-          '<div class="field-row" style="margin-top:8px;gap:8px;align-items:flex-end">' +
-            '<div class="field field-fit" style="flex:0 0 auto;margin:0">' +
-              '<label>Chore date</label>' +
-              '<input data-f="chore_date" type="date" value="' + esc(choreDateVal(item)) + '"' + lockAttr + ' style="width:auto;max-width:14ch" />' +
-            '</div>' +
-            '<div class="field field-fit" style="flex:0 0 auto;margin:0">' +
-              '<label>Time</label>' +
-              '<input data-f="chore_time" type="time" value="' + esc(choreTimeVal(item)) + '"' + lockAttr + ' style="width:auto;max-width:11ch" />' +
-            '</div>' +
-            '<div class="field field-fit" style="flex:0 0 auto;margin:0">' +
-              '<label>End (optional)</label>' +
-              '<input data-f="chore_end_time" type="time" value="' + esc(choreEndTimeVal(item)) + '"' + lockAttr + ' style="width:auto;max-width:11ch" title="Optional end time same day" />' +
+          '<div class="make-chore-wrap" style="margin-top:10px">' +
+            '<button type="button" class="btn btn-accent" data-act="make-chore-toggle"' +
+              (canEditSettings ? '' : ' disabled') + '>' +
+              (item.chore_at || state.makeChoreOpenId === item.id ? 'Chore options' : 'Make Chore') +
+            '</button>' +
+            '<div class="make-chore-panel' +
+              ((item.chore_at || state.makeChoreOpenId === item.id) ? ' is-open' : '') +
+              '" data-make-chore-panel>' +
+              '<p class="muted" style="font-size:11px;margin:8px 0 6px">Put this item on the calendar as a chore.</p>' +
+              '<button type="button" class="btn btn-primary" data-act="choose-when" style="width:100%"' +
+                (canEditSettings ? '' : ' disabled') + '>Choose when' +
+                (item.chore_at
+                  ? (' · ' + esc((function () {
+                    try {
+                      return new Date(item.chore_at).toLocaleString(undefined, {
+                        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+                      });
+                    } catch (e) { return 'set'; }
+                  })()))
+                  : '') +
+              '</button>' +
+              (item.chore_at
+                ? ('<button type="button" class="btn" data-act="clear-chore" style="width:100%;margin-top:6px"' +
+                  (canEditSettings ? '' : ' disabled') + '>Clear chore schedule</button>')
+                : '') +
+              // Hidden fields keep chore values for save path
+              '<input type="hidden" data-f="chore_date" value="' + esc(choreDateVal(item)) + '" />' +
+              '<input type="hidden" data-f="chore_time" value="' + esc(choreTimeVal(item)) + '" />' +
+              '<input type="hidden" data-f="chore_end_time" value="' + esc(choreEndTimeVal(item)) + '" />' +
             '</div>' +
           '</div>' +
-          '<p class="muted" style="font-size:10px;margin:4px 0 0">Set a date to put this item on the calendar as a <strong>Chore</strong>.</p>' +
           '<div class="li-detail-actions">' +
             '<div class="li-detail-actions-left">' +
               '<button type="button" class="btn btn-item-del" data-act="del" title="Delete item"' +
@@ -4540,47 +4709,32 @@
       return '<div class="cal-day-name">' + d + '</div>';
     }).join('');
     var today = new Date();
-    var dayMarks = {}; // dayNum -> [{color}]
-    var mode = state.calListMode === 'chores' ? 'chores' : 'events';
-    if (mode === 'events') {
-      allEventsCombined().forEach(function (e) {
-        if (!e.start_at) return;
-        var start = ymdFromIso(e.start_at);
-        var end = ymdFromIso(e.end_at) || start;
-        if (!start) return;
-        if (end < start) end = start;
-        var cursor = new Date(Number(start.slice(0, 4)), Number(start.slice(5, 7)) - 1, Number(start.slice(8, 10)));
-        var endD = new Date(Number(end.slice(0, 4)), Number(end.slice(5, 7)) - 1, Number(end.slice(8, 10)));
-        var guard = 0;
-        while (cursor <= endD && guard++ < 400) {
-          if (cursor.getFullYear() === y && cursor.getMonth() === m) {
-            var dayNum = cursor.getDate();
-            if (!dayMarks[dayNum]) dayMarks[dayNum] = [];
-            dayMarks[dayNum].push({ color: eventColor(e) });
-          }
-          cursor.setDate(cursor.getDate() + 1);
+    var dayMarks = {}; // dayNum -> [{color}] — always show events AND chores
+    function markRange(startIso, endIso, color) {
+      if (!startIso) return;
+      var start = startIso;
+      var end = endIso || start;
+      if (end < start) end = start;
+      var cursor = new Date(Number(start.slice(0, 4)), Number(start.slice(5, 7)) - 1, Number(start.slice(8, 10)));
+      var endD = new Date(Number(end.slice(0, 4)), Number(end.slice(5, 7)) - 1, Number(end.slice(8, 10)));
+      var guard = 0;
+      while (cursor <= endD && guard++ < 400) {
+        if (cursor.getFullYear() === y && cursor.getMonth() === m) {
+          var dayNum = cursor.getDate();
+          if (!dayMarks[dayNum]) dayMarks[dayNum] = [];
+          dayMarks[dayNum].push({ color: color });
         }
-      });
-    } else {
-      collectAllChores().forEach(function (ch) {
-        if (!ch.chore_at) return;
-        var start = ymdFromIso(ch.chore_at);
-        var end = ymdFromIso(ch.chore_end_at) || start;
-        if (!start) return;
-        if (end < start) end = start;
-        var cursor = new Date(Number(start.slice(0, 4)), Number(start.slice(5, 7)) - 1, Number(start.slice(8, 10)));
-        var endD = new Date(Number(end.slice(0, 4)), Number(end.slice(5, 7)) - 1, Number(end.slice(8, 10)));
-        var guard = 0;
-        while (cursor <= endD && guard++ < 400) {
-          if (cursor.getFullYear() === y && cursor.getMonth() === m) {
-            var dn = cursor.getDate();
-            if (!dayMarks[dn]) dayMarks[dn] = [];
-            dayMarks[dn].push({ color: choreColor(ch) });
-          }
-          cursor.setDate(cursor.getDate() + 1);
-        }
-      });
+        cursor.setDate(cursor.getDate() + 1);
+      }
     }
+    allEventsCombined().forEach(function (e) {
+      if (!e.start_at) return;
+      markRange(ymdFromIso(e.start_at), ymdFromIso(e.end_at) || ymdFromIso(e.start_at), eventColor(e));
+    });
+    collectAllChores().forEach(function (ch) {
+      if (!ch.chore_at) return;
+      markRange(ymdFromIso(ch.chore_at), ymdFromIso(ch.chore_end_at) || ymdFromIso(ch.chore_at), choreColor(ch));
+    });
     for (var i = 0; i < startPad; i++) html += '<div class="cal-cell empty"></div>';
     for (var d = 1; d <= daysInMonth; d++) {
       var iso = y + '-' + String(m + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
@@ -5569,8 +5723,8 @@
       '<div class="event-card-wrap list-card-wrap' + active + (membersBlock ? ' has-members' : '') + '">' +
         '<div class="event-card' + active + '" data-open-list="' + esc(n.id) + '" role="button" tabindex="0">' +
           '<div class="ec-top">' +
-            '<strong>' + esc(n.name || 'Untitled list') + '</strong>' +
-            cd +
+            '<strong class="ec-name">' + esc(n.name || 'Untitled list') + '</strong>' +
+            (cd ? ('<span class="ec-countdown">' + cd + '</span>') : '') +
             '<button type="button" class="btn ec-edit-btn" data-edit-list="' + esc(n.id) + '" title="Edit list">Edit list</button>' +
           '</div>' +
           metaHtml +
@@ -5632,8 +5786,8 @@
       '<div class="event-card-wrap' + active + (membersBlock ? ' has-members' : '') + '">' +
         '<div class="event-card' + active + '" data-open-event="' + esc(e.id) + '" role="button" tabindex="0">' +
           '<div class="ec-top">' +
-            '<strong>' + esc(e.name) + '</strong>' +
-            cd +
+            '<strong class="ec-name">' + esc(e.name) + '</strong>' +
+            (cd ? ('<span class="ec-countdown">' + cd + '</span>') : '') +
             '<button type="button" class="btn ec-edit-btn" data-edit-event="' + esc(e.id) + '" title="Edit event">Edit event</button>' +
           '</div>' +
           metaHtml +
@@ -5677,15 +5831,24 @@
 
   function syncCalModeSwitchUi() {
     var mode = state.calListMode === 'chores' ? 'chores' : 'events';
-    var bEv = $('cal-mode-events');
-    var bCh = $('cal-mode-chores');
-    if (bEv) bEv.classList.toggle('is-active', mode === 'events');
-    if (bCh) bCh.classList.toggle('is-active', mode === 'chores');
+    // Selected mode always on the left — buttons trade places
+    var switchEl = document.querySelector('.cal-mode-switch');
+    if (switchEl) {
+      var leftMode = mode;
+      var rightMode = mode === 'events' ? 'chores' : 'events';
+      var leftLabel = leftMode === 'events' ? 'Events' : 'Chores';
+      var rightLabel = rightMode === 'events' ? 'Events' : 'Chores';
+      switchEl.innerHTML =
+        '<button type="button" class="cal-mode-btn is-active" id="cal-mode-' + leftMode +
+          '" data-cal-mode="' + leftMode + '">' + leftLabel + '</button>' +
+        '<button type="button" class="cal-mode-btn" id="cal-mode-' + rightMode +
+          '" data-cal-mode="' + rightMode + '">' + rightLabel + '</button>';
+    }
     var addBtn = $('add-event-tab-btn');
     if (addBtn) {
       if (mode === 'chores') {
         addBtn.textContent = '+ Schedule chore';
-        addBtn.title = 'Open a list item and set Chore date';
+        addBtn.title = 'Open a list item → Make Chore';
       } else {
         addBtn.textContent = '+ Add Event';
         addBtn.title = 'Add event';
@@ -5785,8 +5948,8 @@
       '<div class="event-card-wrap chore-card-wrap">' +
         '<div class="event-card" data-open-chore="' + esc(ch.listId) + '" data-chore-item="' + esc(ch.itemId) + '" role="button" tabindex="0">' +
           '<div class="ec-top">' +
-            '<strong>' + esc(ch.title) + '</strong>' +
-            cd +
+            '<strong class="ec-name">' + esc(ch.title) + '</strong>' +
+            (cd ? ('<span class="ec-countdown">' + cd + '</span>') : '') +
             '<button type="button" class="btn ec-edit-btn" data-open-chore="' + esc(ch.listId) +
               '" data-chore-item="' + esc(ch.itemId) + '" title="Open chore">Edit chore</button>' +
           '</div>' +
@@ -9593,15 +9756,75 @@
     }
     click('edit-ev-merge-toggle', function () { toggleMergeBox('edit-ev-merge-box', 'edit-ev-merge-toggle'); });
     click('edit-list-merge-toggle', function () { toggleMergeBox('edit-list-merge-box', 'edit-list-merge-toggle'); });
-    click('cal-mode-events', function () {
-      state.calListMode = 'events';
+    // Events / Chores switch (buttons re-order; use delegation)
+    on('plan-cal-events-header', 'click', function (e) {
+      var b = e.target.closest && e.target.closest('[data-cal-mode]');
+      if (!b) return;
+      var mode = b.getAttribute('data-cal-mode');
+      if (mode !== 'events' && mode !== 'chores') return;
+      state.calListMode = mode;
       renderSideCalendar();
       renderCalendarEventsList();
     });
-    click('cal-mode-chores', function () {
-      state.calListMode = 'chores';
-      renderSideCalendar();
-      renderCalendarEventsList();
+    // Chore when picker
+    click('chore-when-cancel', closeChoreWhenPicker);
+    on('chore-when-modal', 'click', function (e) {
+      if (e.target === $('chore-when-modal')) closeChoreWhenPicker();
+    });
+    click('chore-when-prev', function () {
+      state.choreWhen.m--;
+      if (state.choreWhen.m < 0) { state.choreWhen.m = 11; state.choreWhen.y--; }
+      renderChoreWhenGrid();
+    });
+    click('chore-when-next', function () {
+      state.choreWhen.m++;
+      if (state.choreWhen.m > 11) { state.choreWhen.m = 0; state.choreWhen.y++; }
+      renderChoreWhenGrid();
+    });
+    on('chore-when-grid', 'click', function (e) {
+      var b = e.target.closest && e.target.closest('[data-chore-day]');
+      if (!b) return;
+      state.choreWhen.date = b.getAttribute('data-chore-day');
+      renderChoreWhenGrid();
+      updateChoreWhenSummary();
+      setChoreWhenStep('start');
+    });
+    click('chore-when-skip-start', function () {
+      state.choreWhen.start = '';
+      if ($('chore-when-start')) $('chore-when-start').value = '';
+      setChoreWhenStep('end');
+    });
+    click('chore-when-next-start', function () {
+      state.choreWhen.start = ($('chore-when-start') && $('chore-when-start').value) || '';
+      setChoreWhenStep('end');
+    });
+    click('chore-when-skip-end', function () {
+      state.choreWhen.end = '';
+      if (applyChoreWhenToItem(false)) {
+        closeChoreWhenPicker();
+        appToast('Chore scheduled');
+        render();
+      }
+    });
+    click('chore-when-done', function () {
+      state.choreWhen.end = ($('chore-when-end') && $('chore-when-end').value) || '';
+      if (!state.choreWhen.date) {
+        appToast('Pick a day first');
+        setChoreWhenStep('day');
+        return;
+      }
+      if (applyChoreWhenToItem(false)) {
+        closeChoreWhenPicker();
+        appToast('Chore scheduled');
+        render();
+      }
+    });
+    click('chore-when-clear', function () {
+      if (applyChoreWhenToItem(true)) {
+        closeChoreWhenPicker();
+        appToast('Chore schedule cleared');
+        render();
+      }
     });
     click('share-people-chooser-cancel', closeSharePeopleChooser);
     on('share-people-chooser', 'click', function (e) {
@@ -11488,6 +11711,29 @@
               : 'Could not copy');
           });
           return 'abort';
+        } else if (action === 'make-chore-toggle') {
+          if (state.makeChoreOpenId === id) state.makeChoreOpenId = null;
+          else state.makeChoreOpenId = id;
+          return 'rerender-only';
+        } else if (action === 'choose-when') {
+          try { commitExpandedItemDetail(row); } catch (eCw) {}
+          openChoreWhenPicker(item, kind, scope);
+          return 'abort-modal';
+        } else if (action === 'clear-chore') {
+          item.chore_at = null;
+          item.chore_end_at = null;
+          try {
+            var hd2 = row.querySelector('[data-f="chore_date"]');
+            var ht2 = row.querySelector('[data-f="chore_time"]');
+            var he2 = row.querySelector('[data-f="chore_end_time"]');
+            if (hd2) hd2.value = '';
+            if (ht2) ht2.value = '';
+            if (he2) he2.value = '';
+          } catch (eCl) {}
+          try { persistItemByMeta(kind, scope, id, row); } catch (eP2) {}
+          state.makeChoreOpenId = id;
+          appToast('Chore schedule cleared');
+          return 'rerender-only';
         } else if (action === 'category') {
           openItemCategoryModal(item, kind, scope);
           return 'abort-modal';

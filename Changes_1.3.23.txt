@@ -1,0 +1,13 @@
+PlanSlayer V1.3.23 — Chores list/calendar fix + standalone Schedule chore
+
+- Fix: chores saved on list items now appear under Chores and as calendar dots
+  · Collect from raw list store + buckets + event packs + standalone store
+  · Chores tab shows ALL chores (not empty due to day/month filter)
+  · After save, jumps to that day and switches to Chores mode
+- + Schedule chore opens builder without opening a list item
+  · Title, optional “Link to list item”, Choose when, color, Show on calendar
+- List item “Make Chore / Chore options” opens the same Chore options popup
+  (Choose when + options together)
+- Standalone chores stored in plan_slayer_standalone_chores_v1
+
+Shell: plan-slayer-shell-v56

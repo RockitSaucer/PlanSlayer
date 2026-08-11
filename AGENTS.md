@@ -1,7 +1,7 @@
 # PlanSlayer — agent notes
 
 **Product:** group event planning (lists, invites, expenses, Hunt-style map + calendar).  
-**Current version:** **V1.3.35** (`app.js` `APP_VERSION`)
+**Current version:** **V1.3.39** (`app.js` `APP_VERSION`)
 
 ### Skills (Grok) — keep in sync when this product changes
 User skills under `~/.grok/skills/` (SOURCE_OF_TRUTH = this folder):

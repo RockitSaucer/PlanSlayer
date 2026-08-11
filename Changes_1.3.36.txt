@@ -1,0 +1,31 @@
+PlanSlayer V1.3.36 — list add typing focus fix
+==============================================
+Date: 2026-08-10
+
+Shell: plan-slayer-shell-v69
+
+Problem
+-------
+While typing a new list item (“Type item, press Enter…”) the input would
+sometimes unfocus and wipe what you typed, forcing a restart.
+
+Cause
+-----
+Background re-sync (every ~12s), tab visibility re-sync, and cross-tab
+storage events call full render(). That rebuilds #ev-list and the mobile
+list sheet, replacing the add inputs mid-keystroke.
+
+Fix
+---
+1. captureListAddDrafts / restoreListAddDrafts — every render() saves add-box
+   values + focused column + caret, then restores them after the triad paint.
+2. renderUnlessTypingInListAdd — quiet poll / visibility / storage sync skips
+   full render while focus is in a list add input; flushes on focusout.
+3. Quiet resyncHuntEventsNow uses the same skip-while-typing path.
+
+Files
+-----
+- app.js (APP_VERSION 1.3.36)
+- sw.js (shell v69)
+- AGENTS.md
+- Changes_1.3.36.txt

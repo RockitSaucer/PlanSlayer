@@ -1,0 +1,27 @@
+PlanSlayer V1.3.38 — Got it! → Drop + claimed glow keeps member colors
+======================================================================
+Date: 2026-08-10
+
+Shell: plan-slayer-shell-v71
+
+Got it! / Drop
+--------------
+- When an item is fully gotten AND you claimed any of it, the Got it! button
+  swaps to red Drop.
+- Drop clears only your claims and runs the same claim-sync path (My checklist /
+  Personal list / buy→bring) with qty 0 so the item goes back on the list.
+
+Claimed look
+------------
+- Fully grabbed items no longer replace member colors with a flat green tile.
+- claimFaceStyle always paints member claim bands.
+- is-claimed (any claims) and is-full (fully gotten) add a brighter glow so
+  grabbed rows stand out while member colors stay visible.
+
+Files
+-----
+- app.js (APP_VERSION 1.3.38)
+- index.html (claimed/full glow + Drop button styles)
+- sw.js (shell v71)
+- AGENTS.md
+- Changes_1.3.38.txt

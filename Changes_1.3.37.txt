@@ -1,0 +1,33 @@
+PlanSlayer V1.3.37 — My checklist full item options
+===================================================
+Date: 2026-08-10
+
+Shell: plan-slayer-shell-v70
+
+Problem
+-------
+Items under “My checklist” did not open the same expand/options panel as
+To do / To buy / To bring (clicking often did nothing).
+
+Cause
+-----
+My checklist is built from private mirrors + personal-column copies whose
+ids often differ from the source pack items. Click/save lookup only scanned
+normal column buckets, so expand never found the row.
+
+Fix
+---
+1. cloneItemOptionFields / enrichChecklistDisplayItem — checklist rows carry
+   full option fields (title, qty, category, due, chore, highlight, notes…).
+2. resolveNamedListItemHit — finds personal column, private store, or live
+   claim; materializes private rows into the personal column when needed.
+3. saveNamedListItemHit — persists checklist edits to private store + list.
+4. Click, expand, Got it, category, and detail-save paths use the new resolver.
+5. syncClaimToPrivateChecklist copies full option fields when Got it! mirrors.
+
+Files
+-----
+- app.js (APP_VERSION 1.3.37)
+- sw.js (shell v70)
+- AGENTS.md
+- Changes_1.3.37.txt

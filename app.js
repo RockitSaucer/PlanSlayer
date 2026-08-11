@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.35';
+  var APP_VERSION = '1.3.39';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -437,12 +437,37 @@
         var list = resolveOpenNamedList(null) || findNamedListById(state.activeNamedListId);
         if (!list || !item) return false;
         sanitizeNamedList(list);
-        var hit = findInNamedListColumn(list, kind, item.id);
-        if (!hit || !hit.item) {
-          // Scan all columns if kind attr stale
-          hit = findInNamedListColumn(list, null, item.id);
-        }
+        var hit = resolveNamedListItemHit(list, kind, item.id);
         if (!hit || !hit.item) return false;
+
+        // Got it from My checklist → toggle claim on the source pack item
+        if ((String(hit.colId) === 'personal' || hit.isChecklist || hit.isPrivateOnly) &&
+            hit.item.source_item_id) {
+          var srcHit = findInNamedListColumn(list, hit.item.source_col || null, hit.item.source_item_id) ||
+            findInNamedListColumn(list, null, hit.item.source_item_id);
+          if (srcHit && srcHit.item) {
+            if (!srcHit.item.claims || typeof srcHit.item.claims !== 'object') srcHit.item.claims = {};
+            var meSrc = myId();
+            if (claimQty > 0) srcHit.item.claims[meSrc] = claimQty;
+            else delete srcHit.item.claims[meSrc];
+            if (isBuyColumnKind(srcHit.colId, list)) {
+              syncBuyGotToBringOnNamedList(list, srcHit.item, claimQty, srcHit.colId);
+            }
+            try {
+              ensurePersonalColumn(list);
+              syncClaimToPrivateChecklist(list, srcHit.item, claimQty, srcHit.colId);
+            } catch (ePc0) {}
+            try {
+              var evHint0 = resolveEventForList(list) || activeEvent();
+              if (evHint0) ensurePersonalEventList(evHint0, list);
+              else ensurePersonalEventList(null, list);
+              syncClaimToPersonalEventList(list, srcHit.item, claimQty, srcHit.colId);
+            } catch (ePe0) {}
+            saveNamedList(list);
+            return true;
+          }
+        }
+
         // Apply claims from the toggled item onto the store list, then sync bring
         hit.item.claims = Object.assign({}, item.claims || {});
         if (isBuyColumnKind(kind, list) || isBuyColumnKind(hit.colId, list)) {
@@ -682,11 +707,133 @@
       if (payload.type === 'delete-event' || payload.type === 'delete-list') {
         try { closeMobileListSheet(true); } catch (eC) {}
       }
-      render();
+      // Don't wipe list add inputs if the user is mid-type
+      if (typeof renderUnlessTypingInListAdd === 'function') renderUnlessTypingInListAdd();
+      else render();
     } catch (eR) {
       console.warn('applyRemoteSync', eR);
     }
   }
+  /** List column “Type item…” boxes — full render() used to destroy these mid-keystroke */
+  var LIST_ADD_INPUT_SEL = '[data-col-add-input], [data-event-col-add-input], #add-item-input';
+
+  function isTypingInListAdd() {
+    try {
+      var ae = document.activeElement;
+      if (!ae || ae.tagName !== 'INPUT') return false;
+      if (ae.matches && ae.matches(LIST_ADD_INPUT_SEL)) return true;
+      if (ae.closest && ae.closest('.list-col-add')) return true;
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function listAddInputKey(inp) {
+    if (!inp) return '';
+    if (inp.id === 'add-item-input') return '#add-item-input';
+    return inp.getAttribute('data-col-add-input') ||
+      inp.getAttribute('data-event-col-add-input') || '';
+  }
+
+  function captureListAddDrafts() {
+    var draft = { values: {}, focusKey: null, selStart: null, selEnd: null };
+    try {
+      document.querySelectorAll(LIST_ADD_INPUT_SEL).forEach(function (inp) {
+        var key = listAddInputKey(inp);
+        if (!key) return;
+        var v = String(inp.value || '');
+        // Prefer non-empty when desktop + mobile both paint the same column
+        if (draft.values[key] == null || v) draft.values[key] = v;
+        if (document.activeElement === inp) {
+          draft.focusKey = key;
+          try {
+            draft.selStart = inp.selectionStart;
+            draft.selEnd = inp.selectionEnd;
+          } catch (eS) {}
+        }
+      });
+    } catch (e) {}
+    return draft;
+  }
+
+  function restoreListAddDrafts(draft) {
+    if (!draft || !draft.values) return;
+    try {
+      Object.keys(draft.values).forEach(function (key) {
+        var val = draft.values[key];
+        if (val == null) return;
+        var nodes = key === '#add-item-input'
+          ? (function () {
+              var el = $('add-item-input');
+              return el ? [el] : [];
+            })()
+          : Array.prototype.slice.call(document.querySelectorAll(
+              '[data-col-add-input="' + String(key).replace(/"/g, '') + '"],' +
+              '[data-event-col-add-input="' + String(key).replace(/"/g, '') + '"]'
+            ));
+        nodes.forEach(function (inp) {
+          if (inp) inp.value = val;
+        });
+      });
+      if (!draft.focusKey) return;
+      var candidates = draft.focusKey === '#add-item-input'
+        ? (function () {
+            var el = $('add-item-input');
+            return el ? [el] : [];
+          })()
+        : Array.prototype.slice.call(document.querySelectorAll(
+            '[data-col-add-input="' + String(draft.focusKey).replace(/"/g, '') + '"],' +
+            '[data-event-col-add-input="' + String(draft.focusKey).replace(/"/g, '') + '"]'
+          ));
+      var focusInp = candidates[0] || null;
+      if (state.mobileSheetOpen) {
+        for (var i = 0; i < candidates.length; i++) {
+          if (candidates[i].closest && candidates[i].closest('#mobile-list-sheet')) {
+            focusInp = candidates[i];
+            break;
+          }
+        }
+      } else {
+        for (var j = 0; j < candidates.length; j++) {
+          if (candidates[j].closest && candidates[j].closest('#ev-list')) {
+            focusInp = candidates[j];
+            break;
+          }
+        }
+      }
+      if (!focusInp) return;
+      try {
+        focusInp.focus({ preventScroll: true });
+      } catch (eF0) {
+        try { focusInp.focus(); } catch (eF1) {}
+      }
+      if (draft.selStart != null) {
+        try {
+          var end = draft.selEnd != null ? draft.selEnd : draft.selStart;
+          focusInp.setSelectionRange(draft.selStart, end);
+        } catch (eSel) {}
+      }
+    } catch (eR) {}
+  }
+
+  /** Background sync must not steal the add-item cursor — queue until blur/idle */
+  function renderUnlessTypingInListAdd() {
+    if (isTypingInListAdd()) {
+      state._pendingRenderWhileTyping = true;
+      return;
+    }
+    state._pendingRenderWhileTyping = false;
+    try { render(); } catch (e) { console.warn('renderUnlessTypingInListAdd', e); }
+  }
+
+  function flushPendingRenderIfIdle() {
+    if (!state._pendingRenderWhileTyping) return;
+    if (isTypingInListAdd()) return;
+    state._pendingRenderWhileTyping = false;
+    try { render(); } catch (e) {}
+  }
+
   function wireCrossTabSync() {
     try {
       if (typeof BroadcastChannel !== 'undefined') {
@@ -712,7 +859,7 @@
               state.events = arr.filter(function (x) { return x && !dead[String(x.id)]; }).map(normalizeEvent);
             }
           }
-          render();
+          renderUnlessTypingInListAdd();
         } catch (err2) {}
       }
     });
@@ -722,20 +869,32 @@
       if (typeof resyncHuntEventsNow === 'function') {
         resyncHuntEventsNow({ quiet: true }).then(function () {
           if (typeof loadEvents === 'function') return loadEvents();
-        }).then(function () { render(); }).catch(function () { render(); });
+        }).then(function () { renderUnlessTypingInListAdd(); })
+          .catch(function () { renderUnlessTypingInListAdd(); });
       } else if (typeof loadEvents === 'function') {
-        loadEvents().then(function () { render(); }).catch(function () { render(); });
+        loadEvents().then(function () { renderUnlessTypingInListAdd(); })
+          .catch(function () { renderUnlessTypingInListAdd(); });
       }
     });
     // Light poll while tab is open (multi-device / multi-user) — keep lists fresher across phones
     setInterval(function () {
       if (document.visibilityState !== 'visible') return;
       if (typeof resyncHuntEventsNow === 'function') {
-        resyncHuntEventsNow({ quiet: true }).then(function () { render(); }).catch(function () {});
+        resyncHuntEventsNow({ quiet: true }).then(function () { renderUnlessTypingInListAdd(); }).catch(function () {});
       } else if (typeof loadEvents === 'function') {
-        loadEvents().then(function () { render(); }).catch(function () {});
+        loadEvents().then(function () { renderUnlessTypingInListAdd(); }).catch(function () {});
       }
     }, 12000);
+    // After leaving an add box, apply any sync re-render we deferred
+    if (!document._psListAddFocusFlush) {
+      document._psListAddFocusFlush = true;
+      document.addEventListener('focusout', function (e) {
+        var t = e.target;
+        if (!t || !t.matches) return;
+        if (!t.matches(LIST_ADD_INPUT_SEL) && !(t.closest && t.closest('.list-col-add'))) return;
+        setTimeout(flushPendingRenderIfIdle, 0);
+      }, true);
+    }
   }
   function isMobileLayout() {
     try {
@@ -1817,28 +1976,21 @@
         savePrivateChecklist(list.id, items);
       }
     } else {
-      var copy = {
-        id: idx >= 0 && items[idx].id ? items[idx].id : uid(),
+      var prevPriv = idx >= 0 ? items[idx] : null;
+      var copy = Object.assign({}, cloneItemOptionFields(sourceItem), {
+        id: prevPriv && prevPriv.id ? prevPriv.id : uid(),
         source_item_id: srcId,
-        source_col: sourceColId || null,
+        source_col: sourceColId || (prevPriv && prevPriv.source_col) || null,
         private_to: me,
-        title: sourceItem.title || 'Item',
-        qty: Math.max(1, Number(sourceItem.qty) || 1),
-        qualifier: sourceItem.qualifier || 'other',
-        priority: sourceItem.priority || 0,
-        highlight: !!sourceItem.highlight,
-        highlight_color: sourceItem.highlight_color || 'red',
-        notes: sourceItem.notes || '',
-        notesList: Array.isArray(sourceItem.notesList) ? sourceItem.notesList.slice() : [],
         claims: {},
         claimed_qty: claimQty,
         from_claim: true,
-        created_by: me,
-        created_at: (idx >= 0 && items[idx].created_at) || new Date().toISOString(),
+        created_by: (prevPriv && prevPriv.created_by) || me,
+        created_at: (prevPriv && prevPriv.created_at) || new Date().toISOString(),
         updated_at: new Date().toISOString()
-      };
+      });
       copy.claims[me] = claimQty;
-      if (idx >= 0) items[idx] = Object.assign({}, items[idx], copy);
+      if (idx >= 0) items[idx] = Object.assign({}, prevPriv, copy);
       else items.push(copy);
       savePrivateChecklist(list.id, items);
     }
@@ -1856,27 +2008,25 @@
         } else {
           var row = pIdx >= 0 ? pcol.items[pIdx] : null;
           if (!row) {
-            row = {
+            row = Object.assign({}, cloneItemOptionFields(sourceItem), {
               id: uid(),
               source_item_id: srcId,
               source_col: sourceColId || null,
               private_to: me,
-              title: sourceItem.title || 'Item',
-              qty: Math.max(1, Number(sourceItem.qty) || 1),
-              qualifier: sourceItem.qualifier || 'other',
-              priority: sourceItem.priority || 0,
               claims: {},
               from_claim: true,
               created_by: me
-            };
+            });
             pcol.items.push(row);
+          } else {
+            Object.assign(row, cloneItemOptionFields(sourceItem), {
+              id: row.id,
+              source_item_id: srcId,
+              source_col: sourceColId || row.source_col || null,
+              private_to: me,
+              from_claim: true
+            });
           }
-          row.title = sourceItem.title || row.title;
-          row.qty = Math.max(1, Number(sourceItem.qty) || Number(row.qty) || 1);
-          row.source_item_id = srcId;
-          row.source_col = sourceColId || row.source_col || null;
-          row.private_to = me;
-          row.from_claim = true;
           if (!row.claims || typeof row.claims !== 'object') row.claims = {};
           row.claims[me] = claimQty;
           row.claimed_qty = claimQty;
@@ -2114,9 +2264,289 @@
     if ($('ev-back')) $('ev-back').style.display = show ? '' : 'none';
   }
 
+  /** Full option fields so My checklist rows match To do / To buy / To bring */
+  function cloneItemOptionFields(src) {
+    src = src || {};
+    var notesList = [];
+    try {
+      notesList = Array.isArray(src.notesList) ? src.notesList.map(function (n) {
+        return n && typeof n === 'object' ? Object.assign({}, n) : n;
+      }) : [];
+    } catch (eN) { notesList = []; }
+    return {
+      title: src.title || 'Item',
+      qty: Math.max(1, Number(src.qty) || 1),
+      notes: src.notes || '',
+      notesList: notesList,
+      priority: src.priority || 0,
+      highlight: !!src.highlight,
+      highlight_color: src.highlight_color || 'red',
+      qualifier: src.qualifier || 'other',
+      shared_expense: !!src.shared_expense,
+      expense_amount: Number(src.expense_amount) || 0,
+      expense_share_with: Array.isArray(src.expense_share_with) ? src.expense_share_with.slice() : [],
+      due_mode: src.due_mode || 'anytime_before',
+      due_days: Number(src.due_days) || 0,
+      creator_only_edit: !!src.creator_only_edit,
+      require_all: !!src.require_all,
+      chore_at: src.chore_at || null,
+      chore_end_at: src.chore_end_at || null,
+      chore_show_on_calendar: src.chore_show_on_calendar !== false,
+      chore_color: src.chore_color || DEFAULT_CHORE_COLOR,
+      delegated_to: src.delegated_to || null,
+      shared_from: src.shared_from || null
+    };
+  }
+
+  function itemIdMatches(it, itemId) {
+    if (!it || itemId == null || itemId === '') return false;
+    var sid = String(itemId);
+    return String(it.id) === sid || String(it.source_item_id || '') === sid;
+  }
+
+  /**
+   * Enrich a My checklist mirror with private-store + source-item option fields
+   * so expand/options UI is identical to other columns.
+   */
+  function enrichChecklistDisplayItem(list, row) {
+    if (!row || !list) return row;
+    var out = Object.assign({}, row);
+    try {
+      if (row.source_item_id) {
+        var srcHit = findInNamedListColumn(list, row.source_col || null, row.source_item_id) ||
+          findInNamedListColumn(list, null, row.source_item_id);
+        if (srcHit && srcHit.item) {
+          out = Object.assign({}, cloneItemOptionFields(srcHit.item), out, {
+            id: row.id,
+            source_item_id: row.source_item_id || srcHit.item.id,
+            source_col: row.source_col || srcHit.colId || null,
+            from_claim: true,
+            claims: row.claims && typeof row.claims === 'object' ? row.claims : (srcHit.item.claims || {})
+          });
+        }
+      }
+    } catch (eS) {}
+    try {
+      var priv = getPrivateChecklist(list.id);
+      var p = priv.find(function (it) {
+        return itemIdMatches(it, row.id) ||
+          (row.source_item_id && String(it.source_item_id || '') === String(row.source_item_id));
+      });
+      if (p) {
+        // Private edits win for fields the user set on the checklist copy
+        out = Object.assign({}, out, cloneItemOptionFields(p), {
+          id: row.id,
+          source_item_id: row.source_item_id || p.source_item_id || null,
+          source_col: row.source_col || p.source_col || null,
+          from_claim: true,
+          private_to: p.private_to || row.private_to,
+          claims: (p.claims && typeof p.claims === 'object') ? p.claims
+            : (out.claims && typeof out.claims === 'object') ? out.claims : {},
+          claimed_qty: p.claimed_qty != null ? p.claimed_qty : out.claimed_qty
+        });
+      }
+    } catch (eP) {}
+    if (!out.claims || typeof out.claims !== 'object') out.claims = {};
+    return out;
+  }
+
+  /**
+   * Resolve list item for clicks/saves — includes My checklist private mirrors
+   * (which live outside normal column buckets by id).
+   */
+  function resolveNamedListItemHit(list, kind, itemId) {
+    if (!list || itemId == null || itemId === '') return null;
+    try { sanitizeNamedList(list); } catch (e) {}
+
+    var hit = findInNamedListColumn(list, kind, itemId);
+    if (hit) {
+      if (String(hit.colId) === 'personal') hit.isChecklist = true;
+      return hit;
+    }
+
+    var wantPersonal = !kind || String(kind) === 'personal';
+    if (wantPersonal) {
+      // Personal column by source_item_id / id
+      try {
+        var pcol = getListColumn(list, 'personal');
+        if (pcol && Array.isArray(pcol.items)) {
+          var cIdx = pcol.items.findIndex(function (it) { return itemIdMatches(it, itemId); });
+          if (cIdx >= 0) {
+            // Keep live object in column; enrich missing option fields in place
+            var enriched = enrichChecklistDisplayItem(list, pcol.items[cIdx]);
+            Object.keys(enriched).forEach(function (k) {
+              if (k === 'id') return;
+              pcol.items[cIdx][k] = enriched[k];
+            });
+            return {
+              list: list,
+              col: pcol,
+              bucket: pcol.items,
+              item: pcol.items[cIdx],
+              index: cIdx,
+              colId: 'personal',
+              isChecklist: true
+            };
+          }
+        }
+      } catch (eC) {}
+
+      // Device-local private checklist store
+      try {
+        var priv = getPrivateChecklist(list.id);
+        var pIdx = priv.findIndex(function (it) { return itemIdMatches(it, itemId); });
+        if (pIdx >= 0) {
+          var pItem = priv[pIdx];
+          // Prefer mutating personal column mirror when present (same source)
+          var pcol2 = getListColumn(list, 'personal') || ensurePersonalColumn(list);
+          if (pcol2) {
+            if (!Array.isArray(pcol2.items)) pcol2.items = [];
+            var cIdx2 = pcol2.items.findIndex(function (it) {
+              return itemIdMatches(it, itemId) ||
+                (pItem.source_item_id && String(it.source_item_id || '') === String(pItem.source_item_id)) ||
+                (pItem.source_item_id && String(it.id) === String(pItem.source_item_id));
+            });
+            if (cIdx2 < 0) {
+              // Materialize private row into personal column so expand/save use list store
+              var material = Object.assign({}, enrichChecklistDisplayItem(list, pItem), {
+                id: pItem.id || uid(),
+                source_item_id: pItem.source_item_id || null,
+                source_col: pItem.source_col || null,
+                private_to: pItem.private_to || String(myId() || 'local'),
+                from_claim: true
+              });
+              pcol2.items.push(material);
+              cIdx2 = pcol2.items.length - 1;
+              if (!list.buckets) list.buckets = {};
+              list.buckets.personal = pcol2.items;
+            } else {
+              var en2 = enrichChecklistDisplayItem(list, pcol2.items[cIdx2]);
+              Object.keys(en2).forEach(function (k) {
+                if (k === 'id') return;
+                pcol2.items[cIdx2][k] = en2[k];
+              });
+            }
+            return {
+              list: list,
+              col: pcol2,
+              bucket: pcol2.items,
+              item: pcol2.items[cIdx2],
+              index: cIdx2,
+              colId: 'personal',
+              isChecklist: true
+            };
+          }
+          return {
+            list: list,
+            col: null,
+            bucket: priv,
+            item: pItem,
+            index: pIdx,
+            colId: 'personal',
+            isChecklist: true,
+            isPrivateOnly: true
+          };
+        }
+      } catch (eP) {}
+
+      // Live claim on todo/buy/bring still shown in My checklist
+      var live = null;
+      (list.columns || []).some(function (c) {
+        if (!c || String(c.id) === 'personal') return false;
+        var i = (c.items || []).findIndex(function (x) { return String(x.id) === String(itemId); });
+        if (i >= 0) {
+          live = {
+            list: list,
+            col: c,
+            bucket: c.items,
+            item: c.items[i],
+            index: i,
+            colId: c.id,
+            isChecklistView: true
+          };
+          return true;
+        }
+        return false;
+      });
+      if (live) return live;
+    }
+
+    return findInNamedListColumn(list, null, itemId);
+  }
+
+  /** Persist a resolved list hit (My checklist private + personal column + named list). */
+  function saveNamedListItemHit(hit) {
+    if (!hit || !hit.list) return false;
+    try {
+      if (hit.isPrivateOnly) {
+        savePrivateChecklist(hit.list.id, hit.bucket);
+      }
+      if (hit.isChecklist || hit.isPrivateOnly || String(hit.colId) === 'personal') {
+        try {
+          var item = hit.item;
+          if (item) {
+            var priv = getPrivateChecklist(hit.list.id);
+            var srcKey = String(item.source_item_id || item.id);
+            var pIdx = priv.findIndex(function (it) {
+              return it && (
+                String(it.id) === String(item.id) ||
+                String(it.source_item_id || it.id) === srcKey ||
+                String(it.id) === srcKey
+              );
+            });
+            var me = String(myId() || 'local');
+            var next = Object.assign({}, (pIdx >= 0 ? priv[pIdx] : {}), cloneItemOptionFields(item), {
+              id: pIdx >= 0 && priv[pIdx].id ? priv[pIdx].id : item.id,
+              source_item_id: item.source_item_id || (pIdx >= 0 ? priv[pIdx].source_item_id : null) || null,
+              source_col: item.source_col || (pIdx >= 0 ? priv[pIdx].source_col : null) || null,
+              private_to: me,
+              from_claim: true,
+              claims: item.claims && typeof item.claims === 'object' ? Object.assign({}, item.claims) : {},
+              updated_at: new Date().toISOString()
+            });
+            if (pIdx >= 0) priv[pIdx] = next;
+            else priv.push(next);
+            savePrivateChecklist(hit.list.id, priv);
+
+            // Keep personal column in sync when we mutated private-only
+            if (hit.isPrivateOnly) {
+              var pcol = ensurePersonalColumn(hit.list);
+              if (pcol) {
+                if (!Array.isArray(pcol.items)) pcol.items = [];
+                var cIdx = pcol.items.findIndex(function (it) { return itemIdMatches(it, item.id); });
+                if (cIdx >= 0) {
+                  Object.assign(pcol.items[cIdx], cloneItemOptionFields(item), {
+                    id: pcol.items[cIdx].id,
+                    source_item_id: next.source_item_id,
+                    source_col: next.source_col,
+                    private_to: me,
+                    from_claim: true,
+                    claims: next.claims
+                  });
+                } else {
+                  pcol.items.push(Object.assign({}, next, { id: item.id || uid() }));
+                }
+                if (!hit.list.buckets) hit.list.buckets = {};
+                hit.list.buckets.personal = pcol.items;
+              }
+            }
+          }
+        } catch (ePriv) {
+          console.warn('saveNamedListItemHit private', ePriv);
+        }
+      }
+      saveNamedList(hit.list);
+      return true;
+    } catch (e) {
+      console.warn('saveNamedListItemHit', e);
+      return false;
+    }
+  }
+
   /**
    * My private checklist for an event/shared list.
-   * Prefer device-local private store (never shared); fall back to live claims.
+   * Prefer personal-column rows (clickable ids) enriched with full options;
+   * then private store; then live claims.
    */
   function collectMyClaimedItems(list) {
     var me = String(myId() || 'local');
@@ -2124,25 +2554,53 @@
     var out = [];
     if (!list) return out;
     try { sanitizeNamedList(list); } catch (e) {}
-    // Private store first (true non-shared checklist)
+
+    function markSeen(it) {
+      if (!it) return;
+      seen[String(it.id)] = true;
+      if (it.source_item_id) seen[String(it.source_item_id)] = true;
+    }
+    function already(it) {
+      if (!it || !it.id) return true;
+      if (seen[String(it.id)]) return true;
+      if (it.source_item_id && seen[String(it.source_item_id)]) return true;
+      return false;
+    }
+
+    // 1) Personal column first — stable ids that expand/options can resolve
+    try {
+      var pcol = getListColumn(list, 'personal');
+      if (pcol) {
+        (pcol.items || []).forEach(function (it) {
+          if (!it || !it.id) return;
+          if (it.private_to && String(it.private_to) !== me) return;
+          if (already(it)) return;
+          markSeen(it);
+          out.push(enrichChecklistDisplayItem(list, it));
+        });
+      }
+    } catch (eCol) {}
+
+    // 2) Private store rows not yet on personal column
     try {
       getPrivateChecklist(list.id).forEach(function (it) {
         if (!it || !it.id) return;
         if (it.private_to && String(it.private_to) !== me) return;
-        seen[String(it.source_item_id || it.id)] = true;
-        seen[String(it.id)] = true;
-        out.push(it);
+        if (already(it)) return;
+        markSeen(it);
+        out.push(enrichChecklistDisplayItem(list, it));
       });
     } catch (eP) {}
-    // Also surface any live claims not yet mirrored (todo/buy/bring Got it!)
+
+    // 3) Live claims not yet mirrored (todo/buy/bring Got it!)
     (list.columns || []).forEach(function (c) {
       if (!c || String(c.id) === 'personal') return;
       (c.items || []).forEach(function (it) {
-        if (!it || !it.id || seen[String(it.id)]) return;
+        if (!it || !it.id || already(it)) return;
         var q = 0;
         try { q = Number((it.claims || {})[me] || 0); } catch (eQ) { q = 0; }
         if (q > 0) {
-          seen[String(it.id)] = true;
+          markSeen(it);
           out.push(it);
         }
       });
@@ -3721,7 +4179,9 @@
     try {
       var sync = await pullHuntCalendarFromCloud();
       fillTypeDatalist();
-      render();
+      // Quiet background sync must not wipe list add inputs mid-type
+      if (opts.quiet) renderUnlessTypingInListAdd();
+      else render();
       if (opts.quiet) return sync;
       var n = (sync && sync.added) || 0;
       var p = (sync && sync.pulled) || 0;
@@ -4874,11 +5334,30 @@
     return { need: need, total: total, parts: parts, pct: Math.min(100, (total / need) * 100) };
   }
 
-  /** Full-tile background: multi-stop linear gradient by claim share */
+  /** How many units the current user has claimed on this item */
+  function myClaimQty(item) {
+    if (!item || !item.claims) return 0;
+    var me = myId();
+    var q = Number(item.claims[me] || 0);
+    if (q > 0) return q;
+    if (me != null) q = Number(item.claims[String(me)] || 0);
+    return q > 0 ? q : 0;
+  }
+
+  /** Clear only the current user’s claim entries on an item */
+  function clearMyClaimsOnItem(item) {
+    if (!item) return;
+    if (!item.claims || typeof item.claims !== 'object') item.claims = {};
+    var me = myId();
+    delete item.claims[me];
+    if (me != null) delete item.claims[String(me)];
+  }
+
+  /**
+   * Full-tile background: multi-stop linear gradient by claim share.
+   * Member colors stay visible even when fully grabbed — glow is CSS (is-claimed / is-full).
+   */
   function claimFaceStyle(item) {
-    if (isItemAccounted(item)) {
-      return 'background:linear-gradient(180deg,#1a3a1a 0%,#123012 45%,#0a1a0a 100%);';
-    }
     var c = claimsFilled(item);
     if (!c.parts.length) {
       return 'background:linear-gradient(180deg,#2a3224 0%,#1a2018 45%,#12160f 100%);';
@@ -4886,7 +5365,9 @@
     var stops = [];
     var at = 0;
     c.parts.forEach(function (p) {
-      var w = (p.qty / c.need) * 100;
+      var w = (p.qty / Math.max(1, c.need)) * 100;
+      // If over-claimed, still show proportional member bands
+      if (c.total > c.need && c.total > 0) w = (p.qty / c.total) * 100;
       var a = at;
       var b = Math.min(100, at + w);
       stops.push(p.color + ' ' + a.toFixed(1) + '%');
@@ -5245,7 +5726,7 @@
               '</button>' +
               '<div class="li-actions">' +
                 '<button type="button" class="btn btn-icon" data-act="minimize" title="Minimize">−</button>' +
-                '<button type="button" class="btn btn-got" data-act="got">Got it!</button>' +
+                '<button type="button" class="btn btn-got" data-act="got" title="Claim this item">Got it!</button>' +
                 (showExpenseEnabled(findNamedListById(state.activeNamedListId), activeEvent())
                   ? '<button type="button" class="btn btn-expense" data-act="expense" title="Shared expense">$</button>'
                   : '') +
@@ -5267,7 +5748,9 @@
     }
     if (!item.id) item.id = uid();
     if (!item.claims || typeof item.claims !== 'object' || Array.isArray(item.claims)) item.claims = {};
-    var mine = Number((item.claims || {})[myId()] || 0);
+    var mine = myClaimQty(item);
+    var hasAnyClaim = false;
+    try { hasAnyClaim = claimsFilled(item).parts.length > 0; } catch (eCl) { hasAnyClaim = mine > 0; }
     var pri = item.priority > 0 ? (' pri-' + item.priority) : '';
     var hlColor = String(item.highlight_color || 'red').toLowerCase();
     if (hlColor !== 'green' && hlColor !== 'yellow' && hlColor !== 'red') hlColor = 'red';
@@ -5275,12 +5758,16 @@
     var exp = state.expandedItemId === item.id ? ' is-expanded' : '';
     var done = false;
     try { done = isItemAccounted(item); } catch (eDone) { done = false; }
-    var full = done ? ' is-full is-complete' : '';
+    // is-claimed = someone grabbed it (keep member colors + brighter glow)
+    // is-full / is-complete = fully gotten
+    var full = (done ? ' is-full is-complete' : '') + (hasAnyClaim ? ' is-claimed' : '');
     var mini = state.minimizedItems[item.id] ? ' is-minimized' : '';
     var faceStyle = '';
     try { faceStyle = claimFaceStyle(item); } catch (eFs) {
       faceStyle = 'background:linear-gradient(180deg,#2a3224 0%,#1a2018 45%,#12160f 100%);';
     }
+    // Fully gotten + I claimed → Drop (releases my grab back to the list)
+    var showDrop = done && mine > 0;
     var canEditSettings = true;
     try { canEditSettings = canEditItemSettings(item); } catch (eCe) { canEditSettings = true; }
     var lockAttr = canEditSettings ? '' : ' disabled';
@@ -5382,7 +5869,10 @@
             '<button type="button" class="btn btn-icon" data-act="minimize" title="' +
               (state.minimizedItems[item.id] ? 'Expand' : 'Minimize') + '">' +
               (state.minimizedItems[item.id] ? '+' : '−') + '</button>' +
-            '<button type="button" class="btn btn-got' + (mine > 0 ? ' is-on' : '') + '" data-act="got">Got it!</button>' +
+            (showDrop
+              ? '<button type="button" class="btn btn-got btn-drop is-on" data-act="drop" title="Drop what you claimed — put it back on the list">Drop</button>'
+              : ('<button type="button" class="btn btn-got' + (mine > 0 ? ' is-on' : '') +
+                '" data-act="got" title="Claim this item">Got it!</button>')) +
             (showExpenseEnabled(findNamedListById(state.activeNamedListId), ev || activeEvent())
               ? ('<button type="button" class="btn btn-expense' + (item.shared_expense ? ' is-on' : '') +
                 '" data-act="expense" title="Shared expense">$</button>')
@@ -7241,6 +7731,9 @@
   }
 
   function render() {
+    // Full UI rebuild replaces #ev-list / mobile triad — keep in-progress item typing
+    var listAddDraft = captureListAddDrafts();
+
     var who = $('user-chip') || $('user-chip-btn');
     if (who) who.textContent = myName();
 
@@ -7497,6 +7990,8 @@
     } else if (state.mobileSheetOpen && !isMobileLayout()) {
       closeMobileListSheet(true);
     }
+    // Restore typed text + caret after triad/sheet DOM was rebuilt
+    try { restoreListAddDrafts(listAddDraft); } catch (eDraft) {}
   }
 
   /**
@@ -7820,7 +8315,7 @@
       bucket = board[kind] || [];
     } else if (isFree) {
       var nlist = resolveOpenNamedList(null);
-      freeHit = nlist ? findInNamedListColumn(nlist, kind, id) : null;
+      freeHit = nlist ? resolveNamedListItemHit(nlist, kind, id) : null;
       if (freeHit) {
         bucket = freeHit.bucket;
       } else {
@@ -7843,7 +8338,7 @@
       board[kind] = bucket;
       savePersonalBoard(board);
     } else if (isFree) {
-      if (freeHit) saveNamedList(freeHit.list);
+      if (freeHit) saveNamedListItemHit(freeHit);
       else if (free && free.named) saveNamedList(free.named);
       else if (free) saveFreeListsStore(free.store);
     } else {
@@ -7862,7 +8357,7 @@
     if (scope === 'free-list' || !scope) {
       var named = resolveOpenNamedList(null) || findNamedListById(state.activeNamedListId);
       if (named) {
-        var hit = findInNamedListColumn(named, kind, id) || findInNamedListColumn(named, null, id);
+        var hit = resolveNamedListItemHit(named, kind, id);
         if (hit) {
           return {
             list: hit.list,
@@ -7870,7 +8365,8 @@
             item: hit.item,
             index: hit.index,
             scope: 'free-list',
-            colId: hit.colId
+            colId: hit.colId,
+            isChecklist: !!hit.isChecklist || !!hit.isPrivateOnly
           };
         }
       }
@@ -8535,14 +9031,16 @@
     catId = catId || 'other';
     var list = findNamedListById(_catItemCtx.listId);
     var item = null;
+    var hit = null;
     if (list) {
-      var hit = findInNamedListColumn(list, _catItemCtx.kind, _catItemCtx.itemId);
+      hit = resolveNamedListItemHit(list, _catItemCtx.kind, _catItemCtx.itemId);
       if (hit) item = hit.item;
     }
     if (!item && _catItemCtx.item) item = _catItemCtx.item;
     if (!item) return;
     item.qualifier = catId;
-    if (list) saveNamedList(list);
+    if (list && hit) saveNamedListItemHit(hit);
+    else if (list) saveNamedList(list);
     else if (_catItemCtx.scope === 'group') saveActiveEvent();
     closeItemCatModal();
     render();
@@ -9584,6 +10082,11 @@
 
   var _ocrReviewCtx = null;
   var _ocrDictateRec = null;
+  var _ocrDictateTimer = null;
+  var _ocrDictateAbortTimer = null;
+  var _ocrAutoFlushing = false;
+  var OCR_PHOTO_DRAFT_KEY = 'ps_ocr_photo_draft_v1';
+  var OCR_DICTATE_MAX_MS = 40000;
 
   function closeOcrReviewModal() {
     var modal = $('ocr-review-modal');
@@ -9593,6 +10096,114 @@
     }
     stopOcrDictate();
     _ocrReviewCtx = null;
+  }
+
+  function isOcrReviewOpen() {
+    var modal = $('ocr-review-modal');
+    return !!(modal && modal.classList.contains('is-open'));
+  }
+
+  function clearOcrPhotoDraft() {
+    try { localStorage.removeItem(OCR_PHOTO_DRAFT_KEY); } catch (e) {}
+  }
+
+  function saveOcrPhotoDraftToStorage(items, ctx) {
+    if (!items || !items.length) return;
+    ctx = ctx || _ocrReviewCtx || {};
+    var payload = {
+      v: 1,
+      at: Date.now(),
+      items: items.slice(0, 200),
+      mode: ctx.mode || 'items',
+      colId: ctx.colId || null,
+      isEvent: !!ctx.isEvent,
+      listId: null,
+      eventId: null
+    };
+    try {
+      if (state.activeNamedListId) payload.listId = state.activeNamedListId;
+    } catch (eL) {}
+    try {
+      var ev = activeEvent();
+      if (ev && ev.id) payload.eventId = ev.id;
+    } catch (eE) {}
+    try {
+      localStorage.setItem(OCR_PHOTO_DRAFT_KEY, JSON.stringify(payload));
+    } catch (eS) {}
+  }
+
+  /**
+   * Tab close / hide: auto-apply OCR draft into list, or park in localStorage.
+   * Skips empty reviews. Used by pagehide / visibilitychange / beforeunload.
+   */
+  function flushOcrReviewOnLeave() {
+    if (_ocrAutoFlushing) return;
+    if (!isOcrReviewOpen()) return;
+    var items = collectOcrReviewSelected();
+    if (!items.length) return;
+    var ctx = _ocrReviewCtx || {};
+    _ocrAutoFlushing = true;
+    try {
+      stopOcrDictate();
+      // Prefer apply (same path as Add to list) when we have a target
+      var canApply = false;
+      try {
+        if ((ctx.mode || 'items') === 'note') {
+          canApply = !!(document.querySelector('.list-item.is-expanded .li-detail textarea[data-f="note_text"]') ||
+            document.querySelector('.li-detail textarea[data-f="note_text"]'));
+        } else {
+          canApply = !!(resolveOcrTargetList() || (ctx.colId && activeEvent()));
+        }
+      } catch (eC) { canApply = false; }
+      if (canApply) {
+        applyOcrLines(items, ctx);
+        clearOcrPhotoDraft();
+      } else {
+        saveOcrPhotoDraftToStorage(items, ctx);
+      }
+    } catch (eF) {
+      try { saveOcrPhotoDraftToStorage(items, ctx); } catch (e2) {}
+    }
+    _ocrAutoFlushing = false;
+  }
+
+  function tryRestoreOcrPhotoDraft() {
+    var raw = null;
+    try { raw = localStorage.getItem(OCR_PHOTO_DRAFT_KEY); } catch (e) { return; }
+    if (!raw) return;
+    var draft = null;
+    try { draft = JSON.parse(raw); } catch (eP) { clearOcrPhotoDraft(); return; }
+    if (!draft || !Array.isArray(draft.items) || !draft.items.length) {
+      clearOcrPhotoDraft();
+      return;
+    }
+    // Stale after 7 days
+    if (draft.at && (Date.now() - Number(draft.at)) > 7 * 24 * 3600 * 1000) {
+      clearOcrPhotoDraft();
+      return;
+    }
+    clearOcrPhotoDraft();
+    var ctx = {
+      mode: draft.mode || 'items',
+      colId: draft.colId || null,
+      isEvent: !!draft.isEvent,
+      status: 'Recovered photo items from last session — review then Add, or they stay as listed.'
+    };
+    // Prefer auto-apply into current list if available
+    var canApply = false;
+    try {
+      if ((ctx.mode || 'items') === 'note') canApply = false;
+      else canApply = !!(resolveOcrTargetList() || (ctx.colId && activeEvent()));
+    } catch (eA) { canApply = false; }
+    if (canApply) {
+      try {
+        applyOcrLines(draft.items, ctx);
+        appToast('Saved photo items from last session', 4000);
+        return;
+      } catch (eApply) {}
+    }
+    openOcrReviewModal(draft.items, ctx);
+    appToast('Saved photo items from last session', 4000);
   }
 
   function setOcrStatus(msg) {
@@ -9672,18 +10283,76 @@
     return out;
   }
 
-  function stopOcrDictate() {
-    try {
-      if (_ocrDictateRec) {
-        _ocrDictateRec.onresult = null;
-        _ocrDictateRec.onerror = null;
-        _ocrDictateRec.onend = null;
-        _ocrDictateRec.stop();
-      }
-    } catch (e) {}
-    _ocrDictateRec = null;
+  function clearOcrDictateTimers() {
+    if (_ocrDictateTimer) {
+      try { clearTimeout(_ocrDictateTimer); } catch (eT) {}
+      _ocrDictateTimer = null;
+    }
+    if (_ocrDictateAbortTimer) {
+      try { clearTimeout(_ocrDictateAbortTimer); } catch (eA) {}
+      _ocrDictateAbortTimer = null;
+    }
+  }
+
+  function setOcrDictateBtnIdle() {
     var b = $('ocr-review-dictate');
-    if (b) b.textContent = 'Dictate';
+    if (b) {
+      b.textContent = 'Dictate';
+      b.setAttribute('aria-pressed', 'false');
+      b.title = 'Speak list items';
+    }
+  }
+
+  function setOcrDictateBtnListening() {
+    var b = $('ocr-review-dictate');
+    if (b) {
+      b.textContent = 'Stop listening';
+      b.setAttribute('aria-pressed', 'true');
+      b.title = 'Stop microphone';
+    }
+  }
+
+  function stopOcrDictate(opts) {
+    opts = opts || {};
+    clearOcrDictateTimers();
+    var rec = _ocrDictateRec;
+    _ocrDictateRec = null;
+    if (rec) {
+      try {
+        rec.onresult = null;
+        rec.onerror = null;
+        rec.onend = null;
+      } catch (e0) {}
+      try { rec.stop(); } catch (e1) {}
+      // Hard-stop if stop() hangs (common on mobile)
+      try {
+        _ocrDictateAbortTimer = setTimeout(function () {
+          _ocrDictateAbortTimer = null;
+          try { if (rec && typeof rec.abort === 'function') rec.abort(); } catch (eA) {}
+        }, 400);
+      } catch (e2) {
+        try { if (typeof rec.abort === 'function') rec.abort(); } catch (e3) {}
+      }
+    }
+    setOcrDictateBtnIdle();
+    if (opts.timeout) {
+      setOcrStatus('Dictate timed out — tap Dictate to try again');
+      try { appToast('Listening stopped (timeout)', 2800); } catch (eT) {}
+    }
+  }
+
+  function ocrDictateErrorMessage(err) {
+    var code = '';
+    try { code = String((err && (err.error || err.message)) || ''); } catch (e) {}
+    code = code.toLowerCase();
+    if (code.indexOf('not-allowed') >= 0 || code.indexOf('denied') >= 0 || code.indexOf('service-not-allowed') >= 0) {
+      return 'Microphone blocked — allow mic access or type instead';
+    }
+    if (code.indexOf('no-speech') >= 0) return 'No speech heard — tap Dictate and try again';
+    if (code.indexOf('network') >= 0) return 'Dictate needs network on this browser';
+    if (code.indexOf('aborted') >= 0) return '';
+    if (code) return 'Dictate stopped (' + code + ')';
+    return 'Dictate stopped';
   }
 
   function startOcrDictate() {
@@ -9698,9 +10367,8 @@
     rec.lang = 'en-US';
     rec.continuous = true;
     rec.interimResults = false;
-    var btn = $('ocr-review-dictate');
-    if (btn) btn.textContent = 'Listening…';
-    setOcrStatus('Listening — speak list items, pause between each…');
+    setOcrDictateBtnListening();
+    setOcrStatus('Listening — speak list items, pause between each. Tap Stop listening when done.');
     rec.onresult = function (ev) {
       var ta = $('ocr-review-text');
       if (!ta) return;
@@ -9714,19 +10382,37 @@
       var bits = chunk.split(/[,;]|\band\b/i).map(function (s) { return s.trim(); }).filter(Boolean);
       var cur = ta.value ? ta.value.replace(/\s+$/, '') + '\n' : '';
       ta.value = cur + bits.join('\n');
-      setOcrStatus('Added speech — keep talking or tap Add to list');
+      setOcrStatus('Added speech — keep talking or tap Stop listening, then Add to list');
     };
-    rec.onerror = function () {
+    rec.onerror = function (ev) {
+      var msg = ocrDictateErrorMessage(ev);
       stopOcrDictate();
-      setOcrStatus('Dictate stopped');
+      if (msg) {
+        setOcrStatus(msg);
+        try { appToast(msg, 3200); } catch (eT) {}
+      } else {
+        setOcrStatus('Dictate stopped');
+      }
     };
     rec.onend = function () {
-      if (btn) btn.textContent = 'Dictate';
-      _ocrDictateRec = null;
+      // Continuous mode sometimes ends between phrases — only idle UI if we still own this rec
+      if (_ocrDictateRec === rec) {
+        _ocrDictateRec = null;
+        clearOcrDictateTimers();
+        setOcrDictateBtnIdle();
+        setOcrStatus('Listening ended — tap Dictate to continue or Add to list');
+      }
     };
-    try { rec.start(); } catch (eS) {
+    try {
+      rec.start();
+      _ocrDictateTimer = setTimeout(function () {
+        _ocrDictateTimer = null;
+        if (_ocrDictateRec === rec) stopOcrDictate({ timeout: true });
+      }, OCR_DICTATE_MAX_MS);
+    } catch (eS) {
       stopOcrDictate();
       appToast('Could not start microphone');
+      setOcrStatus('Could not start microphone');
     }
   }
 
@@ -9829,17 +10515,26 @@
       var el = $(id);
       if (el) el.addEventListener('click', fn);
     }
-    bind('ocr-review-cancel', function () { closeOcrReviewModal(); });
+    bind('ocr-review-cancel', function () {
+      clearOcrPhotoDraft();
+      closeOcrReviewModal();
+    });
     bind('ocr-review-add', function () {
       var selected = collectOcrReviewSelected();
+      clearOcrPhotoDraft();
       applyOcrLines(selected, _ocrReviewCtx);
     });
     bind('ocr-review-dictate', function () {
-      if (_ocrDictateRec) stopOcrDictate();
-      else startOcrDictate();
+      if (_ocrDictateRec) {
+        stopOcrDictate();
+        setOcrStatus('Stopped listening — edit lines or tap Add to list');
+      } else {
+        startOcrDictate();
+      }
     });
     bind('ocr-review-retake', function () {
       var ctx = _ocrReviewCtx || {};
+      clearOcrPhotoDraft();
       closeOcrReviewModal();
       setTimeout(function () {
         runListPhotoOcr({ mode: ctx.mode || 'items', colId: ctx.colId, isEvent: ctx.isEvent });
@@ -9848,7 +10543,19 @@
     var modal = $('ocr-review-modal');
     if (modal) {
       modal.addEventListener('click', function (e) {
-        if (e.target === modal) closeOcrReviewModal();
+        if (e.target === modal) {
+          clearOcrPhotoDraft();
+          closeOcrReviewModal();
+        }
+      });
+    }
+    // Auto-save photo OCR draft if the tab is closed/hidden before Add (#52)
+    if (!document._psOcrFlushWired) {
+      document._psOcrFlushWired = true;
+      window.addEventListener('pagehide', function () { flushOcrReviewOnLeave(); });
+      window.addEventListener('beforeunload', function () { flushOcrReviewOnLeave(); });
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'hidden') flushOcrReviewOnLeave();
       });
     }
   }
@@ -10392,9 +11099,9 @@
     if (scope === 'personal-board' || scope === 'free-list') {
       var namedList = resolveOpenNamedList(fromEl) || findNamedListById(state.activeNamedListId);
       if (namedList) {
-        var hit = findInNamedListColumn(namedList, kind, id) || findInNamedListColumn(namedList, null, id);
+        var hit = resolveNamedListItemHit(namedList, kind, id);
         if (hit) {
-          saveNamedList(hit.list);
+          saveNamedListItemHit(hit);
           return true;
         }
       }
@@ -10429,8 +11136,18 @@
     if (scope === 'personal-board' || scope === 'free-list') {
       var namedList = resolveOpenNamedList(row) || findNamedListById(state.activeNamedListId);
       if (namedList) {
-        var hit = findInNamedListColumn(namedList, kind, id) || findInNamedListColumn(namedList, null, id);
-        if (hit) return { item: hit.item, kind: hit.colId || kind, scope: scope, id: id, list: hit.list, bucket: hit.bucket };
+        var hit = resolveNamedListItemHit(namedList, kind, id);
+        if (hit) {
+          return {
+            item: hit.item,
+            kind: hit.colId || kind,
+            scope: scope,
+            id: id,
+            list: hit.list,
+            bucket: hit.bucket,
+            isChecklist: !!hit.isChecklist || !!hit.isPrivateOnly
+          };
+        }
       }
       var free = getActiveFreeBucket(kind);
       if (free && free.bucket) {
@@ -13126,14 +13843,32 @@
           var mid = actBtn.getAttribute('data-member-id');
           showMemberPop(mid, actBtn);
           return 'abort';
+        } else if (action === 'drop') {
+          // Fully gotten → Drop releases everything I claimed so it goes back on the list
+          if (!item.claims) item.claims = {};
+          if (myClaimQty(item) <= 0) {
+            appToast('You have nothing claimed to drop');
+            return 'abort';
+          }
+          clearMyClaimsOnItem(item);
+          var savedDrop = afterGotItClaim(item, kind, scope, 0);
+          try { appToast('Dropped — back on the list'); } catch (eTd) {}
+          if (savedDrop && (scope === 'free-list' || scope === 'personal-board')) return 'rerender-only';
+          // fall through to save for event/group scopes
         } else if (action === 'got') {
           var need = Math.max(1, Number(item.qty) || 1);
           if (!item.claims) item.claims = {};
-          if (need === 1) {
+          // If fully gotten and I still have a claim, treat as Drop (safety)
+          if (isItemAccounted(item) && myClaimQty(item) > 0) {
+            clearMyClaimsOnItem(item);
+            var savedAsDrop = afterGotItClaim(item, kind, scope, 0);
+            try { appToast('Dropped — back on the list'); } catch (eTd2) {}
+            if (savedAsDrop && (scope === 'free-list' || scope === 'personal-board')) return 'rerender-only';
+          } else if (need === 1) {
             var meG = myId();
             var nextQty = 0;
-            if (item.claims[meG]) {
-              delete item.claims[meG];
+            if (myClaimQty(item) > 0) {
+              clearMyClaimsOnItem(item);
               nextQty = 0;
             } else {
               item.claims[meG] = 1;
@@ -13148,7 +13883,7 @@
             state.gotItem = item;
             state.gotScope = scope;
             state.gotKind = kind;
-            var already = Number((item.claims || {})[myId()] || 0);
+            var already = myClaimQty(item);
             if ($('got-label')) $('got-label').textContent = 'How many of “' + item.title + '” (of ' + need + ')?';
             if ($('got-qty')) $('got-qty').value = String(already || 1);
             if ($('got-modal')) $('got-modal').classList.add('is-open');
@@ -13194,36 +13929,32 @@
       }
 
       if (scope === 'personal-board' || scope === 'free-list') {
-        // Named list: look up by the row's column (data-kind) — works for todo/buy/bring/custom
+        // Named list: look up by the row's column (data-kind) — works for todo/buy/bring/custom/My checklist
         var namedList = resolveOpenNamedList(row) || findNamedListById(state.activeNamedListId);
         if (namedList) {
           sanitizeNamedList(namedList);
-          var hit = findInNamedListColumn(namedList, kind, id);
-          // If kind attr is stale, scan every column
-          if (!hit) hit = findInNamedListColumn(namedList, null, id) || (function () {
-            var found = null;
-            (namedList.columns || []).some(function (c) {
-              var i = (c.items || []).findIndex(function (x) { return String(x.id) === String(id); });
-              if (i >= 0) {
-                found = { list: namedList, col: c, bucket: c.items, item: c.items[i], index: i, colId: c.id };
-                return true;
-              }
-              return false;
-            });
-            return found;
-          })();
+          var hit = resolveNamedListItemHit(namedList, kind, id);
           if (hit) {
-            state.listTab = hit.colId || kind;
+            // Keep listTab on classic columns; My checklist stays personal
+            if (hit.colId && String(hit.colId) !== 'personal') state.listTab = hit.colId;
+            else if (kind && String(kind) !== 'personal') state.listTab = kind;
             var rN = mutateBucket(hit.bucket, hit.item, hit.index);
             if (rN === 'abort-async-del') {
               doDeleteAndSave(hit.bucket, hit.index, function () {
-                saveNamedList(hit.list);
+                saveNamedListItemHit(hit);
               });
               return;
             }
             if (rN === 'abort' || rN === 'abort-modal' || rN === 'abort-moved') return;
-            if (rN === 'rerender-only') { render(); return; }
-            saveNamedList(hit.list);
+            if (rN === 'rerender-only') {
+              // Expand/options for checklist still need private/personal mirrors saved when claims change
+              if (hit.isChecklist || hit.isPrivateOnly || String(hit.colId) === 'personal') {
+                try { saveNamedListItemHit(hit); } catch (eSv) {}
+              }
+              render();
+              return;
+            }
+            saveNamedListItemHit(hit);
             render();
             return;
           }
@@ -13343,21 +14074,22 @@
     resyncHunt: function () { return resyncHuntEventsNow({ quiet: false }); }
   };
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function () {
-      maybeCleanSlateThisBuild();
-      loadFriends();
-      configurePlanMap();
-      wireCrossTabSync();
-      wire();
-      setMapMode('button'); // default: Map button (minimized), not open
-    });
-  } else {
+  function bootPlanSlayer() {
     maybeCleanSlateThisBuild();
     loadFriends();
     configurePlanMap();
     wireCrossTabSync();
     wire();
-    setMapMode('button');
+    setMapMode('button'); // default: Map button (minimized), not open
+    // Recover photo OCR items if the last tab closed mid-review (#52)
+    setTimeout(function () {
+      try { tryRestoreOcrPhotoDraft(); } catch (eR) {}
+    }, 600);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootPlanSlayer);
+  } else {
+    bootPlanSlayer();
   }
 })();

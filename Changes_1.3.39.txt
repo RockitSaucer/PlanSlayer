@@ -1,0 +1,34 @@
+PlanSlayer V1.3.39 — OCR dictate Stop + auto-save on tab close
+==============================================================
+Date: 2026-08-11
+
+Shell: plan-slayer-shell-v72
+
+Issues
+------
+- Hunt-Slayer #51 (from-planslayer, ready-to-commit): Dictate freeze + Stop listening
+- Hunt-Slayer #52 (from-planslayer, ready-to-commit): Auto-save photo items if tab closes
+
+Dictate (#51)
+-------------
+- Button shows **Stop listening** while active (not only “Listening…”).
+- Hard-stop: stop() then abort() fallback; always clear recognition handle.
+- Max listen ~40s auto-stops with toast.
+- onerror toasts short reason (mic denied / no speech / network).
+- Continuous multi-item split into lines unchanged.
+
+Photo draft auto-save (#52)
+---------------------------
+- While OCR review is open with any lines, tab close/hide flushes:
+  - Prefer auto-apply into the open list/note (same path as Add to list).
+  - Else park draft in localStorage and restore on next load.
+- Empty reviews are not saved.
+- Toast: “Saved photo items from last session” on restore/apply.
+
+Files
+-----
+- app.js (APP_VERSION 1.3.39)
+- index.html (ver badge)
+- sw.js (shell v72)
+- AGENTS.md
+- Changes_1.3.39.txt

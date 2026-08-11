@@ -2708,6 +2708,31 @@
       box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
     }
     .list-item.is-complete .li-title { color: #4ade80 !important; font-weight: 800; }
+    /* Grabbed items keep member-color faces; glow brighter so claims stand out */
+    .list-item.is-claimed {
+      box-shadow:
+        0 0 14px rgba(255, 210, 100, 0.28),
+        0 0 0 1px rgba(255, 220, 140, 0.35),
+        inset 0 0 22px rgba(255, 255, 255, 0.07) !important;
+      border-color: rgba(255, 214, 120, 0.5) !important;
+      filter: brightness(1.1) saturate(1.12);
+    }
+    .list-item.is-claimed:hover {
+      filter: brightness(1.14) saturate(1.15);
+    }
+    .list-item.is-full,
+    .list-item.is-full.is-claimed {
+      box-shadow:
+        0 0 18px rgba(74, 222, 128, 0.42),
+        0 0 0 1px rgba(110, 231, 150, 0.55),
+        inset 0 0 28px rgba(74, 222, 128, 0.14) !important;
+      border-color: rgba(74, 222, 128, 0.65) !important;
+      filter: brightness(1.16) saturate(1.18);
+    }
+    .list-item.is-full:hover,
+    .list-item.is-full.is-claimed:hover {
+      filter: brightness(1.2) saturate(1.2);
+    }
     .item-tpl-suggest {
       display: none;
       position: absolute;
@@ -2934,6 +2959,16 @@
       min-height: 56px;
     }
     .list-item:hover { filter: brightness(1.04); border-color: rgba(229,154,24,0.4) !important; }
+    /* Don't wipe claimed/full glow on hover (rule above is weaker for these) */
+    .list-item.is-claimed:hover {
+      filter: brightness(1.14) saturate(1.15);
+      border-color: rgba(255, 214, 120, 0.55) !important;
+    }
+    .list-item.is-full:hover,
+    .list-item.is-full.is-claimed:hover {
+      filter: brightness(1.2) saturate(1.2);
+      border-color: rgba(74, 222, 128, 0.7) !important;
+    }
     /* Highlight pulse — red (default), yellow, or green */
     .list-item.is-highlight {
       box-shadow: inset 0 0 0 2px rgba(239, 68, 68, 0.55), 0 2px 0 #0a0c09;
@@ -3017,7 +3052,7 @@
     }
     .list-item.pri-1 { border-left: 3px solid #eab308 !important; }
     .list-item.pri-2 { border-left: 3px solid #ef4444 !important; }
-    .list-item.is-full { border-color: #2f5a20 !important; }
+    /* is-full glow defined with is-claimed above — keep member colors on face */
     .li-face,
     button.li-face,
     button.li-main {
@@ -3167,6 +3202,21 @@
     .btn-got.is-on {
       color: #fff;
       background: linear-gradient(180deg, #5a8a3a 0%, #3f6b2a 50%, #2f4a1c 100%);
+    }
+    /* Fully gotten → Drop (release my claim) */
+    .btn-got.btn-drop,
+    .btn-drop {
+      color: #fecaca !important;
+      background: linear-gradient(180deg, #7a3030 0%, #5a2020 50%, #3a1414 100%) !important;
+      border-color: #6b2424 !important;
+    }
+    .btn-got.btn-drop:hover,
+    .btn-drop:hover {
+      filter: brightness(1.08);
+    }
+    .btn-got.btn-drop.is-on {
+      color: #fff !important;
+      background: linear-gradient(180deg, #b04040 0%, #8a3030 50%, #5c2020 100%) !important;
     }
     .item-complete-check {
       width: 20px; height: 20px; font-size: 12px; flex-shrink: 0;
@@ -3652,7 +3702,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.35</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.39</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">

@@ -1,0 +1,10 @@
+PlanSlayer V1.3.27 — Chores work like events
+
+- Chores are first-class calendar entries (not list-item fields)
+- Store: plan_slayer_chores_v1 — same idea as plan_slayer_events_v1
+- Save writes { id, name, start_at, end_at, color, show_on_calendar }
+- Chores list + calendar dots read only this store
+- + Schedule chore / Make Chore → name, day, times, Save/Cancel
+- Clear (delete) when editing an existing chore from the Chores list
+
+Shell: plan-slayer-shell-v60

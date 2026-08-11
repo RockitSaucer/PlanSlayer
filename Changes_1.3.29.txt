@@ -1,0 +1,9 @@
+PlanSlayer V1.3.29 — Chore Done!, personal event lists, countdown
+
+- Chore cards: Done! under Edit chore (marks done, drops calendar dot)
+- Got it! on a shared event packing list copies items into
+  “Personal {EventName}” under Personal lists (e.g. event Gator → Personal Gator)
+- That personal list shows the event countdown next to its name
+- personalForEventId / isPersonalEventList distinguish these from shared packs
+
+Shell: plan-slayer-shell-v62

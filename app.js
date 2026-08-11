@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.28';
+  var APP_VERSION = '1.3.29';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -448,15 +448,20 @@
         if (isBuyColumnKind(kind, list) || isBuyColumnKind(hit.colId, list)) {
           syncBuyGotToBringOnNamedList(list, hit.item, claimQty, hit.colId || kind);
         }
-        // Private My checklist for event packing lists (To do / To buy / To bring)
+        // Got it! on shared event pack → Personal {Event} list (e.g. Personal Gator)
         try {
           var colId = hit.colId || kind;
-          if (String(colId) !== 'personal') {
+          if (String(colId) !== 'personal' && !isPersonalEventShadowList(list)) {
+            // Keep private checklist column on the shared pack too
             ensurePersonalColumn(list);
             syncClaimToPrivateChecklist(list, hit.item, claimQty, colId);
+            // Main request: personal list under My lists for this event
+            if (list.eventId) {
+              syncClaimToPersonalEventList(list, hit.item, claimQty, colId);
+            }
           }
         } catch (ePriv) {
-          console.warn('afterGotItClaim private', ePriv);
+          console.warn('afterGotItClaim personal event list', ePriv);
         }
         saveNamedList(list);
         return true;
@@ -484,7 +489,10 @@
           }
           try {
             var pack = ensureAssociatedListForEvent(ev);
-            if (pack) syncClaimToPrivateChecklist(pack, item, claimQty, kind);
+            if (pack) {
+              syncClaimToPrivateChecklist(pack, item, claimQty, kind);
+              syncClaimToPersonalEventList(pack, item, claimQty, kind);
+            }
           } catch (ePk) {}
         }
       }
@@ -1467,6 +1475,7 @@
       ch.show_on_calendar = true;
     }
     ch.color = ch.color || DEFAULT_CHORE_COLOR;
+    ch.done = !!ch.done;
     if (!ch.start_at) return null;
     return ch;
   }
@@ -1535,8 +1544,16 @@
     var arr = loadChores().filter(function (c) { return String(c.id) !== String(id); });
     return saveChores(arr);
   }
+  function markChoreDone(id, done) {
+    var ch = findChoreById(id);
+    if (!ch) return false;
+    ch.done = done !== false;
+    if (ch.done) ch.show_on_calendar = false;
+    return upsertChore(ch);
+  }
   function choreShowsOnCalendar(ch) {
     if (!ch || !(ch.start_at || ch.chore_at)) return false;
+    if (ch.done) return false;
     var v = ch.show_on_calendar != null ? ch.show_on_calendar : ch.chore_show_on_calendar;
     if (v === false || v === 0 || v === 'false') return false;
     return true;
@@ -1551,11 +1568,14 @@
    */
   function collectAllChores(opts) {
     opts = opts || {};
-    var includeHidden = !!opts.includeHidden;
+    var includeHidden = !!opts.includeHidden; // hidden-from-calendar still listed when true
+    var includeDone = !!opts.includeDone;
     var out = [];
     try {
       loadChores().forEach(function (ch) {
         if (!ch || !ch.start_at) return;
+        if (ch.done && !includeDone) return;
+        // Calendar default: only show-on-calendar chores. List uses includeHidden:true for all incomplete.
         if (!includeHidden && !choreShowsOnCalendar(ch)) return;
         out.push({
           id: ch.id,
@@ -1568,6 +1588,7 @@
           end_at: ch.end_at || null,
           color: ch.color || DEFAULT_CHORE_COLOR,
           showOnCalendar: choreShowsOnCalendar(ch),
+          done: !!ch.done,
           source: 'chore',
           item: ch
         });
@@ -2823,28 +2844,173 @@
     });
     return n;
   }
-  /** Personal lists only — not tied to an event */
+  /** True when this is my private “Personal {Event}” list (not the shared packing pack) */
+  function isPersonalEventShadowList(n) {
+    return !!(n && (n.isPersonalEventList || n.personalForEventId));
+  }
+  /**
+   * Personal lists: true personal packs + my private “Personal {Event}” lists
+   * (countdown comes from personalForEventId / event dates).
+   */
   function personalListsOnly() {
     return allMyLists().filter(function (n) {
       normalizeNamedList(n);
+      if (isPersonalEventShadowList(n)) return true;
+      // Shared packing packs stay under Event lists
       return !n.eventId;
     });
   }
-  /** Lists linked to a given event id */
+  /** Shared packing lists linked to a given event (not Personal {Event} shadows) */
   function listsForEvent(eventId) {
     if (eventId == null || eventId === '') return [];
     var id = String(eventId);
     return allMyLists().filter(function (n) {
       normalizeNamedList(n);
+      if (isPersonalEventShadowList(n)) return false;
       return n.eventId && String(n.eventId) === id;
     });
   }
-  /** Any list that has an event association */
+  /** Shared event packing lists (exclude personal-for-event shadows) */
   function eventLinkedListsAll() {
     return allMyLists().filter(function (n) {
       normalizeNamedList(n);
+      if (isPersonalEventShadowList(n)) return false;
       return !!n.eventId;
     });
+  }
+  /**
+   * My private list of stuff I Got it! from a shared event packing list.
+   * Named “Personal {EventName}” (e.g. event “Gator” → “Personal Gator”).
+   * Lives under Personal lists; countdown uses the event dates.
+   */
+  function personalEventListName(ev) {
+    var base = autoCap((ev && ev.name) || 'Event') || 'Event';
+    // Avoid “Personal Personal …” if event already starts that way
+    if (/^personal\s/i.test(base)) return base;
+    return 'Personal ' + base;
+  }
+  function ensurePersonalEventList(ev) {
+    if (!ev || !ev.id) return null;
+    var eid = String(ev.id);
+    // Find existing shadow list for this event + me
+    var existing = allMyLists().find(function (n) {
+      if (!n) return false;
+      normalizeNamedList(n);
+      return isPersonalEventShadowList(n) && String(n.personalForEventId || n.eventId) === eid;
+    });
+    if (existing) {
+      // Keep name in sync with event rename
+      var wantName = personalEventListName(ev);
+      if (existing.name !== wantName) {
+        existing.name = wantName;
+        try { saveNamedList(existing); } catch (eN) {}
+      }
+      return existing;
+    }
+    var nl = normalizeNamedList({
+      id: uid(),
+      name: personalEventListName(ev),
+      kind: 'todo',
+      items: [],
+      buckets: { todo: [], buy: [], bring: [] },
+      columnOrder: ['todo', 'buy', 'bring'],
+      // Not a shared pack — personal shadow; still store event id for dates
+      eventId: null,
+      personalForEventId: eid,
+      isPersonalEventList: true,
+      owner_id: myId() || 'local',
+      creators: [],
+      members: [{
+        user_id: myId() || 'local',
+        display_name: myName() || 'You',
+        role: 'owner'
+      }],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    });
+    var store = loadFreeListsStore();
+    store.named = store.named || [];
+    store.named.push(nl);
+    saveFreeListsStore(store);
+    return findNamedListById(nl.id) || nl;
+  }
+  /**
+   * Copy a claimed item from shared event pack → Personal {Event} list.
+   * claimQty 0 removes the mirrored row.
+   */
+  function syncClaimToPersonalEventList(sourceList, sourceItem, claimQty, sourceColId) {
+    if (!sourceList || !sourceItem) return null;
+    var eid = sourceList.eventId || sourceList.personalForEventId;
+    if (!eid) return null;
+    // Don't recurse if we're already on a personal shadow list
+    if (isPersonalEventShadowList(sourceList)) return null;
+    var ev = findEventById(eid);
+    if (!ev) return null;
+    var plist = ensurePersonalEventList(ev);
+    if (!plist) return null;
+    sanitizeNamedList(plist);
+    claimQty = Math.max(0, Number(claimQty) || 0);
+    var me = String(myId() || 'local');
+    var srcId = String(sourceItem.id);
+    // Prefer same column (todo/buy/bring); fall back to todo
+    var colId = 'todo';
+    if (sourceColId && ['todo', 'buy', 'bring'].indexOf(String(sourceColId)) >= 0) {
+      colId = String(sourceColId);
+    }
+    var col = getListColumn(plist, colId);
+    if (!col) {
+      col = getListColumn(plist, 'todo');
+      colId = 'todo';
+    }
+    if (!col) return null;
+    if (!Array.isArray(col.items)) col.items = [];
+    var idx = col.items.findIndex(function (it) {
+      return it && (String(it.source_item_id) === srcId ||
+        (String(it.source_list_id || '') === String(sourceList.id) && String(it.source_item_id) === srcId));
+    });
+    if (claimQty <= 0) {
+      if (idx >= 0) col.items.splice(idx, 1);
+      if (!plist.buckets) plist.buckets = {};
+      plist.buckets[colId] = col.items;
+      saveNamedList(plist);
+      return plist;
+    }
+    var row = idx >= 0 ? col.items[idx] : null;
+    if (!row) {
+      row = {
+        id: uid(),
+        source_item_id: srcId,
+        source_list_id: sourceList.id,
+        source_col: sourceColId || colId,
+        title: sourceItem.title || 'Item',
+        qty: Math.max(1, Number(sourceItem.qty) || 1),
+        qualifier: sourceItem.qualifier || 'other',
+        priority: sourceItem.priority || 0,
+        notes: sourceItem.notes || '',
+        notesList: Array.isArray(sourceItem.notesList) ? sourceItem.notesList.slice() : [],
+        claims: {},
+        from_event_claim: true,
+        private_to: me,
+        created_by: me,
+        created_at: new Date().toISOString()
+      };
+      col.items.push(row);
+    }
+    row.title = sourceItem.title || row.title;
+    row.qty = Math.max(1, Number(sourceItem.qty) || Number(row.qty) || 1);
+    row.source_item_id = srcId;
+    row.source_list_id = sourceList.id;
+    row.source_col = sourceColId || row.source_col || colId;
+    row.from_event_claim = true;
+    row.private_to = me;
+    if (!row.claims || typeof row.claims !== 'object') row.claims = {};
+    row.claims[me] = claimQty;
+    row.claimed_qty = claimQty;
+    row.updated_at = new Date().toISOString();
+    if (!plist.buckets) plist.buckets = {};
+    plist.buckets[colId] = col.items;
+    saveNamedList(plist);
+    return plist;
   }
   function findNamedListById(id) {
     if (id == null || id === '') return null;
@@ -4599,14 +4765,16 @@
     _countdownTimer = setInterval(tickLiveCountdowns, 15000);
   }
 
-  /** Date for a named list = linked event start (if any) */
+  /** Date for a named list = linked event (shared pack or personal-for-event list) */
   function listAssociatedDates(list) {
-    if (!list || !list.eventId) return { start: null, end: null };
-    var ev = findEventById(list.eventId);
+    if (!list) return { start: null, end: null };
+    var eid = list.eventId || list.personalForEventId || null;
+    if (!eid) return { start: null, end: null };
+    var ev = findEventById(eid);
     if (!ev) {
       try {
         var board = loadPersonalBoard();
-        ev = (board.events || []).find(function (e) { return String(e.id) === String(list.eventId); }) || null;
+        ev = (board.events || []).find(function (e) { return String(e.id) === String(eid); }) || null;
       } catch (eB) { ev = null; }
     }
     if (!ev) return { start: null, end: null };
@@ -6213,14 +6381,22 @@
     // Meta: people count only if >1, event name if linked — no item counts / "just you"
     var metaBits = [];
     if (peopleN > 1) metaBits.push(peopleN + ' people');
-    if (linked) metaBits.push('event: ' + linked);
-    else if (opts.badge && !linked) metaBits.push(opts.badge);
+    if (isPersonalEventShadowList(n)) {
+      var pevName = eventNameById(n.personalForEventId || n.eventId);
+      if (pevName) metaBits.push('from ' + pevName);
+      else metaBits.push('personal event list');
+    } else if (linked) {
+      metaBits.push('event: ' + linked);
+    } else if (opts.badge && !linked) {
+      metaBits.push(opts.badge);
+    }
     var metaHtml = metaBits.length
       ? '<div class="ec-meta">' + esc(metaBits.join(' · ')) + '</div>'
       : '';
-    // Same shell for personal + event lists: name + countdown (edit via Share / long-press elsewhere)
+    // Name + countdown (personal-for-event lists get event countdown too)
     return (
-      '<div class="event-card-wrap list-card-wrap' + active + (membersBlock ? ' has-members' : '') + '">' +
+      '<div class="event-card-wrap list-card-wrap' + active + (membersBlock ? ' has-members' : '') +
+        (isPersonalEventShadowList(n) ? ' is-personal-event-list' : '') + '">' +
         '<div class="event-card' + active + '" data-open-list="' + esc(n.id) + '" role="button" tabindex="0">' +
           '<div class="ec-top">' +
             '<strong class="ec-name">' + esc(n.name || 'Untitled list') + '</strong>' +
@@ -6460,14 +6636,18 @@
     var cid = ch.choreId || ch.id || '';
     var openAttrs = ' data-open-chore-id="' + esc(cid) + '"';
     return (
-      '<div class="event-card-wrap chore-card-wrap">' +
+      '<div class="event-card-wrap chore-card-wrap' + (ch.done ? ' is-done' : '') + '">' +
         '<div class="event-card"' + openAttrs + ' role="button" tabindex="0">' +
           '<div class="ec-top">' +
             '<span class="ec-dot" style="background:' + esc(ch.color || DEFAULT_CHORE_COLOR) +
               ';width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px;flex-shrink:0"></span>' +
             '<strong class="ec-name">' + esc(ch.title || ch.name || 'Chore') + '</strong>' +
-            (cd ? ('<span class="ec-countdown">' + cd + '</span>') : '') +
-            '<button type="button" class="btn ec-edit-btn"' + openAttrs + ' title="Edit chore">Edit chore</button>' +
+            (cd && !ch.done ? ('<span class="ec-countdown">' + cd + '</span>') : '') +
+            '<div class="ec-chore-actions">' +
+              '<button type="button" class="btn ec-edit-btn"' + openAttrs + ' title="Edit chore">Edit chore</button>' +
+              '<button type="button" class="btn btn-got ec-chore-done" data-chore-done="' + esc(cid) +
+                '" title="Mark chore done">Done!</button>' +
+            '</div>' +
           '</div>' +
           '<div class="ec-meta">Chore' +
             (when ? (' · ' + esc(when)) : '') +
@@ -11076,10 +11256,26 @@
         openEvent(openEv.getAttribute('data-open-event'));
         return;
       }
+      var doneCh = e.target.closest && e.target.closest('[data-chore-done]');
+      if (doneCh) {
+        e.preventDefault();
+        e.stopPropagation();
+        var did = doneCh.getAttribute('data-chore-done');
+        if (did && markChoreDone(did, true)) {
+          appToast('Chore done!');
+          state.calListMode = 'chores';
+          render();
+        } else {
+          appToast('Could not mark done');
+        }
+        return;
+      }
       var openChId = e.target.closest && e.target.closest('[data-open-chore-id]');
       if (openChId) {
         e.preventDefault();
         e.stopPropagation();
+        // Don't open editor when pressing Done! (handled above)
+        if (e.target.closest && e.target.closest('[data-chore-done]')) return;
         var cidOpen = openChId.getAttribute('data-open-chore-id');
         if (cidOpen) openScheduleChoreBuilder({ choreId: cidOpen, fromChoresList: true });
         return;
@@ -12102,10 +12298,25 @@
         openEvent(open.getAttribute('data-open-event'));
         return;
       }
+      var doneCh2 = ev.target.closest('[data-chore-done]');
+      if (doneCh2) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        var did2 = doneCh2.getAttribute('data-chore-done');
+        if (did2 && markChoreDone(did2, true)) {
+          appToast('Chore done!');
+          state.calListMode = 'chores';
+          render();
+        } else {
+          appToast('Could not mark done');
+        }
+        return;
+      }
       var openChId2 = ev.target.closest('[data-open-chore-id]');
       if (openChId2) {
         ev.preventDefault();
         ev.stopPropagation();
+        if (ev.target.closest && ev.target.closest('[data-chore-done]')) return;
         var cid2 = openChId2.getAttribute('data-open-chore-id');
         if (cid2) openScheduleChoreBuilder({ choreId: cid2, fromChoresList: true });
         return;

@@ -1277,6 +1277,27 @@
       margin-left: 0;
     }
     .event-card .ec-top .ec-edit-btn:first-of-type { margin-left: auto; }
+    .ec-chore-actions {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 4px;
+      margin-left: auto;
+      flex: 0 0 auto;
+    }
+    .ec-chore-actions .btn {
+      width: 100%;
+      min-width: 5.5rem;
+      padding: 4px 10px !important;
+      font-size: 11px !important;
+      margin: 0 !important;
+    }
+    .ec-chore-actions .ec-chore-done {
+      font-weight: 800;
+    }
+    .chore-card-wrap.is-done .event-card {
+      opacity: 0.55;
+    }
     .event-card-members {
       padding: 8px 10px 10px;
       border: 1px solid var(--border);
@@ -3539,7 +3560,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.28</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.29</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">

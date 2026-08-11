@@ -1,0 +1,8 @@
+PlanSlayer V1.3.21 — Chore colors + private personal checklist
+
+- Chores use a distinct calendar dot color (default blue vs event orange)
+- Pick chore color in Make Chore options, Choose when popup, or Edit list default
+- Got it! on To do / To buy / To bring copies into private “My checklist”
+  (device-local, not shared with other list/event members)
+
+Shell: plan-slayer-shell-v54

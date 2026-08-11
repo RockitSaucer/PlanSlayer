@@ -2,7 +2,11 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.20';
+  var APP_VERSION = '1.3.21';
+  var DEFAULT_CHORE_COLOR = '#6a8ab8';
+  var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
+  /** Private per-user checklist (not shared): key listId:userId → items[] */
+  var LOCAL_PRIVATE_CHECKLIST_KEY = 'plan_slayer_private_checklist_v1';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -427,6 +431,13 @@
         if (isBuyColumnKind(kind, list) || isBuyColumnKind(hit.colId, list)) {
           syncBuyGotToBringOnNamedList(list, hit.item, claimQty, hit.colId || kind);
         }
+        // Private non-shared checklist for this event list (To do / To buy / To bring)
+        try {
+          var colId = hit.colId || kind;
+          if (String(colId) !== 'personal') {
+            syncClaimToPrivateChecklist(list, hit.item, claimQty, colId);
+          }
+        } catch (ePriv) {}
         saveNamedList(list);
         return true;
       }
@@ -442,13 +453,19 @@
           return true;
         }
       }
-      if (scope === 'group' && String(kind) === 'buy') {
+      if (scope === 'group') {
         var ev = activeEvent();
         if (ev && ev.state && ev.state.lists) {
-          var buyB = getListBucket(ev, 'buy', 'group');
-          var bringB = getListBucket(ev, 'bring', 'group');
-          var live = (buyB || []).find(function (x) { return String(x.id) === String(item.id); }) || item;
-          syncBuyGotToBringOnBucket(buyB, bringB, live, claimQty);
+          if (String(kind) === 'buy') {
+            var buyB = getListBucket(ev, 'buy', 'group');
+            var bringB = getListBucket(ev, 'bring', 'group');
+            var live = (buyB || []).find(function (x) { return String(x.id) === String(item.id); }) || item;
+            syncBuyGotToBringOnBucket(buyB, bringB, live, claimQty);
+          }
+          try {
+            var pack = ensureAssociatedListForEvent(ev);
+            if (pack) syncClaimToPrivateChecklist(pack, item, claimQty, kind);
+          } catch (ePk) {}
         }
       }
     } catch (eSync) {
@@ -1417,7 +1434,7 @@
               title: it.title || 'Chore',
               chore_at: it.chore_at,
               chore_end_at: it.chore_end_at || null,
-              color: '#6a8ab8',
+              color: it.chore_color || list.choreColor || DEFAULT_CHORE_COLOR,
               item: it
             });
           });
@@ -1430,7 +1447,84 @@
     return out;
   }
   function choreColor(ch) {
-    return (ch && ch.color) || '#6a8ab8';
+    if (ch && ch.color) return ch.color;
+    if (ch && ch.item && ch.item.chore_color) return ch.item.chore_color;
+    return DEFAULT_CHORE_COLOR;
+  }
+  function choreColorSwatchesHtml(selected, dataAttr) {
+    dataAttr = dataAttr || 'data-chore-color';
+    var sel = selected || DEFAULT_CHORE_COLOR;
+    return CHORE_COLOR_PRESETS.map(function (c) {
+      var on = String(c).toLowerCase() === String(sel).toLowerCase();
+      return '<button type="button" class="chore-color-swatch' + (on ? ' is-on' : '') +
+        '" ' + dataAttr + '="' + esc(c) + '" style="background:' + esc(c) + '" title="' + esc(c) +
+        '" aria-label="Chore color ' + esc(c) + '"></button>';
+    }).join('');
+  }
+
+  function privateChecklistKey(listId) {
+    return String(listId || 'none') + ':' + String(myId() || 'local');
+  }
+  function loadPrivateChecklistBag() {
+    var bag = loadJson(LOCAL_PRIVATE_CHECKLIST_KEY, null);
+    return bag && typeof bag === 'object' ? bag : {};
+  }
+  function getPrivateChecklist(listId) {
+    var bag = loadPrivateChecklistBag();
+    var arr = bag[privateChecklistKey(listId)];
+    return Array.isArray(arr) ? arr : [];
+  }
+  function savePrivateChecklist(listId, items) {
+    var bag = loadPrivateChecklistBag();
+    bag[privateChecklistKey(listId)] = Array.isArray(items) ? items.slice(0, 500) : [];
+    saveJson(LOCAL_PRIVATE_CHECKLIST_KEY, bag);
+  }
+  /**
+   * When I Got it! on To do / To buy / To bring, mirror into my private checklist
+   * for this event list (device-local, never published).
+   */
+  function syncClaimToPrivateChecklist(list, sourceItem, claimQty, sourceColId) {
+    if (!list || !list.id || !sourceItem) return;
+    // Only event-linked / shared packing lists get the private checklist
+    if (!list.eventId && !(Array.isArray(list.members) && list.members.length > 1)) return;
+    var me = String(myId() || 'local');
+    var items = getPrivateChecklist(list.id);
+    var srcId = String(sourceItem.id);
+    var idx = items.findIndex(function (it) {
+      return it && String(it.source_item_id || it.id) === srcId;
+    });
+    claimQty = Math.max(0, Number(claimQty) || 0);
+    if (claimQty <= 0) {
+      if (idx >= 0) {
+        items.splice(idx, 1);
+        savePrivateChecklist(list.id, items);
+      }
+      return;
+    }
+    var copy = {
+      id: idx >= 0 && items[idx].id ? items[idx].id : uid(),
+      source_item_id: srcId,
+      source_col: sourceColId || null,
+      private_to: me,
+      title: sourceItem.title || 'Item',
+      qty: Math.max(1, Number(sourceItem.qty) || 1),
+      qualifier: sourceItem.qualifier || 'other',
+      priority: sourceItem.priority || 0,
+      highlight: !!sourceItem.highlight,
+      highlight_color: sourceItem.highlight_color || 'red',
+      notes: sourceItem.notes || '',
+      notesList: Array.isArray(sourceItem.notesList) ? sourceItem.notesList.slice() : [],
+      claims: {},
+      claimed_qty: claimQty,
+      from_claim: true,
+      created_by: me,
+      created_at: (idx >= 0 && items[idx].created_at) || new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    copy.claims[me] = claimQty;
+    if (idx >= 0) items[idx] = Object.assign({}, items[idx], copy);
+    else items.push(copy);
+    savePrivateChecklist(list.id, items);
   }
 
   function setChoreWhenStep(step) {
@@ -1494,6 +1588,7 @@
   }
   function openChoreWhenPicker(item, kind, scope) {
     if (!item) return;
+    var listForColor = findNamedListById(state.activeNamedListId);
     state.choreWhen = {
       itemId: item.id,
       kind: kind,
@@ -1503,7 +1598,8 @@
       m: 0,
       date: choreDateVal(item) || null,
       start: choreTimeVal(item) || '',
-      end: choreEndTimeVal(item) || ''
+      end: choreEndTimeVal(item) || '',
+      color: item.chore_color || (listForColor && listForColor.choreColor) || DEFAULT_CHORE_COLOR
     };
     if (state.choreWhen.date) {
       try {
@@ -1518,6 +1614,7 @@
     }
     if ($('chore-when-start')) $('chore-when-start').value = state.choreWhen.start || '09:00';
     if ($('chore-when-end')) $('chore-when-end').value = state.choreWhen.end || '';
+    renderChoreColorPickers(state.choreWhen.color);
     setChoreWhenStep('day');
     renderChoreWhenGrid();
     if ($('chore-when-modal')) {
@@ -1525,12 +1622,16 @@
       $('chore-when-modal').setAttribute('aria-hidden', 'false');
     }
   }
+  function renderChoreColorPickers(selected) {
+    var box = $('chore-when-colors');
+    if (box) box.innerHTML = choreColorSwatchesHtml(selected || DEFAULT_CHORE_COLOR, 'data-chore-when-color');
+  }
   function closeChoreWhenPicker() {
     if ($('chore-when-modal')) {
       $('chore-when-modal').classList.remove('is-open');
       $('chore-when-modal').setAttribute('aria-hidden', 'true');
     }
-    state.choreWhen = { itemId: null, kind: null, scope: null, step: 'day', y: 0, m: 0, date: null, start: '', end: '' };
+    state.choreWhen = { itemId: null, kind: null, scope: null, step: 'day', y: 0, m: 0, date: null, start: '', end: '', color: DEFAULT_CHORE_COLOR };
   }
   function applyChoreWhenToItem(clear) {
     var c = state.choreWhen;
@@ -1557,9 +1658,9 @@
       // If no start time, store noon so date still marks the day cleanly
       if (!c.start) {
         found.item.chore_at = combineChoreDateTime(c.date, '12:00');
-        // Flag all-day-ish: keep time as midday but UX can still show date-only
       }
       found.item.chore_end_at = (c.end && c.date) ? combineChoreDateTime(c.date, c.end) : null;
+      found.item.chore_color = c.color || found.item.chore_color || DEFAULT_CHORE_COLOR;
     }
     // Sync hidden fields if detail open
     try {
@@ -1596,13 +1697,27 @@
     if ($('ev-back')) $('ev-back').style.display = show ? '' : 'none';
   }
 
-  /** Items I’ve claimed (qty > 0) — used for event list “Personal” box (what I’m bringing) */
+  /**
+   * My private checklist for an event/shared list.
+   * Prefer device-local private store (never shared); fall back to live claims.
+   */
   function collectMyClaimedItems(list) {
     var me = String(myId() || 'local');
     var seen = {};
     var out = [];
     if (!list) return out;
     try { sanitizeNamedList(list); } catch (e) {}
+    // Private store first (true non-shared checklist)
+    try {
+      getPrivateChecklist(list.id).forEach(function (it) {
+        if (!it || !it.id) return;
+        if (it.private_to && String(it.private_to) !== me) return;
+        seen[String(it.source_item_id || it.id)] = true;
+        seen[String(it.id)] = true;
+        out.push(it);
+      });
+    } catch (eP) {}
+    // Also surface any live claims not yet mirrored (todo/buy/bring Got it!)
     (list.columns || []).forEach(function (c) {
       if (!c || String(c.id) === 'personal') return;
       (c.items || []).forEach(function (it) {
@@ -3544,6 +3659,15 @@
     if ($('edit-list-show-expense')) {
       $('edit-list-show-expense').checked = list.showExpense !== false;
     }
+    if ($('edit-list-chore-color')) {
+      $('edit-list-chore-color').value = list.choreColor || DEFAULT_CHORE_COLOR;
+    }
+    if ($('edit-list-chore-colors')) {
+      $('edit-list-chore-colors').innerHTML = choreColorSwatchesHtml(
+        list.choreColor || DEFAULT_CHORE_COLOR,
+        'data-list-chore-color'
+      );
+    }
     try { fillEditListMembersPanel(list); } catch (eM) {}
     if ($('edit-list-modal')) {
       $('edit-list-modal').classList.add('is-open');
@@ -4421,6 +4545,13 @@
                   })()))
                   : '') +
               '</button>' +
+              '<div style="margin:8px 0 4px"><span class="muted" style="font-size:10px;font-weight:800">Dot color</span></div>' +
+              '<div class="chore-color-row" data-item-chore-colors>' +
+                choreColorSwatchesHtml(
+                  item.chore_color || (findNamedListById(state.activeNamedListId) || {}).choreColor || DEFAULT_CHORE_COLOR,
+                  'data-item-chore-color'
+                ) +
+              '</div>' +
               (item.chore_at
                 ? ('<button type="button" class="btn" data-act="clear-chore" style="width:100%;margin-top:6px"' +
                   (canEditSettings ? '' : ' disabled') + '>Clear chore schedule</button>')
@@ -4429,6 +4560,7 @@
               '<input type="hidden" data-f="chore_date" value="' + esc(choreDateVal(item)) + '" />' +
               '<input type="hidden" data-f="chore_time" value="' + esc(choreTimeVal(item)) + '" />' +
               '<input type="hidden" data-f="chore_end_time" value="' + esc(choreEndTimeVal(item)) + '" />' +
+              '<input type="hidden" data-f="chore_color" value="' + esc(item.chore_color || DEFAULT_CHORE_COLOR) + '" />' +
             '</div>' +
           '</div>' +
           '<div class="li-detail-actions">' +
@@ -4600,7 +4732,7 @@
               body +
             '</div>' +
             (String(cid) === 'personal'
-              ? '<div class="list-col-add" style="justify-content:center"><span class="muted" style="font-size:11px;padding:6px 4px">Only you see this · Got it! items land here</span></div>'
+              ? '<div class="list-col-add" style="justify-content:center"><span class="muted" style="font-size:11px;padding:6px 4px">Private · only you · Got it! from To do / To buy lands here</span></div>'
               : ('<div class="list-col-add">' +
                   '<input type="text" class="list-col-add-input" data-col-add-input="' + esc(cid) + '" placeholder="Type item, press Enter…" autocomplete="off" style="text-transform:capitalize" />' +
                   '<button type="button" class="btn btn-icon list-ocr-cam" data-ocr-list="' + esc(cid) +
@@ -9181,8 +9313,11 @@
       var cDate = get('chore_date') ? get('chore_date').value : '';
       var cTime = get('chore_time') ? get('chore_time').value : '';
       var cEnd = get('chore_end_time') ? get('chore_end_time').value : '';
+      var cCol = get('chore_color') ? get('chore_color').value : '';
+      if (cCol) item.chore_color = cCol;
       if (cDate) {
-        item.chore_at = combineChoreDateTime(cDate, cTime || '09:00');
+        item.chore_at = combineChoreDateTime(cDate, cTime || null);
+        if (!cTime) item.chore_at = combineChoreDateTime(cDate, '12:00');
         item.chore_end_at = cEnd ? combineChoreDateTime(cDate, cEnd) : null;
       } else {
         item.chore_at = null;
@@ -9826,6 +9961,47 @@
         render();
       }
     });
+    on('chore-when-colors', 'click', function (e) {
+      var b = e.target.closest && e.target.closest('[data-chore-when-color]');
+      if (!b) return;
+      state.choreWhen.color = b.getAttribute('data-chore-when-color') || DEFAULT_CHORE_COLOR;
+      renderChoreColorPickers(state.choreWhen.color);
+    });
+    on('edit-list-chore-colors', 'click', function (e) {
+      var b = e.target.closest && e.target.closest('[data-list-chore-color]');
+      if (!b) return;
+      var c = b.getAttribute('data-list-chore-color') || DEFAULT_CHORE_COLOR;
+      if ($('edit-list-chore-color')) $('edit-list-chore-color').value = c;
+      if ($('edit-list-chore-colors')) {
+        $('edit-list-chore-colors').innerHTML = choreColorSwatchesHtml(c, 'data-list-chore-color');
+      }
+    });
+    // Item detail: pick chore color without full re-render
+    document.body.addEventListener('click', function (e) {
+      var sw = e.target.closest && e.target.closest('[data-item-chore-color]');
+      if (!sw) return;
+      var row = sw.closest('.list-item');
+      if (!row) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var color = sw.getAttribute('data-item-chore-color') || DEFAULT_CHORE_COLOR;
+      var hid = row.querySelector('[data-f="chore_color"]');
+      if (hid) hid.value = color;
+      var wrap = row.querySelector('[data-item-chore-colors]');
+      if (wrap) wrap.innerHTML = choreColorSwatchesHtml(color, 'data-item-chore-color');
+      // Persist on live item if possible
+      try {
+        var id = row.getAttribute('data-item-id');
+        var kind = row.getAttribute('data-kind');
+        var scope = row.getAttribute('data-scope') || 'free-list';
+        var found = findItemAny(kind, scope, id);
+        if (found && found.item) {
+          found.item.chore_color = color;
+          if (found.list) saveNamedList(found.list);
+          else if (scope === 'group') saveActiveEvent();
+        }
+      } catch (eS) {}
+    }, true);
     click('share-people-chooser-cancel', closeSharePeopleChooser);
     on('share-people-chooser', 'click', function (e) {
       if (e.target === $('share-people-chooser')) closeSharePeopleChooser();
@@ -9886,6 +10062,7 @@
       var linkEv = ($('edit-list-link-event') && $('edit-list-link-event').value) || '';
       list.eventId = linkEv || null;
       list.showExpense = !($('edit-list-show-expense') && !$('edit-list-show-expense').checked);
+      list.choreColor = ($('edit-list-chore-color') && $('edit-list-chore-color').value) || DEFAULT_CHORE_COLOR;
       // Explicit re-link means user wants a pack for this event again
       if (linkEv) {
         clearTombstone('eventList', linkEv);

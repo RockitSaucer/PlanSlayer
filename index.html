@@ -1112,6 +1112,23 @@
     .make-chore-panel { display: none; margin-top: 6px; }
     .make-chore-panel.is-open { display: block; }
     #chore-when-modal { z-index: 33000 !important; }
+    .chore-color-row {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    }
+    .chore-color-swatch {
+      width: 22px; height: 22px; border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.25);
+      cursor: pointer; padding: 0;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
+    }
+    .chore-color-swatch.is-on {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-color: #fff;
+    }
+    .cal-event-dot.chore-dot {
+      /* chores use their own color via inline style */
+    }
     #chore-when-modal .cal-day-btn.is-selected {
       background: var(--accent);
       border-color: #b87a12;
@@ -3383,7 +3400,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.20</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.21</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -3917,6 +3934,10 @@
     <div class="modal modal-tight" role="dialog" aria-labelledby="chore-when-title" style="max-width:360px">
       <h3 id="chore-when-title">Choose when</h3>
       <p class="muted" id="chore-when-step-label" style="font-size:12px;margin:0 0 8px">Pick a day on the calendar</p>
+      <div style="margin:0 0 10px">
+        <label style="display:block;font-size:10px;font-weight:800;color:var(--muted);margin:0 0 6px">Calendar dot color</label>
+        <div class="chore-color-row" id="chore-when-colors"></div>
+      </div>
       <div id="chore-when-cal-step">
         <div class="cal-head">
           <button type="button" class="btn" id="chore-when-prev">‹</button>
@@ -4094,6 +4115,11 @@
         <input type="checkbox" id="edit-list-show-expense" checked />
         <span class="check-row-text">Show $ (shared expense) on list items</span>
       </label>
+      <div style="margin:0 0 10px">
+        <label style="display:block;font-size:10px;font-weight:800;color:var(--muted);margin:0 0 6px">Default chore dot color</label>
+        <div class="chore-color-row" id="edit-list-chore-colors"></div>
+        <input type="hidden" id="edit-list-chore-color" value="#6a8ab8" />
+      </div>
       <div class="edit-members-panel" id="edit-list-members-panel">
         <div class="section-label">Members</div>
         <div id="edit-list-members-list"></div>

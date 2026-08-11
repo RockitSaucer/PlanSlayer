@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.18';
+  var APP_VERSION = '1.3.19';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
   var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
@@ -96,6 +96,8 @@
     showAllPins: true,
     /** Side calendar collapsed to a thin bar */
     calCollapsed: false,
+    /** Under-calendar list: events | chores */
+    calListMode: 'events',
     /** Mobile full-screen list sheet open */
     mobileSheetOpen: false,
     /** Expanded members drawer under left event/list card (id key) */
@@ -1352,6 +1354,79 @@
     if (ev && ev.state && ev.state.showExpense === true) return true;
     // Default on for backward compatibility
     return true;
+  }
+
+  function choreDateVal(item) {
+    if (!item || !item.chore_at) return '';
+    try {
+      var d = new Date(item.chore_at);
+      if (isNaN(d.getTime())) return '';
+      return localYmd(d);
+    } catch (e) { return ''; }
+  }
+  function choreTimeVal(item) {
+    if (!item || !item.chore_at) return '';
+    try {
+      var d = new Date(item.chore_at);
+      if (isNaN(d.getTime())) return '';
+      return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+    } catch (e) { return ''; }
+  }
+  function choreEndTimeVal(item) {
+    if (!item || !item.chore_end_at) return '';
+    try {
+      var d = new Date(item.chore_end_at);
+      if (isNaN(d.getTime())) return '';
+      return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+    } catch (e) { return ''; }
+  }
+  function combineChoreDateTime(dateStr, timeStr) {
+    if (!dateStr) return null;
+    var t = timeStr || '09:00';
+    var p = String(dateStr).split('-');
+    var tp = String(t).split(':');
+    if (p.length < 3) return null;
+    var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]),
+      Number(tp[0]) || 0, Number(tp[1]) || 0, 0, 0);
+    if (isNaN(d.getTime())) return null;
+    return d.toISOString();
+  }
+  /** All list items scheduled as chores (have chore_at) */
+  function collectAllChores() {
+    var out = [];
+    try {
+      var store = loadFreeListsStore();
+      (store.named || []).forEach(function (list) {
+        if (!list) return;
+        try { sanitizeNamedList(list); } catch (e) {}
+        (list.columns || []).forEach(function (c) {
+          if (!c || String(c.id) === 'personal') return;
+          (c.items || []).forEach(function (it) {
+            if (!it || !it.chore_at) return;
+            out.push({
+              id: 'chore_' + list.id + '_' + it.id,
+              itemId: it.id,
+              listId: list.id,
+              listName: list.name || 'List',
+              colId: c.id,
+              colName: c.name || listKindLabel(c.id),
+              title: it.title || 'Chore',
+              chore_at: it.chore_at,
+              chore_end_at: it.chore_end_at || null,
+              color: '#6a8ab8',
+              item: it
+            });
+          });
+        });
+      });
+    } catch (eC) {}
+    out.sort(function (a, b) {
+      return new Date(a.chore_at).getTime() - new Date(b.chore_at).getTime();
+    });
+    return out;
+  }
+  function choreColor(ch) {
+    return (ch && ch.color) || '#6a8ab8';
   }
 
   /** True when left chrome is fully minimized — only then show Back on the right */
@@ -4097,6 +4172,16 @@
               buyNote +
               noteBlock +
               due +
+              (item.chore_at
+                ? ('<span class="chip" style="color:#9bb8d8;border-color:#6a8ab8">Chore ' +
+                  esc((function () {
+                    try {
+                      return new Date(item.chore_at).toLocaleString(undefined, {
+                        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+                      });
+                    } catch (e) { return ''; }
+                  })()) + '</span>')
+                : '') +
               claimersHtml(item) +
             '</div>' +
           '</button>' +
@@ -4162,6 +4247,21 @@
               '</select></div>' +
             '<div class="field field-days"><label>Days</label><input data-f="due_days" type="number" min="0" value="' + (item.due_days || 0) + '"' + lockAttr + ' /></div>' +
           '</div>' +
+          '<div class="field-row" style="margin-top:8px;gap:8px;align-items:flex-end">' +
+            '<div class="field field-fit" style="flex:0 0 auto;margin:0">' +
+              '<label>Chore date</label>' +
+              '<input data-f="chore_date" type="date" value="' + esc(choreDateVal(item)) + '"' + lockAttr + ' style="width:auto;max-width:14ch" />' +
+            '</div>' +
+            '<div class="field field-fit" style="flex:0 0 auto;margin:0">' +
+              '<label>Time</label>' +
+              '<input data-f="chore_time" type="time" value="' + esc(choreTimeVal(item)) + '"' + lockAttr + ' style="width:auto;max-width:11ch" />' +
+            '</div>' +
+            '<div class="field field-fit" style="flex:0 0 auto;margin:0">' +
+              '<label>End (optional)</label>' +
+              '<input data-f="chore_end_time" type="time" value="' + esc(choreEndTimeVal(item)) + '"' + lockAttr + ' style="width:auto;max-width:11ch" title="Optional end time same day" />' +
+            '</div>' +
+          '</div>' +
+          '<p class="muted" style="font-size:10px;margin:4px 0 0">Set a date to put this item on the calendar as a <strong>Chore</strong>.</p>' +
           '<div class="li-detail-actions">' +
             '<div class="li-detail-actions-left">' +
               '<button type="button" class="btn btn-item-del" data-act="del" title="Delete item"' +
@@ -4309,9 +4409,10 @@
               '<button type="button" class="list-col-drag" data-col-drag draggable="' + (canEdit ? 'true' : 'false') + '" title="Drag to reorder" ' +
                 (canEdit ? '' : 'disabled') + '>⋮⋮</button>' +
               '<button type="button" class="list-col-title' + (isClassic ? ' list-col-title-classic' : '') + '" data-col-rename="' + esc(cid) + '" ' +
-                'style="color:' + esc(titleColor) + ';" title="' + (canEdit && !isClassic ? 'Click to rename' : esc(col.name || listKindLabel(cid))) + '">' +
+                (isClassic ? '' : ('style="color:' + esc(titleColor) + ';" ')) +
+                'title="' + (canEdit && !isClassic ? 'Click to rename' : esc(col.name || listKindLabel(cid))) + '">' +
                 (sectionDone ? '<span class="section-complete-check" title="Section complete">✓</span> ' : '') +
-                esc(col.name || listKindLabel(cid)) +
+                esc(isClassic ? listKindLabel(cid) : (col.name || listKindLabel(cid))) +
               '</button>' +
               '<div class="list-col-head-actions">' +
                 (canEdit && String(cid) !== 'personal'
@@ -4435,49 +4536,68 @@
     var first = new Date(y, m, 1);
     var startPad = first.getDay();
     var daysInMonth = new Date(y, m + 1, 0).getDate();
-    // Hunt-style day names + cells + multi-day event dots (every day in start–end range)
     var html = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(function (d) {
       return '<div class="cal-day-name">' + d + '</div>';
     }).join('');
     var today = new Date();
-    var eventDays = {};
-    allEventsCombined().forEach(function (e) {
-      if (!e.start_at) return;
-      var start = ymdFromIso(e.start_at);
-      var end = ymdFromIso(e.end_at) || start;
-      if (!start) return;
-      if (end < start) end = start;
-      // Walk each local day in range that falls in this month
-      var cursor = new Date(Number(start.slice(0, 4)), Number(start.slice(5, 7)) - 1, Number(start.slice(8, 10)));
-      var endD = new Date(Number(end.slice(0, 4)), Number(end.slice(5, 7)) - 1, Number(end.slice(8, 10)));
-      var guard = 0;
-      while (cursor <= endD && guard++ < 400) {
-        if (cursor.getFullYear() === y && cursor.getMonth() === m) {
-          var dayNum = cursor.getDate();
-          if (!eventDays[dayNum]) eventDays[dayNum] = [];
-          eventDays[dayNum].push(e);
+    var dayMarks = {}; // dayNum -> [{color}]
+    var mode = state.calListMode === 'chores' ? 'chores' : 'events';
+    if (mode === 'events') {
+      allEventsCombined().forEach(function (e) {
+        if (!e.start_at) return;
+        var start = ymdFromIso(e.start_at);
+        var end = ymdFromIso(e.end_at) || start;
+        if (!start) return;
+        if (end < start) end = start;
+        var cursor = new Date(Number(start.slice(0, 4)), Number(start.slice(5, 7)) - 1, Number(start.slice(8, 10)));
+        var endD = new Date(Number(end.slice(0, 4)), Number(end.slice(5, 7)) - 1, Number(end.slice(8, 10)));
+        var guard = 0;
+        while (cursor <= endD && guard++ < 400) {
+          if (cursor.getFullYear() === y && cursor.getMonth() === m) {
+            var dayNum = cursor.getDate();
+            if (!dayMarks[dayNum]) dayMarks[dayNum] = [];
+            dayMarks[dayNum].push({ color: eventColor(e) });
+          }
+          cursor.setDate(cursor.getDate() + 1);
         }
-        cursor.setDate(cursor.getDate() + 1);
-      }
-    });
+      });
+    } else {
+      collectAllChores().forEach(function (ch) {
+        if (!ch.chore_at) return;
+        var start = ymdFromIso(ch.chore_at);
+        var end = ymdFromIso(ch.chore_end_at) || start;
+        if (!start) return;
+        if (end < start) end = start;
+        var cursor = new Date(Number(start.slice(0, 4)), Number(start.slice(5, 7)) - 1, Number(start.slice(8, 10)));
+        var endD = new Date(Number(end.slice(0, 4)), Number(end.slice(5, 7)) - 1, Number(end.slice(8, 10)));
+        var guard = 0;
+        while (cursor <= endD && guard++ < 400) {
+          if (cursor.getFullYear() === y && cursor.getMonth() === m) {
+            var dn = cursor.getDate();
+            if (!dayMarks[dn]) dayMarks[dn] = [];
+            dayMarks[dn].push({ color: choreColor(ch) });
+          }
+          cursor.setDate(cursor.getDate() + 1);
+        }
+      });
+    }
     for (var i = 0; i < startPad; i++) html += '<div class="cal-cell empty"></div>';
     for (var d = 1; d <= daysInMonth; d++) {
       var iso = y + '-' + String(m + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
       var isSel = state.sideCal.selectedDay === iso;
       var isToday = today.getFullYear() === y && today.getMonth() === m && today.getDate() === d;
-      var evs = eventDays[d] || [];
+      var marks = dayMarks[d] || [];
       var dots = '';
-      if (evs.length) {
+      if (marks.length) {
         dots = '<div class="cal-dots-container">' +
-          evs.slice(0, 4).map(function (ev) {
-            return '<span class="cal-event-dot" style="background:' + esc(eventColor(ev)) + '"></span>';
+          marks.slice(0, 4).map(function (mk) {
+            return '<span class="cal-event-dot" style="background:' + esc(mk.color || 'var(--accent)') + '"></span>';
           }).join('') + '</div>';
       }
-      // has-event: dots only (CSS strips highlight box). selected = user picked day.
+      // Same cell chrome as every other day — only dots mark events/chores
       html += '<button type="button" class="cal-cell' +
         (isSel ? ' selected' : '') +
         (isToday ? ' is-today' : '') +
-        (evs.length ? ' has-event' : '') +
         '" data-side-day="' + iso + '"><span>' + d + '</span>' + dots + '</button>';
     }
     grid.innerHTML = html;
@@ -5555,39 +5675,128 @@
     return htmlL;
   }
 
-  /** Compact event rows under the calendar (Hunt “Trips and Events”). */
+  function syncCalModeSwitchUi() {
+    var mode = state.calListMode === 'chores' ? 'chores' : 'events';
+    var bEv = $('cal-mode-events');
+    var bCh = $('cal-mode-chores');
+    if (bEv) bEv.classList.toggle('is-active', mode === 'events');
+    if (bCh) bCh.classList.toggle('is-active', mode === 'chores');
+    var addBtn = $('add-event-tab-btn');
+    if (addBtn) {
+      if (mode === 'chores') {
+        addBtn.textContent = '+ Schedule chore';
+        addBtn.title = 'Open a list item and set Chore date';
+      } else {
+        addBtn.textContent = '+ Add Event';
+        addBtn.title = 'Add event';
+      }
+    }
+    var titleEl = $('events-title-date');
+    if (titleEl) {
+      if (mode === 'chores') {
+        titleEl.textContent = state.sideCal && state.sideCal.selectedDay
+          ? ('Chores · ' + state.sideCal.selectedDay)
+          : 'Chores';
+      } else {
+        titleEl.textContent = state.sideCal && state.sideCal.selectedDay
+          ? ('Events · ' + state.sideCal.selectedDay)
+          : 'Trips and Events';
+      }
+    }
+  }
+
+  /** Compact event or chore rows under the calendar */
   function renderCalendarEventsList() {
     var box = $('calendar-events-list');
-    var titleEl = $('events-title-date');
     if (!box) return;
+    syncCalModeSwitchUi();
+    var mode = state.calListMode === 'chores' ? 'chores' : 'events';
+    if (mode === 'chores') {
+      var chores = collectAllChores();
+      if (state.sideCal && state.sideCal.selectedDay) {
+        var day = state.sideCal.selectedDay;
+        chores = chores.filter(function (ch) {
+          var s = ymdFromIso(ch.chore_at);
+          var e = ymdFromIso(ch.chore_end_at) || s;
+          return s && day >= s && day <= e;
+        });
+      } else if (state.eventsScope === 'month' && state.sideCal) {
+        var y = state.sideCal.y;
+        var m = state.sideCal.m;
+        chores = chores.filter(function (ch) {
+          try {
+            var d = new Date(ch.chore_at);
+            return d.getFullYear() === y && d.getMonth() === m;
+          } catch (err) { return true; }
+        });
+      }
+      if (!chores.length) {
+        box.innerHTML = '<p class="empty" style="margin:4px 0;font-size:11px">No chores scheduled. Open a list item and set a <strong>Chore date</strong>.</p>';
+        return;
+      }
+      box.innerHTML = chores.slice(0, 50).map(function (ch) {
+        return renderChoreCardHtml(ch);
+      }).join('');
+      return;
+    }
     var list = sortedEvents();
-    // Prefer month of side cal if scoped
     if (state.eventsScope === 'month' && state.sideCal) {
-      var y = state.sideCal.y;
-      var m = state.sideCal.m;
+      var y2 = state.sideCal.y;
+      var m2 = state.sideCal.m;
       list = list.filter(function (e) {
         if (!e.start_at) return true;
         try {
           var d = new Date(e.start_at);
-          return d.getFullYear() === y && d.getMonth() === m;
+          return d.getFullYear() === y2 && d.getMonth() === m2;
         } catch (err) { return true; }
       });
     }
-    if (titleEl) {
-      if (state.sideCal && state.sideCal.selectedDay) {
-        titleEl.textContent = 'Events · ' + state.sideCal.selectedDay;
-      } else {
-        titleEl.textContent = 'Trips and Events';
-      }
+    if (state.sideCal && state.sideCal.selectedDay) {
+      var day2 = state.sideCal.selectedDay;
+      list = list.filter(function (e) {
+        if (!e.start_at) return true;
+        var s = ymdFromIso(e.start_at);
+        var en = ymdFromIso(e.end_at) || s;
+        return s && day2 >= s && day2 <= en;
+      });
     }
     if (!list.length) {
       box.innerHTML = '<p class="empty" style="margin:4px 0;font-size:11px">No events yet. Tap <strong>+ Add Event</strong>.</p>';
       return;
     }
-    // Slim cards under calendar
     box.innerHTML = list.slice(0, 40).map(function (e) {
       return renderEventCardHtml(e);
     }).join('');
+  }
+
+  function renderChoreCardHtml(ch) {
+    if (!ch) return '';
+    var when = '';
+    try {
+      var d = new Date(ch.chore_at);
+      when = d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      if (ch.chore_end_at) {
+        var d2 = new Date(ch.chore_end_at);
+        when += ' – ' + d2.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      }
+    } catch (e) { when = ''; }
+    var cd = countdownHtml(ch.chore_at, ch.chore_end_at || ch.chore_at);
+    return (
+      '<div class="event-card-wrap chore-card-wrap">' +
+        '<div class="event-card" data-open-chore="' + esc(ch.listId) + '" data-chore-item="' + esc(ch.itemId) + '" role="button" tabindex="0">' +
+          '<div class="ec-top">' +
+            '<strong>' + esc(ch.title) + '</strong>' +
+            cd +
+            '<button type="button" class="btn ec-edit-btn" data-open-chore="' + esc(ch.listId) +
+              '" data-chore-item="' + esc(ch.itemId) + '" title="Open chore">Edit chore</button>' +
+          '</div>' +
+          '<div class="ec-meta">Chore · ' + esc(ch.listName) +
+            (ch.colName ? (' · ' + esc(ch.colName)) : '') +
+            (when ? (' · ' + esc(when)) : '') +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
   }
 
   function syncLeftTabChrome() {
@@ -7346,30 +7555,11 @@
 
   function renderInlineAddMembersHtml(opts) {
     opts = opts || {};
-    var idPrefix = opts.prefix || 'inline';
-    var canAdd = opts.canAdd !== false;
     var drawerKey = opts.drawerKey || '';
-    var addOpen = state.membersAddOpenKey && String(state.membersAddOpenKey) === String(drawerKey);
-    if (!canAdd) {
-      return '<div class="inline-members-block" data-drawer-key="' + esc(drawerKey) + '">' +
-        '<div class="section-label">Members</div>' +
-        (opts.membersHtml || '<span class="muted" style="font-size:12px">Just you</span>') +
-        '</div>';
-    }
-    return '<div class="inline-members-block" data-inline-members="' + esc(opts.scope || 'list') +
-      '" data-inline-list-id="' + esc(opts.listId || '') + '" data-drawer-key="' + esc(drawerKey) + '">' +
+    // Dropdown under event/list card: members only (add/remove is in Edit)
+    return '<div class="inline-members-block" data-drawer-key="' + esc(drawerKey) + '">' +
       '<div class="section-label">Members</div>' +
       '<div class="inline-members-chips">' + (opts.membersHtml || '<span class="muted" style="font-size:12px">Just you</span>') + '</div>' +
-      '<button type="button" class="btn btn-accent btn-inline-add-members" data-inline-add-toggle="' + esc(drawerKey) + '">' +
-        (addOpen ? 'Hide' : 'Add members') + '</button>' +
-      '<div class="inline-add-members-form' + (addOpen ? ' is-open' : '') + '" id="' + esc(idPrefix) + '-add-form">' +
-        '<p class="muted" style="font-size:11px;margin:0 0 6px">Friends, nicknames, or type a new name</p>' +
-        '<div class="field" style="margin:0 0 6px">' +
-          '<input type="text" class="inline-member-search" id="' + esc(idPrefix) + '-member-search" ' +
-            'placeholder="Name, nickname, or username…" autocomplete="off" />' +
-        '</div>' +
-        '<div class="inline-member-pick" id="' + esc(idPrefix) + '-member-pick"></div>' +
-      '</div>' +
       '</div>';
   }
 
@@ -8823,6 +9013,19 @@
     if (get('require_all')) item.require_all = !!get('require_all').checked;
     if (get('due_mode')) item.due_mode = get('due_mode').value;
     if (get('due_days')) item.due_days = Math.max(0, parseInt(get('due_days').value, 10) || 0);
+    // Chore schedule → calendar
+    try {
+      var cDate = get('chore_date') ? get('chore_date').value : '';
+      var cTime = get('chore_time') ? get('chore_time').value : '';
+      var cEnd = get('chore_end_time') ? get('chore_end_time').value : '';
+      if (cDate) {
+        item.chore_at = combineChoreDateTime(cDate, cTime || '09:00');
+        item.chore_end_at = cEnd ? combineChoreDateTime(cDate, cEnd) : null;
+      } else {
+        item.chore_at = null;
+        item.chore_end_at = null;
+      }
+    } catch (eCh) {}
     var shares = [];
     row.querySelectorAll('[data-share-id]').forEach(function (cb) {
       if (cb.checked) shares.push(cb.getAttribute('data-share-id'));
@@ -9071,7 +9274,15 @@
     try { wireOcrReviewModal(); } catch (eOcrW) {}
 
     click('btn-create-event', openCreateModal);
-    click('add-event-tab-btn', openCreateModal);
+    click('add-event-tab-btn', function () {
+      if (state.calListMode === 'chores') {
+        appToast('Open a list item and set Chore date + time — it appears here and on the calendar');
+        // Prefer opening the active list if any
+        if (state.activeNamedListId) openNamedListById(state.activeNamedListId);
+        return;
+      }
+      openCreateModal();
+    });
     click('create-cancel', closeCreateModal);
     // Do NOT close create-event by clicking the overlay — Cancel only
     click('btn-create-list', openListModal);
@@ -9371,6 +9582,26 @@
       var keep = $('edit-list-merge-keep') && $('edit-list-merge-keep').value;
       var drop = $('edit-list-merge-drop') && $('edit-list-merge-drop').value;
       mergeMembers(keep, drop, 'list', state.activeNamedListId);
+    });
+    function toggleMergeBox(boxId, btnId) {
+      var box = $(boxId);
+      var btn = $(btnId);
+      if (!box) return;
+      var open = box.classList.contains('is-collapsed');
+      box.classList.toggle('is-collapsed', !open);
+      if (btn) btn.textContent = open ? 'Hide merge' : 'Merge members';
+    }
+    click('edit-ev-merge-toggle', function () { toggleMergeBox('edit-ev-merge-box', 'edit-ev-merge-toggle'); });
+    click('edit-list-merge-toggle', function () { toggleMergeBox('edit-list-merge-box', 'edit-list-merge-toggle'); });
+    click('cal-mode-events', function () {
+      state.calListMode = 'events';
+      renderSideCalendar();
+      renderCalendarEventsList();
+    });
+    click('cal-mode-chores', function () {
+      state.calListMode = 'chores';
+      renderSideCalendar();
+      renderCalendarEventsList();
     });
     click('share-people-chooser-cancel', closeSharePeopleChooser);
     on('share-people-chooser', 'click', function (e) {
@@ -10014,6 +10245,27 @@
         e.preventDefault();
         e.stopPropagation();
         openEvent(openEv.getAttribute('data-open-event'));
+        return;
+      }
+      var openCh = e.target.closest && e.target.closest('[data-open-chore]');
+      if (openCh) {
+        e.preventDefault();
+        e.stopPropagation();
+        var lidCh = openCh.getAttribute('data-open-chore');
+        var iidCh = openCh.getAttribute('data-chore-item');
+        if (lidCh) {
+          openNamedListById(lidCh);
+          if (iidCh) {
+            state.expandedItemId = iidCh;
+            setTimeout(function () {
+              try {
+                var row = document.querySelector('.list-item[data-item-id="' + iidCh + '"]');
+                if (row) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+              } catch (eSc) {}
+              try { render(); } catch (eR) {}
+            }, 80);
+          }
+        }
         return;
       }
       var b = e.target.closest && e.target.closest('[data-open-list]');
@@ -11002,6 +11254,27 @@
       if (open) {
         // Open event + associated lists on the right — no popup, no auto-open map
         openEvent(open.getAttribute('data-open-event'));
+        return;
+      }
+      var openChore = ev.target.closest('[data-open-chore]');
+      if (openChore) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        var listCh = openChore.getAttribute('data-open-chore');
+        var itemCh = openChore.getAttribute('data-chore-item');
+        if (listCh) {
+          openNamedListById(listCh);
+          if (itemCh) {
+            state.expandedItemId = itemCh;
+            setTimeout(function () {
+              try { render(); } catch (eR2) {}
+              try {
+                var row2 = document.querySelector('.list-item[data-item-id="' + itemCh + '"]');
+                if (row2) row2.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+              } catch (eSc2) {}
+            }, 60);
+          }
+        }
         return;
       }
       var mctx = ev.target.closest('[data-map-ctx]');

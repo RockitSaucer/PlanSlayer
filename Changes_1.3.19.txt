@@ -1,0 +1,14 @@
+PlanSlayer V1.3.19 — Calendar dots, chores switch, layout polish
+
+- Event/chore days look like every other day; only dots mark them (1 event = 1 dot)
+- Show events / Show chores selector switch (active side larger)
+- List items: Chore date + time → appear on calendar as chores
+- Event/list dropdown: members only (no Add members there)
+- Events list no fixed max-height — grows before scroll; personal lists pushed down
+- Trips/Events header in its own disconnected card
+- To do / To buy / To bring force larger + orange (data-col-kind CSS)
+- Map mini: capped square size; Max outermost top-right
+- Merge members hidden until Merge members button
+- Name/type fields max ~18ch
+
+Shell: plan-slayer-shell-v52

@@ -1277,19 +1277,77 @@
       margin-left: 0;
     }
     .event-card .ec-top .ec-edit-btn:first-of-type { margin-left: auto; }
+    /* Chore cards — compact height; T minus under the name */
+    .chore-card-wrap .chore-event-card {
+      padding: 8px 10px !important;
+      margin-bottom: 6px;
+    }
+    .chore-card-wrap .chore-ec-top {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      flex-wrap: nowrap;
+    }
+    .chore-card-wrap .chore-ec-main {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .chore-card-wrap .chore-ec-name-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .chore-card-wrap .chore-ec-name-row .ec-name {
+      flex: 1 1 auto;
+      min-width: 0;
+      max-width: none !important;
+      font-size: 13px;
+      line-height: 1.25;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .chore-card-wrap .ec-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+    .chore-card-wrap .chore-ec-countdown {
+      margin: 0;
+      padding: 0;
+      line-height: 1.2;
+    }
+    .chore-card-wrap .chore-ec-countdown .cd {
+      font-size: 11px !important;
+      font-weight: 800;
+    }
+    .chore-card-wrap .chore-ec-meta {
+      margin-top: 0 !important;
+      font-size: 10px !important;
+      line-height: 1.2;
+    }
     .ec-chore-actions {
       display: flex;
       flex-direction: column;
       align-items: stretch;
-      gap: 4px;
-      margin-left: auto;
+      gap: 3px;
+      margin-left: 0;
       flex: 0 0 auto;
+      align-self: center;
     }
     .ec-chore-actions .btn {
-      width: 100%;
-      min-width: 5.5rem;
-      padding: 4px 10px !important;
-      font-size: 11px !important;
+      width: auto;
+      min-width: 4.75rem;
+      padding: 3px 8px !important;
+      font-size: 10px !important;
+      min-height: 0 !important;
+      line-height: 1.2;
       margin: 0 !important;
     }
     .ec-chore-actions .ec-chore-done {
@@ -3577,7 +3635,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.31</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.32</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">

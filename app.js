@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.31';
+  var APP_VERSION = '1.3.32';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -1923,7 +1923,6 @@
     }
     grid.innerHTML = html;
   }
-  function fillChoreLinkSelect() { /* list-link removed — chores are event-like */ }
   function syncChoreModalChrome() {
     var c = state.choreWhen || {};
     var titleEl = $('chore-when-title');
@@ -6639,23 +6638,27 @@
     var hidden = ch.showOnCalendar === false;
     var cid = ch.choreId || ch.id || '';
     var openAttrs = ' data-open-chore-id="' + esc(cid) + '"';
+    // Compact: name + actions on one row; T minus under the name (not beside it)
     return (
       '<div class="event-card-wrap chore-card-wrap' + (ch.done ? ' is-done' : '') + '">' +
-        '<div class="event-card"' + openAttrs + ' role="button" tabindex="0">' +
-          '<div class="ec-top">' +
-            '<span class="ec-dot" style="background:' + esc(ch.color || DEFAULT_CHORE_COLOR) +
-              ';width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px;flex-shrink:0"></span>' +
-            '<strong class="ec-name">' + esc(ch.title || ch.name || 'Chore') + '</strong>' +
-            (cd && !ch.done ? ('<span class="ec-countdown">' + cd + '</span>') : '') +
+        '<div class="event-card chore-event-card"' + openAttrs + ' role="button" tabindex="0">' +
+          '<div class="ec-top chore-ec-top">' +
+            '<div class="chore-ec-main">' +
+              '<div class="chore-ec-name-row">' +
+                '<span class="ec-dot" style="background:' + esc(ch.color || DEFAULT_CHORE_COLOR) + '"></span>' +
+                '<strong class="ec-name">' + esc(ch.title || ch.name || 'Chore') + '</strong>' +
+              '</div>' +
+              (cd && !ch.done ? ('<div class="chore-ec-countdown ec-countdown">' + cd + '</div>') : '') +
+              '<div class="ec-meta chore-ec-meta">Chore' +
+                (when ? (' · ' + esc(when)) : '') +
+                (hidden ? ' · <span style="opacity:0.75">hidden from calendar</span>' : '') +
+              '</div>' +
+            '</div>' +
             '<div class="ec-chore-actions">' +
               '<button type="button" class="btn ec-edit-btn"' + openAttrs + ' title="Edit chore">Edit chore</button>' +
               '<button type="button" class="btn btn-got ec-chore-done" data-chore-done="' + esc(cid) +
                 '" title="Mark chore done">Done!</button>' +
             '</div>' +
-          '</div>' +
-          '<div class="ec-meta">Chore' +
-            (when ? (' · ' + esc(when)) : '') +
-            (hidden ? ' · <span style="opacity:0.75">hidden from calendar</span>' : '') +
           '</div>' +
         '</div>' +
       '</div>'
@@ -12153,20 +12156,6 @@
 
     // Qualifier filter chips + sort by type
     on('qualifier-filters', 'click', function (e) {
-      // + Add section (far left, same row as Show all / category / Sort by type)
-      if (e.target.closest && e.target.closest('#btn-add-list-column')) {
-        e.preventDefault();
-        e.stopPropagation();
-        var listAdd = resolveOpenNamedList(e.target) || findNamedListById(state.activeNamedListId);
-        if (!listAdd) { appToast('Open a list first'); return; }
-        if (!isNamedListOwner(listAdd)) { appToast('Only the list creator can add sections'); return; }
-        var liveAdd = findNamedListById(listAdd.id) || listAdd;
-        addListColumn(liveAdd, 'New list');
-        saveNamedList(liveAdd);
-        render();
-        appToast('Section added — rename it by tapping the title');
-        return;
-      }
       var b = e.target.closest('[data-filter-q]');
       if (!b) return;
       var q = b.getAttribute('data-filter-q');

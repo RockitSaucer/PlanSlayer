@@ -1,0 +1,7 @@
+PlanSlayer V1.3.32 — Compact chore cards + skills pin
+
+- Chore cards: T minus under the name; tighter padding/buttons
+- Dead code: removed empty fillChoreLinkSelect + orphaned Add section click handler
+- Grok skills documented in AGENTS.md (make-lists, plan-calendar, plan-events, events-chores-switch)
+
+Shell: plan-slayer-shell-v65

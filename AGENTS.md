@@ -1,7 +1,19 @@
 # PlanSlayer — agent notes
 
 **Product:** group event planning (lists, invites, expenses, Hunt-style map + calendar).  
-**Current version:** **V1.3.31** (`app.js` `APP_VERSION`)
+**Current version:** **V1.3.32** (`app.js` `APP_VERSION`)
+
+### Skills (Grok) — keep in sync when this product changes
+User skills under `~/.grok/skills/` (SOURCE_OF_TRUTH = this folder):
+
+| Skill | Trigger |
+|-------|---------|
+| **make-lists** | Full lists product (calendar, events, chores, Got it!, share, mobile) |
+| **plan-calendar** | Side calendar + dots |
+| **plan-events** | Trips/events + packing association |
+| **events-chores-switch** | Events/Chores dual button under calendar |
+
+When shipping list/calendar/chores/events/share UX here: **update those skills** (behavior + pin version).
 
 ### Three-site family
 Map/calendar fixes shared with Hunt/Reg unless noted. **Other ways to slay** → Hunt + Reg. See `Desktop/HuntApp/reusable-kits/SYNC_POLICY.md`.

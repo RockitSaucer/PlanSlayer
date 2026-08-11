@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.23';
+  var APP_VERSION = '1.3.24';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -1852,29 +1852,25 @@
     var titleEl = $('chore-when-title');
     var stepLabel = $('chore-when-step-label');
     var titleField = $('chore-when-title-input');
+    var titleFieldWrap = $('chore-when-title-field');
     var linkWrap = $('chore-when-link-wrap');
+    var isStandalone = c.mode === 'standalone' || !c.itemId;
     if (titleEl) {
-      titleEl.textContent = c.mode === 'standalone' || !c.itemId
-        ? 'Schedule chore'
-        : 'Chore options';
+      titleEl.textContent = isStandalone ? 'Schedule chore' : 'Chore options';
     }
     if (stepLabel) {
-      if (c.mode === 'standalone' || !c.itemId) {
-        stepLabel.textContent = 'Name it, pick when, optionally link a list item.';
-      } else {
-        stepLabel.textContent = 'Choose when · color · show on calendar';
-      }
+      stepLabel.textContent = isStandalone
+        ? 'Name · day · color (list item optional)'
+        : (c.title ? (c.title + ' · pick day & color') : 'Pick day · color · show on calendar');
     }
     if (titleField) {
       titleField.value = c.title || '';
-      // When editing a linked list item, title still editable (doesn't rename item unless standalone)
-      titleField.placeholder = c.itemId ? 'Chore name (optional note)' : 'Chore name';
+      titleField.placeholder = 'Chore name';
     }
-    if (linkWrap) {
-      // Always show optional list-item link for standalone builder; keep visible for item mode too
-      linkWrap.style.display = '';
-    }
-    fillChoreLinkSelect(c.linkItemKey || '');
+    // Item mode: hide name/link (already on the list item) to keep popup short
+    if (titleFieldWrap) titleFieldWrap.style.display = isStandalone ? '' : 'none';
+    if (linkWrap) linkWrap.style.display = isStandalone ? '' : 'none';
+    if (isStandalone) fillChoreLinkSelect(c.linkItemKey || '');
   }
   /**
    * Open chore builder.
@@ -5024,27 +5020,33 @@
             '<div class="field field-days"><label>Days</label><input data-f="due_days" type="number" min="0" value="' + (item.due_days || 0) + '"' + lockAttr + ' /></div>' +
           '</div>' +
           '<div class="make-chore-wrap" style="margin-top:10px">' +
-            '<button type="button" class="btn btn-accent" data-act="choose-when" style="width:100%"' +
-              (canEditSettings ? '' : ' disabled') + '>' +
-              (item.chore_at ? 'Chore options' : 'Make Chore') +
+            '<div class="make-chore-btn-row">' +
+              '<button type="button" class="btn btn-accent" data-act="choose-when"' +
+                (canEditSettings ? '' : ' disabled') + '>' +
+                (item.chore_at ? 'Chore options' : 'Make Chore') +
+              '</button>' +
               (item.chore_at
-                ? (' · ' + esc((function () {
+                ? ('<span class="muted make-chore-when-hint">' + esc((function () {
                   try {
                     return new Date(item.chore_at).toLocaleString(undefined, {
                       month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
                     });
-                  } catch (e) { return 'set'; }
-                })()))
+                  } catch (e) { return 'scheduled'; }
+                })()) + '</span>')
                 : '') +
-            '</button>' +
-            '<p class="muted" style="font-size:10px;margin:6px 0 0">Opens chore options: choose when, color, show on calendar.</p>' +
-            // Hidden fields keep chore values for save path / detail save
+            '</div>' +
+            '<label class="check-row make-chore-show-cal"' +
+              (item.chore_at ? '' : ' style="opacity:0.85"') + '>' +
+              '<input type="checkbox" data-f="chore_show_on_calendar" ' +
+                (item.chore_show_on_calendar === false ? '' : 'checked') +
+                (canEditSettings ? '' : ' disabled') + ' />' +
+              '<span class="check-row-text">Show on calendar</span>' +
+            '</label>' +
+            // Hidden fields keep schedule values for detail save
             '<input type="hidden" data-f="chore_date" value="' + esc(choreDateVal(item)) + '" />' +
             '<input type="hidden" data-f="chore_time" value="' + esc(choreTimeVal(item)) + '" />' +
             '<input type="hidden" data-f="chore_end_time" value="' + esc(choreEndTimeVal(item)) + '" />' +
             '<input type="hidden" data-f="chore_color" value="' + esc(item.chore_color || DEFAULT_CHORE_COLOR) + '" />' +
-            '<input type="hidden" data-f="chore_show_on_calendar" value="' +
-              (item.chore_show_on_calendar === false ? '0' : '1') + '" />' +
           '</div>' +
           '<div class="li-detail-actions">' +
             '<div class="li-detail-actions-left">' +

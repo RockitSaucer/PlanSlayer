@@ -1111,12 +1111,106 @@
     }
     .make-chore-panel { display: none; margin-top: 6px; }
     .make-chore-panel.is-open { display: block; }
+    .make-chore-wrap .make-chore-btn-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 10px;
+    }
+    .make-chore-wrap .make-chore-btn-row .btn {
+      width: auto;
+      flex: 0 0 auto;
+    }
+    .make-chore-wrap .make-chore-when-hint {
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .make-chore-wrap .make-chore-show-cal {
+      margin: 8px 0 0;
+    }
     #chore-when-modal { z-index: 33000 !important; }
+    /* Chore options popup: fit viewport without scrolling */
+    #chore-when-modal .modal {
+      max-width: min(360px, 96vw);
+      max-height: none;
+      overflow: visible;
+      padding: 12px 14px 10px;
+    }
+    #chore-when-modal .modal h3 {
+      margin: 0 0 4px;
+      font-size: 15px;
+    }
+    #chore-when-modal #chore-when-step-label {
+      margin: 0 0 6px !important;
+      font-size: 11px !important;
+      line-height: 1.3;
+    }
+    #chore-when-modal .field {
+      margin: 0 0 6px !important;
+    }
+    #chore-when-modal .field label {
+      margin-bottom: 2px;
+      font-size: 10px;
+    }
+    #chore-when-modal .field input,
+    #chore-when-modal .field select {
+      padding: 6px 8px;
+      font-size: 13px;
+    }
+    #chore-when-modal .chore-when-opts {
+      margin: 0 0 6px;
+      padding: 6px 8px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(0,0,0,0.12);
+    }
+    #chore-when-modal .chore-when-opts .check-row { margin: 0 0 4px; }
+    #chore-when-modal .cal-head {
+      margin: 0 0 4px;
+      gap: 6px;
+    }
+    #chore-when-modal .cal-head .btn {
+      padding: 4px 8px;
+      min-height: 0;
+    }
+    #chore-when-modal #chore-when-label { font-size: 12px; }
+    #chore-when-modal .cal-grid {
+      gap: 2px;
+      font-size: 11px;
+    }
+    #chore-when-modal .cal-day-name {
+      font-size: 9px;
+      padding: 0;
+      min-height: 0;
+    }
+    #chore-when-modal .cal-day-btn,
+    #chore-when-modal [data-chore-day] {
+      min-height: 28px;
+      padding: 2px 0;
+      font-size: 11px;
+    }
+    #chore-when-modal #chore-when-summary {
+      margin: 6px 0 0 !important;
+      font-size: 10px !important;
+      line-height: 1.3;
+    }
+    #chore-when-modal .modal-actions {
+      margin-top: 8px !important;
+      gap: 6px;
+    }
+    #chore-when-modal .modal-actions .btn {
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+    #chore-when-modal #chore-when-start-step,
+    #chore-when-modal #chore-when-end-step {
+      margin-top: 4px;
+    }
     .chore-color-row {
-      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
     }
     .chore-color-swatch {
-      width: 22px; height: 22px; border-radius: 50%;
+      width: 20px; height: 20px; border-radius: 50%;
       border: 2px solid rgba(255,255,255,0.25);
       cursor: pointer; padding: 0;
       box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
@@ -3300,6 +3394,9 @@
       .cal-grid .cal-day-btn { padding: 12px 0; font-size: 13px; }
       #create-modal .modal { width: min(420px, 92vw); max-height: none; }
       #create-modal .cal-grid .cal-day-btn { padding: 6px 0; font-size: 12px; }
+      #chore-when-modal .modal { max-height: none; overflow: visible; width: min(360px, 92vw); }
+      #chore-when-modal .cal-day-btn,
+      #chore-when-modal [data-chore-day] { min-height: 26px; }
     }
     .modal h3 { margin: 0 0 10px; color: #fff; }
     .modal .field { margin-bottom: 10px; }
@@ -3400,7 +3497,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.23</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.24</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -3929,62 +4026,58 @@
     </div>
   </div>
 
-  <!-- Schedule chore / Chore options: title, optional list item, day → times, color, show on calendar -->
+  <!-- Schedule chore / Chore options — compact, no scroll -->
   <div class="modal-overlay" id="chore-when-modal" aria-hidden="true">
-    <div class="modal modal-tight" role="dialog" aria-labelledby="chore-when-title" style="max-width:380px">
+    <div class="modal modal-tight" role="dialog" aria-labelledby="chore-when-title">
       <h3 id="chore-when-title">Schedule chore</h3>
-      <p class="muted" id="chore-when-step-label" style="font-size:12px;margin:0 0 8px">Name it, pick when, optionally link a list item.</p>
+      <p class="muted" id="chore-when-step-label">Pick a day · optional time · color</p>
 
-      <div class="field" style="margin:0 0 10px">
+      <div class="field" id="chore-when-title-field">
         <label for="chore-when-title-input">Chore name</label>
         <input type="text" id="chore-when-title-input" placeholder="e.g. Take out trash" maxlength="120" autocomplete="off" style="width:100%" />
       </div>
 
-      <div class="field" id="chore-when-link-wrap" style="margin:0 0 10px">
+      <div class="field" id="chore-when-link-wrap">
         <label for="chore-when-link-item">Link to list item <span class="muted">(optional)</span></label>
         <select id="chore-when-link-item" style="width:100%">
-          <option value="">— None (standalone chore) —</option>
+          <option value="">— None (standalone) —</option>
         </select>
       </div>
 
-      <div style="margin:0 0 8px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:rgba(0,0,0,0.15)">
-        <div style="font-size:10px;font-weight:800;color:var(--muted);margin:0 0 6px;letter-spacing:0.04em;text-transform:uppercase">Chore options</div>
-        <label class="check-row" style="margin:0 0 8px">
+      <div class="chore-when-opts">
+        <label class="check-row">
           <input type="checkbox" id="chore-when-show-cal" checked />
           <span class="check-row-text">Show on calendar</span>
         </label>
-        <div style="margin:0 0 4px">
-          <label style="display:block;font-size:10px;font-weight:800;color:var(--muted);margin:0 0 6px">Dot color</label>
-          <div class="chore-color-row" id="chore-when-colors"></div>
-        </div>
+        <div class="chore-color-row" id="chore-when-colors" title="Dot color"></div>
       </div>
 
       <div id="chore-when-cal-step">
         <div class="cal-head">
-          <button type="button" class="btn" id="chore-when-prev">‹</button>
+          <button type="button" class="btn" id="chore-when-prev" aria-label="Previous month">‹</button>
           <strong id="chore-when-label">—</strong>
-          <button type="button" class="btn" id="chore-when-next">›</button>
+          <button type="button" class="btn" id="chore-when-next" aria-label="Next month">›</button>
         </div>
         <div class="cal-grid" id="chore-when-grid"></div>
       </div>
       <div id="chore-when-start-step" style="display:none">
-        <label for="chore-when-start">Start time <span class="muted">(optional)</span></label>
-        <input type="time" id="chore-when-start" value="09:00" style="width:auto;max-width:12ch;margin:6px 0 10px" />
-        <div class="modal-actions" style="justify-content:flex-start;gap:8px">
-          <button type="button" class="btn" id="chore-when-skip-start">Skip time</button>
+        <label for="chore-when-start" style="font-size:11px">Start time <span class="muted">(optional)</span></label>
+        <input type="time" id="chore-when-start" value="09:00" style="width:auto;max-width:12ch;margin:4px 0 6px;display:block" />
+        <div class="modal-actions" style="justify-content:flex-start">
+          <button type="button" class="btn" id="chore-when-skip-start">Skip</button>
           <button type="button" class="btn btn-primary" id="chore-when-next-start">Next</button>
         </div>
       </div>
       <div id="chore-when-end-step" style="display:none">
-        <label for="chore-when-end">End time <span class="muted">(optional)</span></label>
-        <input type="time" id="chore-when-end" value="" style="width:auto;max-width:12ch;margin:6px 0 10px" />
-        <div class="modal-actions" style="justify-content:flex-start;gap:8px">
+        <label for="chore-when-end" style="font-size:11px">End time <span class="muted">(optional)</span></label>
+        <input type="time" id="chore-when-end" value="" style="width:auto;max-width:12ch;margin:4px 0 6px;display:block" />
+        <div class="modal-actions" style="justify-content:flex-start">
           <button type="button" class="btn" id="chore-when-skip-end">Skip end</button>
           <button type="button" class="btn btn-primary" id="chore-when-done">Done</button>
         </div>
       </div>
-      <p class="muted" id="chore-when-summary" style="font-size:11px;margin:10px 0 0"></p>
-      <div class="modal-actions" style="margin-top:10px">
+      <p class="muted" id="chore-when-summary"></p>
+      <div class="modal-actions">
         <button type="button" class="btn" id="chore-when-clear" style="color:#fca5a5;border-color:rgba(252,165,165,0.4)">Clear</button>
         <button type="button" class="btn" id="chore-when-cancel">Cancel</button>
       </div>

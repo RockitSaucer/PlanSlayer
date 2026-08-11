@@ -1,0 +1,7 @@
+PlanSlayer V1.3.24 — Chore options UI polish
+
+- Chore options / Make Chore button is standard size (not full width)
+- “Show on calendar” toggle sits under that button — toggle without opening options
+- Chore options popup is compact (no scroll); item mode hides name/link fields
+
+Shell: plan-slayer-shell-v57

@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.43';
+  var APP_VERSION = '1.3.44';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -2284,9 +2284,9 @@
     return !!state.calCollapsed && state.mapMode === 'button';
   }
   function updateBackButtonsVisibility() {
-    var show = leftSideFullyMinimized();
-    if ($('btn-lists-back')) $('btn-lists-back').style.display = show ? '' : 'none';
-    if ($('ev-back')) $('ev-back').style.display = show ? '' : 'none';
+    // #71 — Back under list/event title removed (extra vertical space for triad)
+    if ($('btn-lists-back')) $('btn-lists-back').style.display = 'none';
+    if ($('ev-back')) $('ev-back').style.display = 'none';
   }
 
   /** Full option fields so My checklist rows match To do / To buy / To bring */
@@ -5781,7 +5781,6 @@
             '<div class="li-row">' +
               '<button type="button" class="li-face li-main" data-act="expand" title="Open item options">' +
                 '<div class="li-title-row"><span class="li-title">' + esc(safeTitle) + '</span></div>' +
-                '<span class="li-min-btn" data-act="minimize" title="Minimize" role="button" tabindex="0">−</span>' +
               '</button>' +
               '<div class="li-actions">' +
                 '<button type="button" class="btn btn-got" data-act="got" title="Claim this item">Got it!</button>' +
@@ -5818,7 +5817,7 @@
     // is-claimed = someone grabbed it (keep member colors + brighter glow)
     // is-full / is-complete = fully gotten
     var full = (done ? ' is-full is-complete' : '') + (hasAnyClaim ? ' is-claimed' : '');
-    var mini = state.minimizedItems[item.id] ? ' is-minimized' : '';
+    // #70 — no per-item minimize; rows stay slim (Got it height)
     var faceStyle = '';
     try { faceStyle = claimFaceStyle(item); } catch (eFs) {
       faceStyle = 'background:linear-gradient(180deg,#2a3224 0%,#1a2018 45%,#12160f 100%);';
@@ -5846,7 +5845,7 @@
     try { notes = normalizeNotes(item); } catch (eN) { notes = []; }
     var note = null;
     try { note = latestNote(item); } catch (eLn) { note = null; }
-    var showNote = state.noteItemId === item.id && notes.length && !state.minimizedItems[item.id];
+    var showNote = state.noteItemId === item.id && notes.length;
     var buyNote = '';
     try {
       buyNote = needsBuyFlag(ev, item, kind)
@@ -5873,7 +5872,7 @@
         return '<div class="note-preview"><div class="note-meta">' + esc(n.byName || 'Member') + ' · ' +
           esc(n.at ? new Date(n.at).toLocaleString() : '') + '</div>' + esc(n.text) + '</div>';
       }).join('');
-    } else if (note && state.noteItemId !== item.id && !state.minimizedItems[item.id]) {
+    } else if (note && state.noteItemId !== item.id) {
       noteBlock = '<div class="li-notes muted">Has note · tap to view</div>';
     }
 
@@ -5890,7 +5889,7 @@
 
     // Every column (todo / buy / bring / custom) uses the same full-tile button face
     return (
-      '<div class="list-item' + pri + hi + exp + full + mini + '" style="' + faceStyle + '" data-item-id="' +
+      '<div class="list-item' + pri + hi + exp + full + '" style="' + faceStyle + '" data-item-id="' +
         esc(item.id) + '" data-kind="' + esc(kind) + '" data-scope="' + esc(scope) + '" draggable="false" role="listitem">' +
         '<div class="li-row">' +
           '<button type="button" class="li-face li-main" data-act="expand" title="Open item options">' +
@@ -5921,11 +5920,6 @@
                 : '') +
               claimersHtml(item) +
             '</div>' +
-            /* Minimize on the list face (title tile), not on Got it (#69) */
-            '<span class="li-min-btn" data-act="minimize" title="' +
-              (state.minimizedItems[item.id] ? 'Expand' : 'Minimize') +
-              '" role="button" tabindex="0">' +
-              (state.minimizedItems[item.id] ? '+' : '−') + '</span>' +
           '</button>' +
           '<div class="li-actions">' +
             (showDrop
@@ -6609,7 +6603,8 @@
     return {
       defaultBasemap: s.defaultBasemap || 'topo',
       labelsDefault: !!s.labelsDefault,
-      coordHud: s.coordHud !== false,
+      // #73 — coordinates HUD off by default; opt-in via Map settings
+      coordHud: s.coordHud === true,
       softBounds: s.softBounds !== false
     };
   }
@@ -7884,34 +7879,43 @@
     var showingEventDetail = !showingListDetail && showEv && ev && !ev._personalOnly;
 
     if (listsTitle) {
-      // One title only — list name or event name (no "Event · lists" + type duplicate)
+      // #71 — list/event name + T-minus on one line (no separate Back / countdown block)
+      var titleText = 'Details';
+      var titleCd = '';
       if (showingListDetail) {
-        listsTitle.textContent = openList.name || 'List';
+        titleText = openList.name || 'List';
+        try {
+          var datesTitle = listAssociatedDates(openList);
+          if (datesTitle && datesTitle.start) titleCd = countdownHtml(datesTitle.start, datesTitle.end);
+        } catch (eTc) {}
       } else if (showingEventDetail) {
-        listsTitle.textContent = ev.name || 'Event';
-      } else {
-        listsTitle.textContent = 'Details';
+        titleText = ev.name || 'Event';
+        try {
+          if (ev.start_at) titleCd = countdownHtml(ev.start_at, ev.end_at);
+        } catch (eTe) {}
       }
+      listsTitle.innerHTML = '<span class="lists-title-name">' + esc(titleText) + '</span>' +
+        (titleCd ? (' <span class="lists-title-cd">' + titleCd + '</span>') : '');
     }
     if (headActions) headActions.style.display = (showingListDetail || showingEventDetail) ? '' : 'none';
     try { updateBackButtonsVisibility(); } catch (eBk) {}
 
     if (showingListDetail) {
       setRightPanelMode('list');
-      if ($('list-detail-bar')) $('list-detail-bar').style.display = '';
-      // Countdown for event-linked packing lists (personal event lists too)
+      // #71 — countdown lives next to #lists-title; hide legacy bar countdown slot
+      if ($('list-detail-bar')) {
+        // Keep bar only if members chips need it; otherwise collapse empty bar
+        try {
+          var barMem0 = $('list-bar-members');
+          var hasMem = barMem0 && listIsShared(openList);
+          $('list-detail-bar').style.display = hasMem ? '' : 'none';
+        } catch (eBar) {
+          $('list-detail-bar').style.display = 'none';
+        }
+      }
       try {
         var barCd = $('list-bar-countdown');
-        if (barCd) {
-          var datesForList = listAssociatedDates(openList);
-          if (datesForList && datesForList.start) {
-            barCd.innerHTML = countdownHtml(datesForList.start, datesForList.end);
-            barCd.style.display = '';
-          } else {
-            barCd.innerHTML = '';
-            barCd.style.display = 'none';
-          }
-        }
+        if (barCd) { barCd.innerHTML = ''; barCd.style.display = 'none'; }
       } catch (eCd) {}
       // Ensure My checklist column exists on event packing lists
       try {
@@ -7927,9 +7931,11 @@
             barMem.innerHTML = membersChipsHtml(openList.members || [], {
               scope: 'list', listId: openList.id, canRemove: false
             });
+            if ($('list-detail-bar')) $('list-detail-bar').style.display = '';
           } else {
             barMem.style.display = 'none';
             barMem.innerHTML = '';
+            if ($('list-detail-bar')) $('list-detail-bar').style.display = 'none';
           }
         }
       } catch (eBarM) {}
@@ -7983,10 +7989,10 @@
       if ($('event-add-bar')) $('event-add-bar').style.display = 'none';
       if ($('inbox-area')) $('inbox-area').innerHTML = '';
       // Name/type/dates only in Edit event — keep countdown on the right
+      // #71 — countdown is on #lists-title; hide duplicate slot under event chrome
       if ($('ev-countdown')) {
-        $('ev-countdown').innerHTML = ev.start_at
-          ? countdownHtml(ev.start_at, ev.end_at)
-          : '<span class="muted">Start TBD</span>';
+        $('ev-countdown').innerHTML = '';
+        $('ev-countdown').style.display = 'none';
       }
       try {
         if ($('ev-members')) {
@@ -12915,8 +12921,13 @@
       var s = loadMapSettings();
       if ($('ms-default-basemap')) $('ms-default-basemap').value = s.defaultBasemap || 'topo';
       if ($('ms-labels')) $('ms-labels').checked = !!s.labelsDefault;
-      if ($('ms-coord-hud')) $('ms-coord-hud').checked = s.coordHud !== false;
+      if ($('ms-coord-hud')) $('ms-coord-hud').checked = s.coordHud === true;
       if ($('ms-soft-bounds')) $('ms-soft-bounds').checked = s.softBounds !== false;
+      try {
+        if (window.PlanMap && typeof window.PlanMap.fillShareIconSettingsGrid === 'function') {
+          window.PlanMap.fillShareIconSettingsGrid();
+        }
+      } catch (eMs) {}
       if ($('map-settings-modal')) {
         $('map-settings-modal').classList.add('is-open');
         $('map-settings-modal').setAttribute('aria-hidden', 'false');
@@ -13947,11 +13958,7 @@
           appToast('Item template saved');
           return 'abort';
         } else if (action === 'expand' || action === 'face') {
-          // Minimized → restore normal size + buttons only (don't open options yet)
-          if (state.minimizedItems[id]) {
-            delete state.minimizedItems[id];
-            return 'rerender-only';
-          }
+          // #70 — item minimize removed; always toggle options
           // Clicking another item while one is open: save the previous first
           if (state.expandedItemId && state.expandedItemId !== id) {
             var prevRow = document.querySelector('.list-item.is-expanded');

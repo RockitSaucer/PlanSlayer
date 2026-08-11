@@ -1,0 +1,29 @@
+PlanSlayer V1.3.44 — Hunt-Slayer inbox #70–#74
+==============================================
+Date: 2026-08-11
+
+Shell: plan-slayer-shell-v77
+
+#70 minimize buttons on list items
+- Removed per-item minimize (−) control
+- Slim list rows to roughly Got it! height
+
+#71 back button
+- Removed ← Back under list/event title
+- T-minus countdown sits inline next to list/event name in #lists-title
+
+#72 scroll bar (desktop left)
+- Left planner card-body scrolls (calendar, events, lists, map button)
+- Dark thin scrollbar (no arrow buttons)
+
+#73 coordinates on map
+- Coordinate HUD default OFF
+- Enable via Map settings → Show coordinate HUD
+
+#74 custom icon buttons / share location
+- Share location button already pulses while live (Hunt parity)
+- Tap your/other live dots → member menu; self can pick Hunt dir markers
+- Map settings: My location marker grid (icons/dir from Hunt)
+- icons/dir/* copied from Hunt-Slayer
+
+Push: RockitSaucer/PlanSlayer only (shared Hunt-Slayer issue inbox).

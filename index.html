@@ -508,7 +508,18 @@
     .card-planner, .card-lists {
       box-sizing: border-box;
     }
-    .card-planner .card-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+    /* #72 — desktop left column: calendar / events / lists / map button can scroll */
+    .card-planner .card-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-x: hidden;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #2a3224 #0a0c09;
+    }
+    .card-planner .card-body::-webkit-scrollbar { width: 8px; }
+    .card-planner .card-body::-webkit-scrollbar-thumb { background: #2a3224; border-radius: 4px; }
+    .card-planner .card-body::-webkit-scrollbar-button { display: none; height: 0; width: 0; }
     .card-lists .card-body {
       flex: 1 1 auto; min-height: 0; overflow: hidden;
       display: flex; flex-direction: column;
@@ -740,11 +751,36 @@
     .events-head h2,
     #planner-title,
     #lists-title {
-      margin: 0; flex: 0 1 auto;
+      margin: 0; flex: 1 1 auto;
+      min-width: 0;
       font-size: 1.5em; /* 50% larger than default card titles */
       font-weight: 800;
       letter-spacing: 0.02em;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 8px 12px;
     }
+    #lists-title .lists-title-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+    #lists-title .lists-title-cd {
+      flex: 0 0 auto;
+      font-size: 0.55em;
+      font-weight: 800;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+    #lists-title .lists-title-cd .cd {
+      font-size: inherit;
+    }
+    /* #71 — hide legacy Back under title */
+    #btn-lists-back,
+    #ev-back { display: none !important; }
     .btn-add-list-big,
     .btn-add-event-big {
       width: 42px; height: 42px; min-width: 42px; padding: 0 !important;
@@ -893,13 +929,13 @@
       padding: 10px 12px;
       flex: 0 0 auto;
     }
-    /* Map button → square mini map; lists scroll so the square always fits */
+    /* Map button → square mini map; left stack grows with content (parent card-body scrolls) */
     .left-stack {
       display: flex;
       flex-direction: column;
       min-height: 0;
       flex: 1 1 auto;
-      overflow: hidden;
+      overflow: visible;
     }
     .map-dock.map-wrapper.is-visible {
       width: 100%;
@@ -933,13 +969,14 @@
       bottom: calc(var(--mbb-bar-h) + env(safe-area-inset-bottom, 0px)) !important;
     }
     html.map-mode-mini #panel-events-block {
-      flex: 1 1 0;
+      flex: 1 1 auto;
       min-height: 64px;
-      overflow-y: auto;
-      overflow-x: hidden;
+      overflow: visible;
     }
+    /* Parent .card-body scrolls the whole left column on desktop (#72) */
     html.map-mode-mini .card-planner .card-body {
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: auto;
     }
     html.map-mode-max .map-dock.map-wrapper.is-visible {
       max-height: none;
@@ -1774,7 +1811,19 @@
       color: #ff4d4d !important; border-color: #f87171 !important;
       background: linear-gradient(180deg, #7a2222 0%, #4a1515 50%, #2a0c0c 100%) !important;
       animation: shareLocPulse 1.15s ease-out infinite !important;
+      box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.55);
     }
+    .ps-dir-icon-btn {
+      width: 36px; height: 36px; padding: 4px; border-radius: 8px;
+      border: 1px solid var(--border); background: #0c0f0a; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-family: inherit;
+    }
+    .ps-dir-icon-btn.is-on {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(229,154,24,0.3);
+    }
+    .ps-dir-icon-btn img { display: block; object-fit: contain; pointer-events: none; }
     /* Measure / draw: crosshair cursor (Hunt parity — not grab hand) */
     .map-dock.draw-mode.mode-measure #plan-map,
     .map-dock.draw-mode.mode-measure #plan-map.leaflet-container,
@@ -3065,24 +3114,45 @@
     }
     .suggest-item:hover { background: rgba(229,154,24,0.12); }
 
-    /* Unified list item button — identical in todo / buy / bring / custom columns */
+    /* Unified list item — slim like Got it! (#70); no per-item minimize */
     .list-col-body .list-item,
     .list-item {
       border: 1px solid #1a2014 !important;
-      border-radius: 10px !important;
-      margin-bottom: 10px;
+      border-radius: 8px !important;
+      margin-bottom: 6px;
       overflow: hidden;
       position: relative;
       box-shadow:
         0 1px 0 rgba(255,255,255,0.05) inset,
         0 2px 0 #0a0c09,
-        0 4px 10px rgba(0,0,0,0.35);
+        0 3px 8px rgba(0,0,0,0.3);
       cursor: pointer;
       user-select: none;
-      /* Don't inherit column font/color — same chrome everywhere */
       color: var(--ink) !important;
       font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif !important;
-      min-height: 56px;
+      min-height: 32px;
+    }
+    .list-item .li-min-btn,
+    .list-item [data-act="minimize"] { display: none !important; }
+    .list-item .li-face,
+    .list-item button.li-face,
+    .list-item button.li-main {
+      padding-right: 8px !important;
+    }
+    .list-item .li-row {
+      min-height: 32px !important;
+      align-items: center !important;
+    }
+    .list-item .li-title {
+      font-size: 14px !important;
+      line-height: 1.2 !important;
+    }
+    .list-item .li-actions .btn-got,
+    .list-item .li-actions .btn-expense {
+      min-height: 28px !important;
+      height: 28px !important;
+      padding: 0 8px !important;
+      font-size: 10px !important;
     }
     .list-item:hover { filter: brightness(1.04); border-color: rgba(229,154,24,0.4) !important; }
     /* Don't wipe claimed/full glow on hover (rule above is weaker for these) */
@@ -3373,16 +3443,17 @@
       min-height: 28px;
       line-height: 1.15;
     }
-    /* Minimize (−): corner of the list face (title tile), not Got it (#69) */
+    /* #70 — minimize removed; keep face relative without min-chip padding */
     .list-item .li-face,
     .list-item button.li-face,
     .list-item button.li-main {
       position: relative !important;
-      padding-right: 22px !important; /* room for − chip */
+      padding-right: 8px !important;
     }
     .list-item .li-min-btn,
     .list-item .li-face .li-min-btn,
     .list-item [data-act="minimize"].li-min-btn {
+      display: none !important;
       position: absolute !important;
       top: 2px !important;
       right: 2px !important;
@@ -4921,13 +4992,20 @@
 
       <div class="ps-ms-card" style="background:var(--panel-light);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">
         <div style="font-size:11px;font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px">Display</div>
-        <label class="check-row"><input type="checkbox" id="ms-coord-hud" checked /> Show coordinate HUD</label>
+        <label class="check-row"><input type="checkbox" id="ms-coord-hud" /> Show coordinate HUD</label>
         <label class="check-row"><input type="checkbox" id="ms-soft-bounds" checked /> Soft Alabama bounds (like Hunt)</label>
       </div>
 
       <div class="ps-ms-card" style="background:var(--panel-light);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px">My location marker</div>
+        <p class="muted" style="font-size:11px;margin:0 0 8px;line-height:1.4">Used when you Share location with the group (same icon set as Hunt Slayer direction markers).</p>
+        <div id="ms-share-icon-grid" class="ps-dir-icon-grid" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px"></div>
+        <button type="button" class="btn" id="ms-share-icon-clear" style="font-size:11px;padding:6px 10px">Use default dot</button>
+      </div>
+
+      <div class="ps-ms-card" style="background:var(--panel-light);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">
         <div style="font-size:11px;font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">Tools on this map</div>
-        <p class="muted" style="font-size:11px;margin:0;line-height:1.4">Measure, draw, pins, layers, search, and settings live on the map toolbar (Hunt layout). Compass / wind dials follow the same chrome when enabled on Plan.</p>
+        <p class="muted" style="font-size:11px;margin:0;line-height:1.4">Measure, draw, pins, layers, search, and settings live on the map toolbar (Hunt layout). Share location pulses while live. Tap your/other live dots for marker options.</p>
       </div>
 
       <div class="modal-actions">

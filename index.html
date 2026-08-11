@@ -1711,6 +1711,55 @@
       display: none; max-width: 90%; text-align: center;
     }
     .map-draw-hint.is-on { display: block; }
+    /*
+     * Map / tool toasts: ABOVE the bottom toolbar, right side (above Settings).
+     * Never covers the toolbar row.
+     */
+    #app-toast.app-toast,
+    .app-toast {
+      position: fixed;
+      right: 10px;
+      left: auto;
+      bottom: calc(var(--mbb-bar-h, 48px) + env(safe-area-inset-bottom, 0px) + 10px);
+      transform: translateY(6px);
+      z-index: 5012;
+      max-width: min(280px, calc(100vw - 24px));
+      background: rgba(15, 18, 14, 0.96);
+      border: 1px solid var(--accent, #e59a18);
+      color: #fff;
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.35;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+      opacity: 0;
+      pointer-events: none;
+      display: none;
+      text-align: right;
+      transition: opacity 0.18s ease, transform 0.18s ease;
+    }
+    #app-toast.app-toast.is-show,
+    .app-toast.is-show {
+      display: block;
+      opacity: 1;
+      transform: translateY(0);
+    }
+    /* When hosted inside the map dock, stick to map chrome (still above bar) */
+    .map-dock > #app-toast.app-toast,
+    .map-dock.map-wrapper > #app-toast {
+      position: absolute !important;
+      right: 8px !important;
+      left: auto !important;
+      bottom: calc(var(--mbb-bar-h, 48px) + env(safe-area-inset-bottom, 0px) + 8px) !important;
+      z-index: 5012 !important;
+      text-align: right;
+    }
+    html.map-mode-button #app-toast.app-toast {
+      /* Map minimized: still bottom-right of viewport, clear of any chrome */
+      bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+      right: 12px;
+    }
     .mdt-tools-panel {
       display: none; position: absolute; left: 8px;
       bottom: calc(var(--mbb-bar-h) + 10px); z-index: 5008;
@@ -4055,7 +4104,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge" id="ver-badge">V1.3.46</span></div>
+      <div class="brand-sub"><span class="ver-badge" id="ver-badge">V1.3.47</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -4748,7 +4797,7 @@
   </div>
   <!-- legacy list container kept empty for older code paths -->
   <ul class="ocr-review-list" id="ocr-review-list" style="display:none" hidden></ul>
-  <div id="app-toast" style="display:none;position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:12000;background:rgba(22,26,18,0.96);border:1px solid var(--border);color:var(--ink);padding:10px 16px;border-radius:10px;font-size:13px;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,0.45);max-width:90%;text-align:center"></div>
+  <div id="app-toast" class="app-toast" role="status" aria-live="polite"></div>
 
   <!-- Create list (My lists) -->
   <div class="modal-overlay" id="list-modal" aria-hidden="true">

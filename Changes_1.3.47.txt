@@ -1,0 +1,5 @@
+﻿PlanSlayer V1.3.47 — map toasts above toolbar (right)
+=====================================================
+- app-toast sits bottom-right, ABOVE map toolbar (above Settings)
+- Hosted inside #map-dock when map is open so it clears the bar
+- No longer centered over the toolbar

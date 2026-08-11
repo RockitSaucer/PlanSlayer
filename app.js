@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.46';
+  var APP_VERSION = '1.3.47';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -172,10 +172,26 @@
   function appToast(msg, ms) {
     var el = $('app-toast');
     if (!el) return;
+    // Prefer hosting inside the open map dock so toast sits above the map toolbar
+    // (right side, above Settings) instead of covering the bar.
+    try {
+      var dock = $('map-dock');
+      var mapOpen = dock && dock.classList.contains('is-visible') &&
+        (state.mapMode === 'mini' || state.mapMode === 'max');
+      if (mapOpen && el.parentElement !== dock) {
+        dock.appendChild(el);
+      } else if (!mapOpen && el.parentElement !== document.body) {
+        document.body.appendChild(el);
+      }
+    } catch (eHost) {}
     el.textContent = String(msg || '');
     el.style.display = 'block';
+    el.classList.add('is-show');
     if (_toastTimer) clearTimeout(_toastTimer);
-    _toastTimer = setTimeout(function () { el.style.display = 'none'; }, ms || 2400);
+    _toastTimer = setTimeout(function () {
+      el.classList.remove('is-show');
+      el.style.display = 'none';
+    }, ms || 2400);
   }
 
   function appAlert(msg, title) {

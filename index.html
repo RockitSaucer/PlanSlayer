@@ -1764,22 +1764,28 @@
     }
     .map-radar-control.radar-on .map-radar-stop { display: block; }
     @keyframes shareLocPulse {
-      0% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.75); }
-      70% { box-shadow: 0 0 0 10px rgba(248, 113, 113, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0); }
+      0% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.85); transform: scale(1); }
+      50% { box-shadow: 0 0 0 8px rgba(248, 113, 113, 0.15); transform: scale(1.04); }
+      100% { box-shadow: 0 0 0 14px rgba(248, 113, 113, 0); transform: scale(1); }
     }
     .map-bottom-bar .mbb-icon-btn.mbb-share-loc {
       color: #ef4444 !important; border-color: rgba(239, 68, 68, 0.45) !important;
     }
-    /* Live share presence markers (Hunt-like labeled pins) (#65) */
+    .map-bottom-bar .mbb-icon-btn.mbb-share-loc.is-sharing,
+    .map-bottom-bar .mbb-icon-btn.mbb-share-loc.is-pulse {
+      color: #ff4d4d !important;
+      border-color: #f87171 !important;
+      background: linear-gradient(180deg, #7a2222 0%, #4a1515 50%, #2a0c0c 100%) !important;
+      animation: shareLocPulse 1.15s ease-out infinite !important;
+    }
+    /* Live share — Hunt directional markers (centered glyph + floating name) */
     .ps-share-loc-icon { background: transparent !important; border: 0 !important; }
     .ps-share-loc-marker {
-      display: flex;
-      align-items: center;
-      gap: 5px;
       pointer-events: auto;
-      filter: drop-shadow(0 2px 4px rgba(0,0,0,0.45));
+      overflow: visible !important;
     }
+    .ps-dir-rot { line-height: 0; }
+    .ps-dir-icon-svg { display: block; }
     .ps-share-loc-marker .ps-share-dot {
       width: 14px;
       height: 14px;
@@ -1815,16 +1821,59 @@
       box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.55);
     }
     .ps-dir-icon-btn {
-      width: 36px; height: 36px; padding: 4px; border-radius: 8px;
-      border: 1px solid var(--border); background: #0c0f0a; cursor: pointer;
+      width: 40px; height: 40px; padding: 4px; border-radius: 10px;
+      border: 2px solid #c5c9c0; background: #ffffff !important; cursor: pointer;
       display: inline-flex; align-items: center; justify-content: center;
-      font-family: inherit;
+      font-family: inherit; box-shadow: 0 1px 3px rgba(0,0,0,0.15);
     }
     .ps-dir-icon-btn.is-on {
       border-color: var(--accent);
-      box-shadow: 0 0 0 2px rgba(229,154,24,0.3);
+      box-shadow: 0 0 0 2px rgba(229,154,24,0.45);
+      background: #fffef8 !important;
     }
     .ps-dir-icon-btn img { display: block; object-fit: contain; pointer-events: none; }
+    /* Hunt-style direction icon picker (white tiles so silhouettes read clearly) */
+    #ps-dir-icon-picker {
+      display: none; position: fixed; inset: 0; z-index: 22000;
+      background: rgba(0,0,0,0.65); align-items: center; justify-content: center;
+      padding: 16px; box-sizing: border-box;
+    }
+    #ps-dir-icon-picker.is-open { display: flex !important; }
+    .ps-dip-card {
+      width: min(360px, 100%); max-height: min(80vh, 540px);
+      background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+      box-shadow: 0 16px 48px rgba(0,0,0,0.55); display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    .ps-dip-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 14px; border-bottom: 1px solid var(--border);
+    }
+    .ps-dip-head h3 { margin: 0; font-size: 15px; color: #fff; }
+    .ps-dip-body {
+      padding: 10px 12px; overflow-y: auto; flex: 1; min-height: 0;
+      scrollbar-width: thin; scrollbar-color: #2a3224 #0a0c09;
+    }
+    .dir-icon-grid {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;
+    }
+    .dir-icon-cell {
+      aspect-ratio: 1; border: 2px solid #c5c9c0; border-radius: 10px;
+      background: #ffffff !important; padding: 6px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    }
+    .dir-icon-cell:hover { border-color: var(--accent); }
+    .dir-icon-cell.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(229,154,24,0.5);
+      background: #fffef8 !important;
+    }
+    .dir-icon-cell img, .dir-icon-cell svg { pointer-events: none; }
+    .ps-dip-actions {
+      display: flex; gap: 8px; padding: 10px 12px 12px; border-top: 1px solid var(--border);
+    }
+    .ps-dip-actions button { flex: 1; }
     /* Measure / draw: crosshair cursor (Hunt parity — not grab hand) */
     .map-dock.draw-mode.mode-measure #plan-map,
     .map-dock.draw-mode.mode-measure #plan-map.leaflet-container,
@@ -4006,7 +4055,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge" id="ver-badge">V1.3.45</span></div>
+      <div class="brand-sub"><span class="ver-badge" id="ver-badge">V1.3.46</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -5004,9 +5053,9 @@
 
       <div class="ps-ms-card" style="background:var(--panel-light);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">
         <div style="font-size:11px;font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px">My location marker</div>
-        <p class="muted" style="font-size:11px;margin:0 0 8px;line-height:1.4">Used when you Share location with the group (same icon set as Hunt Slayer direction markers).</p>
-        <div id="ms-share-icon-grid" class="ps-dir-icon-grid" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px"></div>
-        <button type="button" class="btn" id="ms-share-icon-clear" style="font-size:11px;padding:6px 10px">Use default dot</button>
+        <p class="muted" style="font-size:11px;margin:0 0 8px;line-height:1.4">Hunt Slayer direction icons — color, size, and look direction when sharing. Pings the group about once a minute.</p>
+        <div id="ms-share-icon-grid" class="ps-dir-icon-grid" style="margin-bottom:6px"></div>
+        <button type="button" class="btn" id="ms-share-icon-clear" style="font-size:11px;padding:6px 10px">Reset to default arrow</button>
       </div>
 
       <div class="ps-ms-card" style="background:var(--panel-light);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">
@@ -5189,5 +5238,34 @@
   <script src="./auth.js"></script>
   <script src="./plan-map.js"></script>
   <script src="./app.js"></script>
+  <div id="ps-dir-icon-picker" class="ps-dir-icon-picker" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="ps-dip-card">
+      <div class="ps-dip-head">
+        <h3 id="ps-dip-title">Your location marker</h3>
+        <button type="button" class="btn btn-ghost" id="ps-dip-cancel" style="min-width:auto;padding:4px 10px;font-size:18px" aria-label="Close">×</button>
+      </div>
+      <div class="ps-dip-body">
+        <p class="muted" style="font-size:11px;margin:0 0 8px">White tiles so silhouettes are easy to see. Icon faces your look direction on the map.</p>
+        <div id="ps-dip-grid" class="dir-icon-grid"></div>
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+          <label style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase">Color</label>
+          <input type="color" id="ps-dip-color" value="#e11d1d" style="width:100%;height:36px;margin-top:4px;border:0;background:transparent;cursor:pointer" />
+        </div>
+        <div style="margin-top:10px">
+          <label style="font-size:11px;font-weight:800;color:var(--muted)">Size <span id="ps-dip-size-val">100</span>%</label>
+          <input type="range" id="ps-dip-size" min="40" max="160" value="100" style="width:100%;margin-top:4px" />
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+          <span class="muted" style="font-size:11px;font-weight:700">Preview</span>
+          <div id="ps-dip-preview" style="width:48px;height:48px;border-radius:8px;background:#fff;border:1px solid #ccc;display:flex;align-items:center;justify-content:center"></div>
+        </div>
+      </div>
+      <div class="ps-dip-actions">
+        <button type="button" class="btn" id="ps-dip-cancel2">Cancel</button>
+        <button type="button" class="btn btn-primary" id="ps-dip-ok">Use this marker</button>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>

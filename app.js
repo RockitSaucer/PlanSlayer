@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.45';
+  var APP_VERSION = '1.3.46';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -6877,8 +6877,11 @@
           else {
             ev.state.shareLocations[uid] = {
               lat: loc.lat, lng: loc.lng, at: loc.at,
-              name: myName(), color: myColor(),
-              iconId: loc.iconId || null
+              name: myName(),
+              color: loc.color || myColor(),
+              iconId: loc.iconId || null,
+              heading: loc.heading != null ? loc.heading : null,
+              scale: loc.scale != null ? loc.scale : 1
             };
           }
           saveActiveEvent();

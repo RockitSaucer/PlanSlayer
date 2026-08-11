@@ -21,24 +21,40 @@
   var COLOR_PRESETS_FIXED = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15'];
   var COLOR_PRESETS_RANDOM_SEED = ['#e59a18', '#16a34a', '#9333ea'];
 
-  /** Hunt Slayer direction / location markers (shared with party presence) */
+  /**
+   * Hunt Slayer direction markers (party kit) — frontDeg = nose-up of PNG.
+   * CSS rotation = heading − frontDeg so the icon faces look-direction.
+   */
   var DIR_CATALOG = [
-    { id: 'arrow_head', name: 'Arrow', src: 'icons/dir/arrow_head.png' },
-    { id: 'boat', name: 'Boat', src: 'icons/dir/boat.png' },
-    { id: 'bomb', name: 'Bomb', src: 'icons/dir/bomb.png' },
-    { id: 'bullet', name: 'Bullet', src: 'icons/dir/bullet.png' },
-    { id: 'capture', name: 'Capture', src: 'icons/dir/capture.png' },
-    { id: 'car', name: 'Car', src: 'icons/dir/car.png' },
-    { id: 'dobbs', name: 'Dobbs', src: 'icons/dir/dobbs.png' },
-    { id: 'helicopter', name: 'Helicopter', src: 'icons/dir/helicopter.png' },
-    { id: 'prop_plane', name: 'Prop plane', src: 'icons/dir/prop_plane.png' },
-    { id: 'rocket', name: 'Rocket', src: 'icons/dir/rocket.png' },
-    { id: 'shuttle', name: 'Shuttle', src: 'icons/dir/shuttle.png' },
-    { id: 'speed_boat', name: 'Speed boat', src: 'icons/dir/speed_boat.png' },
-    { id: 'truck', name: 'Truck', src: 'icons/dir/truck.png' },
-    { id: 'x_wing', name: 'X-wing', src: 'icons/dir/x_wing.png' }
+    { id: 'arrow_head', name: 'Arrow head', src: 'icons/dir/arrow_head.png', frontDeg: 0 },
+    { id: 'boat', name: 'Boat', src: 'icons/dir/boat.png', frontDeg: 0 },
+    { id: 'bomb', name: 'Bomb', src: 'icons/dir/bomb.png', frontDeg: 225 },
+    { id: 'bullet', name: 'Bullet', src: 'icons/dir/bullet.png', frontDeg: 0 },
+    { id: 'capture', name: 'Capture', src: 'icons/dir/capture.png', frontDeg: 0 },
+    { id: 'car', name: 'Car', src: 'icons/dir/car.png', frontDeg: 0 },
+    { id: 'helicopter', name: 'Helicopter', src: 'icons/dir/helicopter.png', frontDeg: 0 },
+    { id: 'prop_plane', name: 'Prop plane', src: 'icons/dir/prop_plane.png', frontDeg: 180 },
+    { id: 'rocket', name: 'Rocket', src: 'icons/dir/rocket.png', frontDeg: 0 },
+    { id: 'shuttle', name: 'Shuttle', src: 'icons/dir/shuttle.png', frontDeg: 0 },
+    { id: 'speed_boat', name: 'Speed boat', src: 'icons/dir/speed_boat.png', frontDeg: 0 },
+    { id: 'truck', name: 'Truck', src: 'icons/dir/truck.png', frontDeg: 0 },
+    { id: 'dobbs', name: 'Dobbs', src: 'icons/dir/dobbs.png', frontDeg: 0 },
+    { id: 'x_wing', name: 'X-wing', src: 'icons/dir/x_wing.png', frontDeg: 0 }
   ];
   var SHARE_ICON_KEY = 'ps_share_loc_icon';
+  var SHARE_COLOR_KEY = 'ps_share_loc_color';
+  var SHARE_SCALE_KEY = 'ps_share_loc_scale';
+  var SHARE_PING_MS = 60000; // once a minute to group (user request)
+  var _dirGlyphFilterSeq = 0;
+  var _dirPickerSelected = null;
+  var _dirPickerColor = '#e11d1d';
+  var _dirPickerScale = 1;
+  var _dirPickerOnPick = null;
+  var shareHeading = null;
+  var shareLastLat = null;
+  var shareLastLng = null;
+  var sharePingTimer = null;
+  var shareHeadingHandler = null;
 
   var PIN_CATALOG = [
     { id: 'tent', name: 'Tent', src: 'icons/pins/tent.png' },
@@ -96,7 +112,7 @@
   var pinsLayer = null, shareLayer = null, gpsMarker = null, toolLayer = null, tempDot = null;
   var drawMode = null, drawPoints = [], tempMeasure = null, lastDrawKind = 'shape';
   var radarActive = false, radarTimer = null, radarFrames = [], radarIdx = 0, radarLayers = [null, null];
-  var shareLocOn = false, shareWatch = null;
+  var shareLocOn = false, shareWatch = null; // watch = local GPS; broadcast = SHARE_PING_MS
   var clickLat = null, clickLng = null;
   var pinDraft = null, pinColorSlot = 'pin';
   var selectedPinColor = '#e59a18', selectedPinInnerColor = '#ffffff', selectedPinGlyphColor = 'natural';
@@ -1869,54 +1885,21 @@
     redrawShareLocations();
   }
 
-  /* share location */
-  function setShareLocation(on) {
-    shareLocOn = !!on;
-    var btn = $('share-loc-btn');
-    if (btn) {
-      btn.classList.toggle('is-sharing', shareLocOn);
-      btn.classList.toggle('is-pulse', shareLocOn);
-      btn.setAttribute('aria-pressed', shareLocOn ? 'true' : 'false');
-      btn.title = shareLocOn ? 'Sharing live — tap to stop' : 'Share location';
+  /* ========== Share location — Hunt directional icons + 1/min ping ========== */
+  function getDirIconById(id) {
+    if (!id) return null;
+    for (var i = 0; i < DIR_CATALOG.length; i++) {
+      if (DIR_CATALOG[i].id === id) return DIR_CATALOG[i];
     }
-    if (shareWatch != null && navigator.geolocation) {
-      try { navigator.geolocation.clearWatch(shareWatch); } catch (e) {}
-      shareWatch = null;
+    return null;
+  }
+  function normalizeDirHex(hex) {
+    var h = String(hex || '').trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(h)) return h.toLowerCase();
+    if (/^#[0-9a-fA-F]{3}$/.test(h)) {
+      return ('#' + h[1] + h[1] + h[2] + h[2] + h[3] + h[3]).toLowerCase();
     }
-    if (!shareLocOn) { api.onShareLocation(null); redrawShareLocations(); return; }
-    if (!navigator.geolocation) { api.toast('Location not available'); setShareLocation(false); return; }
-    shareWatch = navigator.geolocation.watchPosition(function (pos) {
-      var lat = pos.coords.latitude, lng = pos.coords.longitude;
-      var shareIconId = getShareLocIconId() || null;
-      api.onShareLocation({
-        lat: lat,
-        lng: lng,
-        at: new Date().toISOString(),
-        name: api.getMyName(),
-        color: api.getMyColor(),
-        iconId: shareIconId
-      });
-      if (gpsMarker) try { map.removeLayer(gpsMarker); } catch (e) {}
-      if (map) {
-        try {
-          gpsMarker = L.marker([lat, lng], {
-            icon: shareLocDivIcon({ name: 'You', color: api.getMyColor(), iconId: shareIconId }),
-            interactive: true
-          }).on('click', function (e) {
-            try { L.DomEvent.stopPropagation(e); } catch (eS) {}
-            openShareMemberMenu(api.getMyId(), {
-              lat: lat, lng: lng, name: 'You', color: api.getMyColor(), iconId: shareIconId
-            }, true);
-          }).addTo(map);
-        } catch (eMk) {
-          gpsMarker = L.circleMarker([lat, lng], {
-            radius: 8, color: '#fff', weight: 2, fillColor: api.getMyColor(), fillOpacity: 1
-          }).bindPopup('You (sharing)').addTo(map);
-        }
-      }
-      redrawShareLocations();
-    }, function () { api.toast('Could not get location'); setShareLocation(false); },
-    { enableHighAccuracy: true, maximumAge: 3000 });
+    return '#e11d1d';
   }
   function getShareLocIconId() {
     try { return localStorage.getItem(SHARE_ICON_KEY) || ''; } catch (e) { return ''; }
@@ -1927,150 +1910,489 @@
       else localStorage.setItem(SHARE_ICON_KEY, String(id));
     } catch (e) {}
   }
-  function dirIconSrc(iconId) {
-    if (!iconId) return '';
-    var found = (DIR_CATALOG || []).find(function (p) { return p && String(p.id) === String(iconId); });
-    if (found && found.src) return found.src;
-    // fallback: pin catalog
-    try {
-      var pin = (PIN_CATALOG || []).find(function (p) { return p && String(p.id) === String(iconId); });
-      if (pin && pin.src) return pin.src;
-    } catch (e) {}
-    return '';
+  function getShareLocColor() {
+    try { return normalizeDirHex(localStorage.getItem(SHARE_COLOR_KEY) || api.getMyColor() || '#e11d1d'); }
+    catch (e) { return '#e11d1d'; }
   }
-
-  /** Hunt-like labeled presence marker for live share (#65 / #74) */
+  function setShareLocColor(c) {
+    try { localStorage.setItem(SHARE_COLOR_KEY, normalizeDirHex(c)); } catch (e) {}
+  }
+  function getShareLocScale() {
+    try {
+      var s = parseFloat(localStorage.getItem(SHARE_SCALE_KEY) || '1');
+      if (isNaN(s) || s <= 0) s = 1;
+      return Math.max(0.4, Math.min(1.6, s));
+    } catch (e) { return 1; }
+  }
+  function setShareLocScale(s) {
+    s = Math.max(0.4, Math.min(1.6, Number(s) || 1));
+    try { localStorage.setItem(SHARE_SCALE_KEY, String(s)); } catch (e) {}
+  }
+  function normalizeHeading(d) {
+    d = Number(d);
+    if (isNaN(d)) return null;
+    d = d % 360;
+    if (d < 0) d += 360;
+    return d;
+  }
+  /** Recolor black silhouette PNG → solid hex + black outline (Hunt dirIconColoredMarkup) */
+  function dirIconColoredMarkup(iconId, hex, size) {
+    var s = size || 30;
+    var ic = getDirIconById(iconId);
+    if (!ic || !ic.src) return '';
+    hex = normalizeDirHex(hex);
+    _dirGlyphFilterSeq += 1;
+    var fid = 'psdgf' + _dirGlyphFilterSeq + '_' + String(iconId || 'x').replace(/[^a-z0-9_-]/gi, '');
+    var outlineR = s >= 36 ? 0.81 : (s >= 28 ? 0.72 : 0.63);
+    var src = String(ic.src).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    return (
+      '<svg class="ps-dir-icon-svg" width="' + s + '" height="' + s + '" viewBox="0 0 ' + s + ' ' + s + '" ' +
+        'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ' +
+        'aria-hidden="true" focusable="false" style="display:block;overflow:visible;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.45));">' +
+        '<defs><filter id="' + fid + '" x="-35%" y="-35%" width="170%" height="170%" color-interpolation-filters="sRGB">' +
+          '<feMorphology in="SourceAlpha" operator="dilate" radius="' + outlineR + '" result="dilated"/>' +
+          '<feFlood flood-color="#000000" flood-opacity="1" result="black"/>' +
+          '<feComposite in="black" in2="dilated" operator="in" result="outline"/>' +
+          '<feFlood flood-color="' + hex + '" flood-opacity="1" result="flood"/>' +
+          '<feComposite in="flood" in2="SourceAlpha" operator="in" result="fill"/>' +
+          '<feMerge><feMergeNode in="outline"/><feMergeNode in="fill"/></feMerge>' +
+        '</filter></defs>' +
+        '<image width="' + s + '" height="' + s + '" href="' + src + '" xlink:href="' + src + '" ' +
+          'filter="url(#' + fid + ')" preserveAspectRatio="xMidYMid meet"/>' +
+      '</svg>'
+    );
+  }
+  function buildDirBodyHtml(color, heading, iconId, sizePx) {
+    var rot = heading != null && !isNaN(heading) ? (((Number(heading) % 360) + 360) % 360) : 0;
+    var c = normalizeDirHex(color || '#e11d1d');
+    var ic = getDirIconById(iconId);
+    if (ic) {
+      var front = (ic.frontDeg != null && !isNaN(ic.frontDeg)) ? Number(ic.frontDeg) : 0;
+      var cssRot = ((rot - front) % 360 + 360) % 360;
+      var s = sizePx || 30;
+      return (
+        '<div class="ps-dir-rot" data-front="' + front + '" style="width:' + s +
+          'px;height:' + s + 'px;transform:rotate(' + cssRot.toFixed(1) +
+          'deg);transform-origin:center center;will-change:transform;line-height:0;">' +
+          dirIconColoredMarkup(ic.id, c, s) +
+        '</div>'
+      );
+    }
+    // Default triangle (Hunt GPS arrow)
+    var w = sizePx ? Math.round(sizePx * 0.8) : 24;
+    var h = sizePx ? Math.round(sizePx * 1.13) : 34;
+    return (
+      '<div class="ps-dir-rot" data-front="0" style="width:' + w + 'px;height:' + h +
+        'px;transform:rotate(' + rot.toFixed(1) + 'deg);transform-origin:center center;will-change:transform;">' +
+        '<svg viewBox="0 0 24 32" width="' + w + '" height="' + h + '" style="display:block;">' +
+          '<path d="M12 1.5 L22.5 29.5 L12 23.2 L1.5 29.5 Z" fill="' + c +
+            '" stroke="#000" stroke-width="0.9" stroke-linejoin="round"/>' +
+        '</svg></div>'
+    );
+  }
+  /** Hunt party marker: label above, directional glyph centered on lat/lng */
   function shareLocDivIcon(Lx) {
-    var color = (Lx && Lx.color) || '#4a6d9a';
-    var name = (Lx && (Lx.name || Lx.display_name)) || 'Member';
-    var iconId = (Lx && (Lx.iconId || Lx.icon)) || null;
-    var iconSrc = dirIconSrc(iconId);
-    var inner = iconSrc
-      ? ('<img class="ps-share-pin-img" src="' + String(iconSrc).replace(/"/g, '') + '" alt="" />')
-      : '<span class="ps-share-dot" style="background:' + String(color).replace(/"/g, '') + '"></span>';
+    var name = esc((Lx && (Lx.name || Lx.display_name) || 'Member').slice(0, 16));
+    var c = normalizeDirHex((Lx && Lx.color) || getShareLocColor());
+    var iconId = (Lx && (Lx.iconId || Lx.icon)) || getShareLocIconId() || null;
+    var heading = Lx && Lx.heading != null ? normalizeHeading(Lx.heading) : null;
+    var scale = Lx && Lx.scale != null ? Number(Lx.scale) : getShareLocScale();
+    if (isNaN(scale) || scale <= 0) scale = 1;
+    scale = Math.max(0.4, Math.min(1.6, scale));
+    var s = Math.round(30 * scale);
+    s = Math.max(14, Math.min(56, s));
+    var ic = getDirIconById(iconId);
+    var gw = ic ? s : Math.round(s * 0.8);
+    var gh = ic ? s : Math.round(s * 1.13);
+    var labelCss =
+      'position:absolute;left:50%;bottom:100%;transform:translateX(-50%);margin-bottom:3px;' +
+      'font-size:10px;font-weight:800;color:#fff;text-shadow:0 0 3px #000,0 1px 2px #000;' +
+      'background:rgba(0,0,0,.55);padding:1px 5px;border-radius:4px;max-width:90px;' +
+      'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none;line-height:1.2;';
     var html =
-      '<div class="ps-share-loc-marker" style="--share-c:' + String(color).replace(/"/g, '') + '">' +
-        inner +
-        '<span class="ps-share-label">' + esc(name) + '</span>' +
+      '<div class="ps-share-loc-marker" style="position:relative;width:' + gw + 'px;height:' + gh +
+        'px;pointer-events:auto;overflow:visible;">' +
+        '<div class="ps-share-label" style="' + labelCss + '">' + name + '</div>' +
+        buildDirBodyHtml(c, heading, iconId, s) +
       '</div>';
     return L.divIcon({
       className: 'ps-share-loc-icon',
       html: html,
-      iconSize: [96, 40],
-      iconAnchor: [14, 14]
+      iconSize: [gw, gh],
+      iconAnchor: [gw / 2, gh / 2]
+    });
+  }
+  function broadcastShareLoc(force) {
+    if (!shareLocOn || shareLastLat == null) return;
+    var payload = {
+      lat: shareLastLat,
+      lng: shareLastLng,
+      heading: shareHeading,
+      at: new Date().toISOString(),
+      name: api.getMyName(),
+      color: getShareLocColor(),
+      iconId: getShareLocIconId() || null,
+      scale: getShareLocScale()
+    };
+    api.onShareLocation(payload);
+    redrawShareLocations();
+  }
+  function paintSelfShareMarker() {
+    if (!map || shareLastLat == null) return;
+    var Lx = {
+      lat: shareLastLat, lng: shareLastLng,
+      name: 'You', color: getShareLocColor(),
+      iconId: getShareLocIconId() || null,
+      heading: shareHeading, scale: getShareLocScale()
+    };
+    if (gpsMarker) try { map.removeLayer(gpsMarker); } catch (e) {}
+    try {
+      gpsMarker = L.marker([shareLastLat, shareLastLng], {
+        icon: shareLocDivIcon(Lx),
+        interactive: true
+      }).on('click', function (e) {
+        try { L.DomEvent.stopPropagation(e); } catch (eS) {}
+        openShareMemberMenu(api.getMyId(), Lx, true);
+      }).addTo(map);
+    } catch (eMk) {
+      gpsMarker = L.circleMarker([shareLastLat, shareLastLng], {
+        radius: 8, color: '#fff', weight: 2, fillColor: getShareLocColor(), fillOpacity: 1
+      }).addTo(map);
+    }
+  }
+  function startHeadingWatch() {
+    stopHeadingWatch();
+    function onOrient(ev) {
+      var h = null;
+      if (ev && ev.webkitCompassHeading != null && !isNaN(ev.webkitCompassHeading)) {
+        h = Number(ev.webkitCompassHeading);
+      } else if (ev && ev.alpha != null && !isNaN(ev.alpha)) {
+        // absolute / relative — invert alpha for compass-ish heading
+        h = (360 - Number(ev.alpha)) % 360;
+      }
+      h = normalizeHeading(h);
+      if (h == null) return;
+      var prev = shareHeading;
+      shareHeading = h;
+      // Smooth local rotate without full rebuild when possible
+      try {
+        if (gpsMarker && gpsMarker.getElement) {
+          var el = gpsMarker.getElement();
+          var rot = el && el.querySelector && el.querySelector('.ps-dir-rot');
+          if (rot) {
+            var front = parseFloat(rot.getAttribute('data-front') || '0') || 0;
+            var cssRot = ((h - front) % 360 + 360) % 360;
+            rot.style.transform = 'rotate(' + cssRot.toFixed(1) + 'deg)';
+            return;
+          }
+        }
+      } catch (eR) {}
+      if (prev == null || Math.abs(((h - prev + 540) % 360) - 180) > 8) {
+        paintSelfShareMarker();
+      }
+    }
+    shareHeadingHandler = onOrient;
+    try {
+      if (typeof DeviceOrientationEvent !== 'undefined' &&
+          typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission().then(function (state) {
+          if (state === 'granted') {
+            window.addEventListener('deviceorientationabsolute', onOrient, true);
+            window.addEventListener('deviceorientation', onOrient, true);
+          }
+        }).catch(function () {
+          window.addEventListener('deviceorientation', onOrient, true);
+        });
+      } else {
+        window.addEventListener('deviceorientationabsolute', onOrient, true);
+        window.addEventListener('deviceorientation', onOrient, true);
+      }
+    } catch (eH) {
+      try { window.addEventListener('deviceorientation', onOrient, true); } catch (e2) {}
+    }
+  }
+  function stopHeadingWatch() {
+    if (!shareHeadingHandler) return;
+    try { window.removeEventListener('deviceorientationabsolute', shareHeadingHandler, true); } catch (e) {}
+    try { window.removeEventListener('deviceorientation', shareHeadingHandler, true); } catch (e2) {}
+    shareHeadingHandler = null;
+  }
+
+  function setShareLocation(on) {
+    shareLocOn = !!on;
+    var btn = $('share-loc-btn');
+    if (btn) {
+      btn.classList.toggle('is-sharing', shareLocOn);
+      btn.classList.toggle('is-pulse', shareLocOn);
+      btn.setAttribute('aria-pressed', shareLocOn ? 'true' : 'false');
+      btn.title = shareLocOn
+        ? 'Sharing location with group (updates ~1 min) — tap to stop'
+        : 'Show other members my location';
+    }
+    if (shareWatch != null && navigator.geolocation) {
+      try { navigator.geolocation.clearWatch(shareWatch); } catch (e) {}
+      shareWatch = null;
+    }
+    if (sharePingTimer) {
+      clearInterval(sharePingTimer);
+      sharePingTimer = null;
+    }
+    stopHeadingWatch();
+    if (!shareLocOn) {
+      api.onShareLocation(null);
+      if (gpsMarker && map) try { map.removeLayer(gpsMarker); } catch (eG) {}
+      gpsMarker = null;
+      shareLastLat = shareLastLng = null;
+      shareHeading = null;
+      redrawShareLocations();
+      return;
+    }
+    if (!navigator.geolocation) {
+      api.toast('Location not available');
+      setShareLocation(false);
+      return;
+    }
+    startHeadingWatch();
+    // Local GPS for smooth self-marker; group broadcast once per minute
+    shareWatch = navigator.geolocation.watchPosition(function (pos) {
+      shareLastLat = pos.coords.latitude;
+      shareLastLng = pos.coords.longitude;
+      if (pos.coords.heading != null && !isNaN(pos.coords.heading) && pos.coords.heading >= 0) {
+        shareHeading = normalizeHeading(pos.coords.heading);
+      }
+      paintSelfShareMarker();
+    }, function () {
+      api.toast('Could not get location');
+      setShareLocation(false);
+    }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+    // Immediate first ping + every 60s
+    function doPing() {
+      if (!shareLocOn) return;
+      if (shareLastLat != null) {
+        broadcastShareLoc(true);
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(function (pos) {
+        shareLastLat = pos.coords.latitude;
+        shareLastLng = pos.coords.longitude;
+        if (pos.coords.heading != null && !isNaN(pos.coords.heading) && pos.coords.heading >= 0) {
+          shareHeading = normalizeHeading(pos.coords.heading);
+        }
+        paintSelfShareMarker();
+        broadcastShareLoc(true);
+      }, function () {}, { enableHighAccuracy: true, timeout: 15000 });
+    }
+    doPing();
+    sharePingTimer = setInterval(doPing, SHARE_PING_MS);
+    api.toast('Sharing location · updates about once a minute');
+  }
+
+  function openDirIconPicker(opts) {
+    opts = opts || {};
+    _dirPickerOnPick = typeof opts.onPick === 'function' ? opts.onPick : null;
+    _dirPickerSelected = opts.currentId || null;
+    _dirPickerColor = normalizeDirHex(opts.currentColor || getShareLocColor());
+    var sc = opts.currentScale != null ? Number(opts.currentScale) : getShareLocScale();
+    if (isNaN(sc) || sc <= 0) sc = 1;
+    _dirPickerScale = Math.max(0.4, Math.min(1.6, sc));
+    var modal = $('ps-dir-icon-picker');
+    if (!modal) {
+      // fallback: settings grid only
+      if (_dirPickerOnPick) _dirPickerOnPick(_dirPickerSelected, _dirPickerColor, _dirPickerScale);
+      return;
+    }
+    var title = $('ps-dip-title');
+    if (title) title.textContent = opts.title || 'Your location marker';
+    var col = $('ps-dip-color');
+    if (col) col.value = _dirPickerColor;
+    var size = $('ps-dip-size');
+    var sizeVal = $('ps-dip-size-val');
+    var pct = Math.round(_dirPickerScale * 100);
+    if (size) size.value = String(pct);
+    if (sizeVal) sizeVal.textContent = String(pct);
+    renderDirIconPickerGrid();
+    updateDipPreview();
+    modal.classList.add('is-open');
+    modal.setAttribute('aria-hidden', 'false');
+  }
+  function closeDirIconPicker() {
+    var modal = $('ps-dir-icon-picker');
+    if (modal) {
+      modal.classList.remove('is-open');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+    _dirPickerOnPick = null;
+  }
+  function updateDipPreview() {
+    var prev = $('ps-dip-preview');
+    if (!prev) return;
+    var s = Math.round(30 * _dirPickerScale);
+    s = Math.max(18, Math.min(48, s));
+    prev.innerHTML = buildDirBodyHtml(_dirPickerColor, 0, _dirPickerSelected, s);
+  }
+  function renderDirIconPickerGrid() {
+    var grid = $('ps-dip-grid');
+    if (!grid) return;
+    var cells = '';
+    // Default triangle
+    cells +=
+      '<button type="button" class="dir-icon-cell' + (!_dirPickerSelected ? ' selected' : '') +
+        '" data-dip-id="" title="Default arrow">' +
+        '<svg class="dir-default-map-arrow" viewBox="0 0 24 32" width="26" height="34">' +
+          '<path d="M12 1.5 L22.5 29.5 L12 23.2 L1.5 29.5 Z" fill="' +
+          normalizeDirHex(_dirPickerColor) + '" stroke="#000" stroke-width="0.9" stroke-linejoin="round"/>' +
+        '</svg></button>';
+    DIR_CATALOG.forEach(function (d) {
+      var on = String(d.id) === String(_dirPickerSelected);
+      cells +=
+        '<button type="button" class="dir-icon-cell' + (on ? ' selected' : '') +
+          '" data-dip-id="' + esc(d.id) + '" title="' + esc(d.name) + '">' +
+          dirIconColoredMarkup(d.id, _dirPickerColor, 28) +
+        '</button>';
+    });
+    grid.innerHTML = cells;
+    grid.querySelectorAll('[data-dip-id]').forEach(function (b) {
+      b.onclick = function () {
+        _dirPickerSelected = b.getAttribute('data-dip-id') || null;
+        if (_dirPickerSelected === '') _dirPickerSelected = null;
+        renderDirIconPickerGrid();
+        updateDipPreview();
+      };
+    });
+  }
+  function wireDirIconPickerOnce() {
+    if (document._psDipWired) return;
+    document._psDipWired = true;
+    var modal = $('ps-dir-icon-picker');
+    if (!modal) return;
+    var col = $('ps-dip-color');
+    if (col) {
+      col.addEventListener('input', function () {
+        _dirPickerColor = normalizeDirHex(col.value);
+        renderDirIconPickerGrid();
+        updateDipPreview();
+      });
+    }
+    var size = $('ps-dip-size');
+    if (size) {
+      size.addEventListener('input', function () {
+        var pct = parseInt(size.value, 10) || 100;
+        pct = Math.max(40, Math.min(160, pct));
+        _dirPickerScale = pct / 100;
+        var lab = $('ps-dip-size-val');
+        if (lab) lab.textContent = String(pct);
+        updateDipPreview();
+      });
+    }
+    function doCancel() { closeDirIconPicker(); }
+    var cancel = $('ps-dip-cancel');
+    if (cancel) cancel.onclick = doCancel;
+    var cancel2 = $('ps-dip-cancel2');
+    if (cancel2) cancel2.onclick = doCancel;
+    var ok = $('ps-dip-ok');
+    if (ok) {
+      ok.onclick = function () {
+        var cb = _dirPickerOnPick;
+        var id = _dirPickerSelected || null;
+        var color = normalizeDirHex(_dirPickerColor);
+        var scale = Math.max(0.4, Math.min(1.6, _dirPickerScale || 1));
+        closeDirIconPicker();
+        if (cb) {
+          try { cb(id, color, scale); } catch (e) {}
+        }
+      };
+    }
+    modal.addEventListener('click', function (e) {
+      if (e.target === modal) closeDirIconPicker();
     });
   }
 
   function openShareMemberMenu(uid, Lx, isSelf) {
     if (!map || !Lx) return;
-    var cur = getShareLocIconId() || '';
-    var grid = DIR_CATALOG.map(function (d) {
-      var on = String(d.id) === String(cur);
-      return '<button type="button" class="ps-dir-icon-btn' + (on ? ' is-on' : '') +
-        '" data-dir-icon="' + esc(d.id) + '" title="' + esc(d.name) + '">' +
-        '<img src="' + esc(d.src) + '" alt="" width="22" height="22" /></button>';
-    }).join('');
-    var body =
-      '<div class="ps-share-member-pop" style="min-width:200px">' +
-        '<strong style="display:block;margin-bottom:6px;color:' + esc(Lx.color || '#e59a18') + '">' +
-          esc(Lx.name || (isSelf ? 'You' : 'Member')) +
-          (isSelf ? ' · you' : '') +
-        '</strong>' +
-        '<p class="muted" style="font-size:11px;margin:0 0 8px">Live location' +
-          (isSelf ? ' — pick your marker (same icons as Hunt)' : '') + '</p>' +
-        (isSelf
-          ? ('<div class="ps-dir-icon-grid" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">' +
-              grid +
-              '<button type="button" class="btn" data-dir-icon="" style="font-size:11px;padding:4px 8px">Default dot</button>' +
-            '</div>' +
-            '<button type="button" class="btn btn-primary" data-share-stop style="width:100%;font-size:12px">' +
-              (shareLocOn ? 'Stop sharing' : 'Start sharing') + '</button>')
-          : '<p class="muted" style="font-size:11px;margin:0">Marker set by this member on their device.</p>') +
-      '</div>';
-    try {
-      var pop = L.popup({ maxWidth: 280, className: 'ps-share-pop' })
-        .setLatLng([Lx.lat, Lx.lng])
-        .setContent(body)
-        .openOn(map);
-      setTimeout(function () {
-        var el = pop.getElement && pop.getElement();
-        if (!el) return;
-        el.querySelectorAll('[data-dir-icon]').forEach(function (b) {
-          b.addEventListener('click', function (ev) {
-            ev.preventDefault();
-            ev.stopPropagation();
-            var id = b.getAttribute('data-dir-icon') || '';
-            setShareLocIconId(id);
-            api.toast(id ? 'Location marker saved' : 'Using default dot');
-            if (shareLocOn) {
-              // force refresh with new icon
-              try {
-                navigator.geolocation.getCurrentPosition(function (pos) {
-                  api.onShareLocation({
-                    lat: pos.coords.latitude,
-                    lng: pos.coords.longitude,
-                    at: new Date().toISOString(),
-                    name: api.getMyName(),
-                    color: api.getMyColor(),
-                    iconId: getShareLocIconId() || null
-                  });
-                  redrawShareLocations();
-                  if (gpsMarker && map) {
-                    try { map.removeLayer(gpsMarker); } catch (eR) {}
-                    gpsMarker = L.marker([pos.coords.latitude, pos.coords.longitude], {
-                      icon: shareLocDivIcon({
-                        name: 'You', color: api.getMyColor(), iconId: getShareLocIconId()
-                      }),
-                      interactive: true
-                    }).on('click', function () {
-                      openShareMemberMenu(api.getMyId(), {
-                        lat: pos.coords.latitude, lng: pos.coords.longitude,
-                        name: 'You', color: api.getMyColor(), iconId: getShareLocIconId()
-                      }, true);
-                    }).addTo(map);
-                  }
-                }, function () {}, { enableHighAccuracy: true, maximumAge: 2000, timeout: 8000 });
-              } catch (eG) {}
-            }
-            map.closePopup();
-          });
-        });
-        var stop = el.querySelector('[data-share-stop]');
-        if (stop) {
-          stop.addEventListener('click', function (ev) {
-            ev.preventDefault();
-            setShareLocation(!shareLocOn);
-            map.closePopup();
-            api.toast(shareLocOn ? 'Sharing live location' : 'Live share off');
-          });
+    wireDirIconPickerOnce();
+    if (isSelf) {
+      openDirIconPicker({
+        title: 'Your location marker',
+        currentId: getShareLocIconId() || null,
+        currentColor: getShareLocColor(),
+        currentScale: getShareLocScale(),
+        onPick: function (id, color, scale) {
+          setShareLocIconId(id || '');
+          if (color) setShareLocColor(color);
+          if (scale != null) setShareLocScale(scale);
+          paintSelfShareMarker();
+          if (shareLocOn) broadcastShareLoc(true);
+          api.toast('Marker updated');
         }
-      }, 0);
+      });
+      return;
+    }
+    try {
+      L.popup({ maxWidth: 240 })
+        .setLatLng([Lx.lat, Lx.lng])
+        .setContent(
+          '<strong style="color:' + esc(Lx.color || '#e59a18') + '">' +
+            esc(Lx.name || 'Member') + '</strong><br>' +
+          '<span class="muted" style="font-size:11px">Live location' +
+            (Lx.heading != null ? ' · facing' : '') + '</span>'
+        )
+        .openOn(map);
     } catch (eP) {}
   }
 
   function fillShareIconSettingsGrid() {
-    var grid = $('ms-share-icon-grid');
-    if (!grid) return;
-    var cur = getShareLocIconId();
-    grid.innerHTML = DIR_CATALOG.map(function (d) {
-      var on = String(d.id) === String(cur);
-      return '<button type="button" class="ps-dir-icon-btn' + (on ? ' is-on' : '') +
-        '" data-ms-dir="' + esc(d.id) + '" title="' + esc(d.name) + '">' +
-        '<img src="' + esc(d.src) + '" alt="" width="24" height="24" /></button>';
-    }).join('');
-    grid.querySelectorAll('[data-ms-dir]').forEach(function (b) {
-      b.onclick = function () {
-        var id = b.getAttribute('data-ms-dir') || '';
-        setShareLocIconId(id);
-        fillShareIconSettingsGrid();
+    wireDirIconPickerOnce();
+    var wrap = $('ms-share-icon-grid');
+    if (!wrap) return;
+    var id = getShareLocIconId();
+    var color = getShareLocColor();
+    var scale = getShareLocScale();
+    var pct = Math.round(scale * 100);
+    var s = Math.round(28 * scale);
+    s = Math.max(18, Math.min(40, s));
+    wrap.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;width:100%;flex-wrap:wrap">' +
+        '<div style="width:48px;height:48px;border-radius:10px;background:#fff;border:1px solid #ccc;' +
+          'display:flex;align-items:center;justify-content:center;">' +
+          buildDirBodyHtml(color, 0, id, s) +
+        '</div>' +
+        '<div style="flex:1;min-width:120px">' +
+          '<div style="font-size:12px;font-weight:800;color:#fff">' +
+            esc(id ? ((getDirIconById(id) || {}).name || id) : 'Default arrow') +
+            ' · ' + pct + '%</div>' +
+          '<div class="muted" style="font-size:11px;margin-top:2px">Icon · color · size (Hunt style)</div>' +
+        '</div>' +
+        '<button type="button" class="btn btn-primary" id="ms-open-dir-picker" style="font-size:12px">Change marker</button>' +
+      '</div>';
+    var btn = $('ms-open-dir-picker');
+    if (btn) {
+      btn.onclick = function () {
+        openDirIconPicker({
+          title: 'Your location marker',
+          currentId: getShareLocIconId() || null,
+          currentColor: getShareLocColor(),
+          currentScale: getShareLocScale(),
+          onPick: function (nid, ncolor, nscale) {
+            setShareLocIconId(nid || '');
+            if (ncolor) setShareLocColor(ncolor);
+            if (nscale != null) setShareLocScale(nscale);
+            fillShareIconSettingsGrid();
+            if (shareLocOn) {
+              paintSelfShareMarker();
+              broadcastShareLoc(true);
+            }
+          }
+        });
       };
-    });
+    }
     var clear = $('ms-share-icon-clear');
     if (clear) {
       clear.onclick = function () {
         setShareLocIconId('');
+        setShareLocScale(1);
         fillShareIconSettingsGrid();
       };
+      clear.textContent = 'Reset to default arrow';
     }
   }
 

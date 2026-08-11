@@ -1,0 +1,13 @@
+PlanSlayer V1.3.46 — Hunt-parity share location markers
+=======================================================
+Date: 2026-08-11
+
+Shell: plan-slayer-shell-v79
+
+- Share location button pulses strongly while active (Hunt style)
+- Broadcasts position + heading to group about once per minute
+- Local GPS + device heading for smooth self-marker facing look direction
+- Directional icons recolored + outlined like Hunt (frontDeg rotation)
+- Marker picker: white tiles, color wheel, size 40–160%, live preview
+- Map settings “Change marker” uses same picker
+- Share payload: lat, lng, heading, iconId, color, scale

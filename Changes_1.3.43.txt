@@ -1,0 +1,15 @@
+PlanSlayer V1.3.43 — minimize on face, sticky Map, checklist parity, faster poll
+================================================================================
+Date: 2026-08-11
+
+Shell: plan-slayer-shell-v76
+
+Issues
+------
+- #69 Minimize chip on list face corner (not Got it)
+- #67 Sticky thinner Map button always visible
+- #66 Checklist/custom top-bar ⚙/share/−, add to checklist, faster poll (4s)
+
+Files
+-----
+- app.js, index.html, sw.js, AGENTS.md

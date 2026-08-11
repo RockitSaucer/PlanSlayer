@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.42';
+  var APP_VERSION = '1.3.43';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -876,15 +876,23 @@
           .catch(function () { renderUnlessTypingInListAdd(); });
       }
     });
-    // Light poll while tab is open (multi-device / multi-user) — keep lists fresher across phones
+    // Light poll while tab is open (multi-device / multi-user) — faster cross-device list refresh (#66)
     setInterval(function () {
       if (document.visibilityState !== 'visible') return;
       if (typeof resyncHuntEventsNow === 'function') {
-        resyncHuntEventsNow({ quiet: true }).then(function () { renderUnlessTypingInListAdd(); }).catch(function () {});
+        resyncHuntEventsNow({ quiet: true }).then(function () {
+          try {
+            if (typeof loadFreeListsStore === 'function') loadFreeListsStore();
+            else if (typeof loadJson === 'function' && typeof LOCAL_FREE_LISTS_KEY !== 'undefined') {
+              /* store re-read happens inside findNamedListById / render paths */
+            }
+          } catch (eL) {}
+          renderUnlessTypingInListAdd();
+        }).catch(function () {});
       } else if (typeof loadEvents === 'function') {
         loadEvents().then(function () { renderUnlessTypingInListAdd(); }).catch(function () {});
       }
-    }, 12000);
+    }, 4000);
     // After leaving an add box, apply any sync re-render we deferred
     if (!document._psListAddFocusFlush) {
       document._psListAddFocusFlush = true;
@@ -5773,9 +5781,9 @@
             '<div class="li-row">' +
               '<button type="button" class="li-face li-main" data-act="expand" title="Open item options">' +
                 '<div class="li-title-row"><span class="li-title">' + esc(safeTitle) + '</span></div>' +
+                '<span class="li-min-btn" data-act="minimize" title="Minimize" role="button" tabindex="0">−</span>' +
               '</button>' +
               '<div class="li-actions">' +
-                '<button type="button" class="btn btn-icon" data-act="minimize" title="Minimize">−</button>' +
                 '<button type="button" class="btn btn-got" data-act="got" title="Claim this item">Got it!</button>' +
                 (showExpenseEnabled(findNamedListById(state.activeNamedListId), activeEvent())
                   ? '<button type="button" class="btn btn-expense" data-act="expense" title="Shared expense">$</button>'
@@ -5913,11 +5921,13 @@
                 : '') +
               claimersHtml(item) +
             '</div>' +
+            /* Minimize on the list face (title tile), not on Got it (#69) */
+            '<span class="li-min-btn" data-act="minimize" title="' +
+              (state.minimizedItems[item.id] ? 'Expand' : 'Minimize') +
+              '" role="button" tabindex="0">' +
+              (state.minimizedItems[item.id] ? '+' : '−') + '</span>' +
           '</button>' +
           '<div class="li-actions">' +
-            '<button type="button" class="btn btn-icon" data-act="minimize" title="' +
-              (state.minimizedItems[item.id] ? 'Expand' : 'Minimize') + '">' +
-              (state.minimizedItems[item.id] ? '+' : '−') + '</button>' +
             (showDrop
               ? '<button type="button" class="btn btn-got btn-drop is-on" data-act="drop" title="Drop what you claimed — put it back on the list">Drop</button>'
               : ('<button type="button" class="btn btn-got' + (mine > 0 ? ' is-on' : '') +
@@ -6163,29 +6173,34 @@
                 esc(isClassic ? listKindLabel(cid) : (col.name || listKindLabel(cid))) +
               '</button>' +
               '<div class="list-col-head-actions">' +
-                (canEdit && String(cid) !== 'personal'
+                /* Same ⚙ / share / − for checklist + custom as classic columns (#66) */
+                (canEdit
                   ? '<button type="button" class="btn-icon list-col-opt" data-col-options="' + esc(cid) + '" title="Options">⚙</button>'
                   : '') +
-                (String(cid) !== 'personal'
-                  ? '<button type="button" class="btn-icon list-share-ico" data-col-share="' + esc(cid) + '" title="Share this section">' +
-                    shareIconSvg() + '</button>'
-                  : '') +
+                '<button type="button" class="btn-icon list-share-ico" data-col-share="' + esc(cid) + '" title="Share this section">' +
+                  shareIconSvg() + '</button>' +
                 '<button type="button" class="btn-icon" data-col-minimize="' + esc(cid) + '" title="Minimize">−</button>' +
               '</div>' +
             '</div>' +
             '<div class="list-col-body" data-col-body="' + esc(cid) + '" data-col-focus-add="' + esc(cid) + '" ' +
               'style="background:' + esc(colors.bg) + ';color:' + esc(colors.font) + ';" title="' +
-              (String(cid) === 'personal' ? 'Items you’ve claimed' : 'Click here to type an item') + '">' +
+              (String(cid) === 'personal' ? 'Private checklist — add items or Got it! from other sections' : 'Click here to type an item') + '">' +
               body +
             '</div>' +
-            (String(cid) === 'personal'
-              ? '<div class="list-col-add" style="justify-content:center"><span class="muted" style="font-size:11px;padding:6px 4px">Private · only you · Got it! from To do / To buy lands here</span></div>'
-              : ('<div class="list-col-add">' +
-                  '<input type="text" class="list-col-add-input" data-col-add-input="' + esc(cid) + '" placeholder="Type item, press Enter…" autocomplete="off" style="text-transform:capitalize" />' +
-                  '<button type="button" class="btn btn-icon list-ocr-cam" data-ocr-list="' + esc(cid) +
-                    '" title="Photo of handwritten list → items"><img src="icons/pins/camera.png" alt="" width="18" height="18" /></button>' +
-                  '<button type="button" class="btn btn-primary list-col-add-btn" data-col-add="' + esc(cid) + '">Add</button>' +
-                '</div>')) +
+            /* My checklist: same add bar as other sections (#66) */
+            ('<div class="list-col-add">' +
+                (String(cid) === 'personal'
+                  ? '<span class="muted" style="font-size:10px;padding:0 4px 0 0;white-space:nowrap">Private · you only</span>'
+                  : '') +
+                '<input type="text" class="list-col-add-input" data-col-add-input="' + esc(cid) + '" placeholder="' +
+                  (String(cid) === 'personal' ? 'Add private item…' : 'Type item, press Enter…') +
+                  '" autocomplete="off" style="text-transform:capitalize" />' +
+                (String(cid) !== 'personal'
+                  ? ('<button type="button" class="btn btn-icon list-ocr-cam" data-ocr-list="' + esc(cid) +
+                    '" title="Photo of handwritten list → items"><img src="icons/pins/camera.png" alt="" width="18" height="18" /></button>')
+                  : '') +
+                '<button type="button" class="btn btn-primary list-col-add-btn" data-col-add="' + esc(cid) + '">Add</button>' +
+              '</div>') +
           '</div>';
       } catch (eCol) {
         console.warn('render column', eCol);
@@ -9366,6 +9381,11 @@
       }
       if (!Array.isArray(col.items)) col.items = [];
       var item = newItem(title, extras || {});
+      // Private checklist: mark as mine only (#66)
+      if (String(col.id) === 'personal' || String(want) === 'personal') {
+        item.private_to = String(myId() || 'local');
+        item.from_manual = true;
+      }
       col.items.push(item);
 
       state.listTab = col.id;

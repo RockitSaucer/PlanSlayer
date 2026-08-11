@@ -2538,13 +2538,34 @@
     html.map-mode-max .brand-header { position: relative; z-index: 1; }
     .map-fab-wrap { margin-bottom: 10px; display: none; }
     .map-fab-wrap.is-visible { display: block; }
+    /* Sticky Map strip — always reachable under long lists / open options (#67) */
+    .left-stack .map-fab-wrap,
+    #map-fab-wrap {
+      position: sticky;
+      bottom: 0;
+      z-index: 40;
+      margin: 0;
+      padding: 6px 0 max(6px, env(safe-area-inset-bottom, 0px));
+      background: linear-gradient(180deg, rgba(10,12,9,0) 0%, var(--bg, #0a0c09) 28%, var(--bg, #0a0c09) 100%);
+      flex: 0 0 auto;
+    }
+    .left-stack .map-fab-wrap.is-visible,
+    #map-fab-wrap.is-visible {
+      display: block !important;
+    }
     .map-fab-wrap #btn-toggle-map {
       width: 100%;
-      min-height: 52px;
-      font-size: 16px !important;
+      min-height: 36px;
+      font-size: 13px !important;
       font-weight: 800 !important;
       letter-spacing: 0.04em;
-      padding: 14px 18px !important;
+      padding: 8px 12px !important;
+      border-radius: 10px !important;
+    }
+    /* Leave scroll room so last list row is not hidden under sticky Map */
+    .left-stack .left-events,
+    #view-home-list {
+      padding-bottom: 8px;
     }
     #qualifier-filters {
       display: flex;
@@ -3352,38 +3373,46 @@
       min-height: 28px;
       line-height: 1.15;
     }
-    /* Minimize (−): tiny chip top-right of each list item (#62) */
-    .list-item {
-      position: relative;
+    /* Minimize (−): corner of the list face (title tile), not Got it (#69) */
+    .list-item .li-face,
+    .list-item button.li-face,
+    .list-item button.li-main {
+      position: relative !important;
+      padding-right: 22px !important; /* room for − chip */
     }
-    .list-item .li-actions [data-act="minimize"],
-    .list-item .li-actions button[data-act="minimize"] {
+    .list-item .li-min-btn,
+    .list-item .li-face .li-min-btn,
+    .list-item [data-act="minimize"].li-min-btn {
       position: absolute !important;
-      top: 3px !important;
-      right: 3px !important;
+      top: 2px !important;
+      right: 2px !important;
       width: 18px !important;
       height: 18px !important;
       min-width: 18px !important;
       min-height: 18px !important;
-      max-width: 18px !important;
-      max-height: 18px !important;
       padding: 0 !important;
       margin: 0 !important;
-      font-size: 12px !important;
+      font-size: 13px !important;
+      font-weight: 800 !important;
       line-height: 16px !important;
+      text-align: center !important;
       border-radius: 4px !important;
-      z-index: 5;
-      opacity: 0.85;
+      border: 1px solid var(--border, #2a3224) !important;
+      background: rgba(10, 12, 9, 0.72) !important;
+      color: var(--muted, #8a9488) !important;
+      z-index: 6;
+      cursor: pointer;
+      opacity: 0.9;
+      box-sizing: border-box;
+      display: inline-flex !important;
+      align-items: center;
+      justify-content: center;
+      pointer-events: auto;
     }
-    .list-item .li-actions [data-act="minimize"]:hover {
+    .list-item .li-min-btn:hover {
       opacity: 1;
-      border-color: var(--accent);
-    }
-    .list-item .li-row {
-      padding-right: 22px; /* room for top-right minimize */
-    }
-    .list-item .li-actions {
-      padding-right: 2px;
+      color: var(--accent) !important;
+      border-color: var(--accent) !important;
     }
     .btn-got.is-on {
       color: #fff;
@@ -3900,7 +3929,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.42</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.43</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">

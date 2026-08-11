@@ -1,0 +1,10 @@
+PlanSlayer V1.3.28 — Event/list chrome + Got it → My checklist
+
+- Remove Edit event / Edit list buttons under card names (match personal list look)
+- Edit moves to the right header next to Share list
+- Remove + Add section from personal lists (and event packing lists)
+- Got it! on To do / To buy / To bring copies into My checklist (personal column)
+  for event packing lists + private device store
+- Countdown shows on event packing lists in the right detail bar
+
+Shell: plan-slayer-shell-v61

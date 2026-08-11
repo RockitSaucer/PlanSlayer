@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.27';
+  var APP_VERSION = '1.3.28';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -434,23 +434,30 @@
     claimQty = Math.max(0, Number(claimQty) || 0);
     try {
       if (scope === 'free-list') {
-        var list = findNamedListById(state.activeNamedListId);
+        var list = resolveOpenNamedList(null) || findNamedListById(state.activeNamedListId);
         if (!list || !item) return false;
         sanitizeNamedList(list);
         var hit = findInNamedListColumn(list, kind, item.id);
+        if (!hit || !hit.item) {
+          // Scan all columns if kind attr stale
+          hit = findInNamedListColumn(list, null, item.id);
+        }
         if (!hit || !hit.item) return false;
         // Apply claims from the toggled item onto the store list, then sync bring
         hit.item.claims = Object.assign({}, item.claims || {});
         if (isBuyColumnKind(kind, list) || isBuyColumnKind(hit.colId, list)) {
           syncBuyGotToBringOnNamedList(list, hit.item, claimQty, hit.colId || kind);
         }
-        // Private non-shared checklist for this event list (To do / To buy / To bring)
+        // Private My checklist for event packing lists (To do / To buy / To bring)
         try {
           var colId = hit.colId || kind;
           if (String(colId) !== 'personal') {
+            ensurePersonalColumn(list);
             syncClaimToPrivateChecklist(list, hit.item, claimQty, colId);
           }
-        } catch (ePriv) {}
+        } catch (ePriv) {
+          console.warn('afterGotItClaim private', ePriv);
+        }
         saveNamedList(list);
         return true;
       }
@@ -1252,7 +1259,7 @@
           byId[k].items = fromBucket;
         }
       });
-      // Shared / event lists: private “My checklist” (my claims only — not for others)
+      // Event / shared packing lists: private “My checklist” (my claims only — not for others)
       var wantPersonal = !!n.eventId || (Array.isArray(n.members) && n.members.length > 1);
       if (wantPersonal) {
         if (!byId.personal) {
@@ -1260,6 +1267,7 @@
           byId.personal.colors = { font: '#f0f4ee', tab: '#2a3a4a', bg: '#0a1014' };
         } else {
           byId.personal.name = 'My checklist';
+          if (!Array.isArray(byId.personal.items)) byId.personal.items = [];
         }
       } else if (byId.personal) {
         delete byId.personal;
@@ -1710,52 +1718,126 @@
     bag[privateChecklistKey(listId)] = Array.isArray(items) ? items.slice(0, 500) : [];
     saveJson(LOCAL_PRIVATE_CHECKLIST_KEY, bag);
   }
+  /** Event packing lists get a private “My checklist” (personal column) */
+  function listWantsPersonalChecklist(list) {
+    if (!list) return false;
+    if (list.eventId) return true;
+    if (Array.isArray(list.members) && list.members.length > 1) return true;
+    return false;
+  }
+  /** Ensure personal / My checklist column exists on a list */
+  function ensurePersonalColumn(list) {
+    if (!list) return null;
+    sanitizeNamedList(list);
+    // Force personal column for event / shared lists even if sanitize skipped it
+    if (!listWantsPersonalChecklist(list)) return null;
+    var col = (list.columns || []).find(function (c) { return c && String(c.id) === 'personal'; });
+    if (!col) {
+      col = defaultColumn('personal', 'My checklist');
+      col.colors = { font: '#f0f4ee', tab: '#2a3a4a', bg: '#0a1014' };
+      list.columns = (list.columns || []).filter(function (c) { return c && String(c.id) !== 'personal'; });
+      list.columns.push(col);
+      list.columnOrder = (list.columns || []).map(function (c) { return c.id; });
+      if (!list.buckets) list.buckets = {};
+      list.buckets.personal = col.items;
+    } else {
+      col.name = 'My checklist';
+    }
+    return col;
+  }
   /**
    * When I Got it! on To do / To buy / To bring, mirror into my private checklist
-   * for this event list (device-local, never published).
+   * (device-local) AND the list’s personal column so it always shows under My checklist.
    */
   function syncClaimToPrivateChecklist(list, sourceItem, claimQty, sourceColId) {
     if (!list || !list.id || !sourceItem) return;
-    // Only event-linked / shared packing lists get the private checklist
-    if (!list.eventId && !(Array.isArray(list.members) && list.members.length > 1)) return;
+    // Event packing / shared lists only
+    if (!listWantsPersonalChecklist(list)) return;
     var me = String(myId() || 'local');
-    var items = getPrivateChecklist(list.id);
+    claimQty = Math.max(0, Number(claimQty) || 0);
     var srcId = String(sourceItem.id);
+
+    // 1) Device-local private store
+    var items = getPrivateChecklist(list.id);
     var idx = items.findIndex(function (it) {
       return it && String(it.source_item_id || it.id) === srcId;
     });
-    claimQty = Math.max(0, Number(claimQty) || 0);
     if (claimQty <= 0) {
       if (idx >= 0) {
         items.splice(idx, 1);
         savePrivateChecklist(list.id, items);
       }
-      return;
+    } else {
+      var copy = {
+        id: idx >= 0 && items[idx].id ? items[idx].id : uid(),
+        source_item_id: srcId,
+        source_col: sourceColId || null,
+        private_to: me,
+        title: sourceItem.title || 'Item',
+        qty: Math.max(1, Number(sourceItem.qty) || 1),
+        qualifier: sourceItem.qualifier || 'other',
+        priority: sourceItem.priority || 0,
+        highlight: !!sourceItem.highlight,
+        highlight_color: sourceItem.highlight_color || 'red',
+        notes: sourceItem.notes || '',
+        notesList: Array.isArray(sourceItem.notesList) ? sourceItem.notesList.slice() : [],
+        claims: {},
+        claimed_qty: claimQty,
+        from_claim: true,
+        created_by: me,
+        created_at: (idx >= 0 && items[idx].created_at) || new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      copy.claims[me] = claimQty;
+      if (idx >= 0) items[idx] = Object.assign({}, items[idx], copy);
+      else items.push(copy);
+      savePrivateChecklist(list.id, items);
     }
-    var copy = {
-      id: idx >= 0 && items[idx].id ? items[idx].id : uid(),
-      source_item_id: srcId,
-      source_col: sourceColId || null,
-      private_to: me,
-      title: sourceItem.title || 'Item',
-      qty: Math.max(1, Number(sourceItem.qty) || 1),
-      qualifier: sourceItem.qualifier || 'other',
-      priority: sourceItem.priority || 0,
-      highlight: !!sourceItem.highlight,
-      highlight_color: sourceItem.highlight_color || 'red',
-      notes: sourceItem.notes || '',
-      notesList: Array.isArray(sourceItem.notesList) ? sourceItem.notesList.slice() : [],
-      claims: {},
-      claimed_qty: claimQty,
-      from_claim: true,
-      created_by: me,
-      created_at: (idx >= 0 && items[idx].created_at) || new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-    copy.claims[me] = claimQty;
-    if (idx >= 0) items[idx] = Object.assign({}, items[idx], copy);
-    else items.push(copy);
-    savePrivateChecklist(list.id, items);
+
+    // 2) Live personal column on the list (so My checklist always has the row)
+    try {
+      var pcol = ensurePersonalColumn(list);
+      if (pcol) {
+        if (!Array.isArray(pcol.items)) pcol.items = [];
+        var pIdx = pcol.items.findIndex(function (it) {
+          return it && (String(it.source_item_id) === srcId || String(it.id) === srcId);
+        });
+        if (claimQty <= 0) {
+          if (pIdx >= 0) pcol.items.splice(pIdx, 1);
+        } else {
+          var row = pIdx >= 0 ? pcol.items[pIdx] : null;
+          if (!row) {
+            row = {
+              id: uid(),
+              source_item_id: srcId,
+              source_col: sourceColId || null,
+              private_to: me,
+              title: sourceItem.title || 'Item',
+              qty: Math.max(1, Number(sourceItem.qty) || 1),
+              qualifier: sourceItem.qualifier || 'other',
+              priority: sourceItem.priority || 0,
+              claims: {},
+              from_claim: true,
+              created_by: me
+            };
+            pcol.items.push(row);
+          }
+          row.title = sourceItem.title || row.title;
+          row.qty = Math.max(1, Number(sourceItem.qty) || Number(row.qty) || 1);
+          row.source_item_id = srcId;
+          row.source_col = sourceColId || row.source_col || null;
+          row.private_to = me;
+          row.from_claim = true;
+          if (!row.claims || typeof row.claims !== 'object') row.claims = {};
+          row.claims[me] = claimQty;
+          row.claimed_qty = claimQty;
+        }
+        if (!list.buckets) list.buckets = {};
+        list.buckets.personal = pcol.items;
+      }
+    } catch (eCol) {
+      console.warn('syncClaim personal column', eCol);
+    }
   }
 
   function updateChoreWhenSummary() {
@@ -4521,6 +4603,12 @@
   function listAssociatedDates(list) {
     if (!list || !list.eventId) return { start: null, end: null };
     var ev = findEventById(list.eventId);
+    if (!ev) {
+      try {
+        var board = loadPersonalBoard();
+        ev = (board.events || []).find(function (e) { return String(e.id) === String(list.eventId); }) || null;
+      } catch (eB) { ev = null; }
+    }
     if (!ev) return { start: null, end: null };
     return { start: ev.start_at || null, end: ev.end_at || null };
   }
@@ -5080,11 +5168,8 @@
     // Show every permanent category at the top (recent/frequency order), not only used ones
     var qs = orderedQualifiersForSelect(ev, freeList);
     var showQs = qs.filter(function (q) { return q && q.id; });
-    // Far left: + Add section (named lists only) — keeps triad columns wider
+    // No + Add section on personal or event packing lists (classic To do / To buy / To bring)
     var html = '';
-    if (freeList && isNamedListOwner(freeList) && !(freeList.eventId && false)) {
-      html += '<button type="button" class="btn btn-accent filter-chip" id="btn-add-list-column" title="Add another list box">+ Add section</button>';
-    }
     html += '<button type="button" class="btn filter-chip' + (state.filterQualifier === 'all' ? ' is-active' : '') +
       '" data-filter-q="all">Show all</button>';
     showQs.forEach(function (q) {
@@ -6133,13 +6218,13 @@
     var metaHtml = metaBits.length
       ? '<div class="ec-meta">' + esc(metaBits.join(' · ')) + '</div>'
       : '';
+    // Same shell for personal + event lists: name + countdown (edit via Share / long-press elsewhere)
     return (
       '<div class="event-card-wrap list-card-wrap' + active + (membersBlock ? ' has-members' : '') + '">' +
         '<div class="event-card' + active + '" data-open-list="' + esc(n.id) + '" role="button" tabindex="0">' +
           '<div class="ec-top">' +
             '<strong class="ec-name">' + esc(n.name || 'Untitled list') + '</strong>' +
             (cd ? ('<span class="ec-countdown">' + cd + '</span>') : '') +
-            '<button type="button" class="btn ec-edit-btn" data-edit-list="' + esc(n.id) + '" title="Edit list">Edit list</button>' +
           '</div>' +
           metaHtml +
         '</div>' +
@@ -6148,7 +6233,7 @@
     );
   }
 
-  /** My events cards — same shell as lists; Edit event only */
+  /** My events cards — same shell as personal lists (no Edit on the card) */
   function renderEventCardHtml(e) {
     var active = String(e.id) === String(state.activeEventId) ? ' is-active' : '';
     var linked = listsForEvent(e.id);
@@ -6196,13 +6281,13 @@
     var metaHtml = underBits.length
       ? '<div class="ec-meta">' + esc(underBits.join(' · ')) + '</div>'
       : '';
+    // Same shell as personal list cards: name + countdown, no Edit button on the card
     return (
       '<div class="event-card-wrap' + active + (membersBlock ? ' has-members' : '') + '">' +
         '<div class="event-card' + active + '" data-open-event="' + esc(e.id) + '" role="button" tabindex="0">' +
           '<div class="ec-top">' +
             '<strong class="ec-name">' + esc(e.name) + '</strong>' +
             (cd ? ('<span class="ec-countdown">' + cd + '</span>') : '') +
-            '<button type="button" class="btn ec-edit-btn" data-edit-event="' + esc(e.id) + '" title="Edit event">Edit event</button>' +
           '</div>' +
           metaHtml +
         '</div>' +
@@ -6616,16 +6701,24 @@
     if (showingListDetail) {
       setRightPanelMode('list');
       if ($('list-detail-bar')) $('list-detail-bar').style.display = '';
-      // Countdown for event-linked lists (dates only in Edit event)
+      // Countdown for event-linked packing lists (personal event lists too)
       try {
         var barCd = $('list-bar-countdown');
         if (barCd) {
           var datesForList = listAssociatedDates(openList);
-          barCd.innerHTML = (datesForList && datesForList.start)
-            ? countdownHtml(datesForList.start, datesForList.end)
-            : '';
+          if (datesForList && datesForList.start) {
+            barCd.innerHTML = countdownHtml(datesForList.start, datesForList.end);
+            barCd.style.display = '';
+          } else {
+            barCd.innerHTML = '';
+            barCd.style.display = 'none';
+          }
         }
       } catch (eCd) {}
+      // Ensure My checklist column exists on event packing lists
+      try {
+        if (listWantsPersonalChecklist(openList)) ensurePersonalColumn(openList);
+      } catch (ePers) {}
       // Compact member chips in the detail bar (never inside #ev-list — that crushed the triad)
       try {
         var barMem = $('list-bar-members');
@@ -11420,6 +11513,27 @@
       copyText(listAsText(cur.bucket, state.listTab)).then(function (ok) {
         appToast(ok ? 'List copied to clipboard' : 'Could not copy');
       });
+    });
+    // Edit list or linked event (header only — not on the left card under the name)
+    click('btn-edit-list-or-event', function () {
+      var list = resolveOpenNamedList(null) || findNamedListById(state.activeNamedListId);
+      if (list && list.eventId) {
+        var evL = findEventById(list.eventId);
+        if (evL) {
+          openEditEventModal(evL);
+          return;
+        }
+      }
+      if (list) {
+        openEditListModal(list);
+        return;
+      }
+      var ev = activeEvent();
+      if (ev) {
+        openEditEventModal(ev);
+        return;
+      }
+      appToast('Open a list or event first');
     });
     // Share list = generate (or reuse) invite code so others can join
     click('btn-share-list', function () {

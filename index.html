@@ -3539,7 +3539,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.27</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.28</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -3922,6 +3922,7 @@
             <h2 id="lists-title">Details</h2>
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap" id="lists-head-actions">
+            <button type="button" class="btn" id="btn-edit-list-or-event" title="Edit">Edit</button>
             <button type="button" class="btn" id="btn-share-list">Share list</button>
           </div>
         </div>
@@ -3933,7 +3934,8 @@
             <div class="ev-toolbar-row">
               <div class="ev-toolbar-btns">
                 <button type="button" class="btn" id="ev-back" style="display:none">← Back</button>
-                <button type="button" class="btn" id="ev-edit">Edit event</button>
+                <!-- Edit event: open from Share / settings — not under the title (match personal list chrome) -->
+                <button type="button" class="btn" id="ev-edit" style="display:none" aria-hidden="true">Edit event</button>
               </div>
               <div id="ev-countdown" class="ev-countdown-slot" aria-live="polite"></div>
               <div id="ev-members" aria-label="Members"></div>

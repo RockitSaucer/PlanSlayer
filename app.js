@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.29';
+  var APP_VERSION = '1.3.30';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -6393,7 +6393,7 @@
     var metaHtml = metaBits.length
       ? '<div class="ec-meta">' + esc(metaBits.join(' · ')) + '</div>'
       : '';
-    // Name + countdown (personal-for-event lists get event countdown too)
+    // Name + countdown + Edit list (on the dropdown card)
     return (
       '<div class="event-card-wrap list-card-wrap' + active + (membersBlock ? ' has-members' : '') +
         (isPersonalEventShadowList(n) ? ' is-personal-event-list' : '') + '">' +
@@ -6401,6 +6401,8 @@
           '<div class="ec-top">' +
             '<strong class="ec-name">' + esc(n.name || 'Untitled list') + '</strong>' +
             (cd ? ('<span class="ec-countdown">' + cd + '</span>') : '') +
+            '<button type="button" class="btn ec-edit-btn" data-edit-list="' + esc(n.id) +
+              '" title="Edit list">Edit list</button>' +
           '</div>' +
           metaHtml +
         '</div>' +
@@ -6409,7 +6411,7 @@
     );
   }
 
-  /** My events cards — same shell as personal lists (no Edit on the card) */
+  /** My events cards — same shell as lists, with Edit event on the card */
   function renderEventCardHtml(e) {
     var active = String(e.id) === String(state.activeEventId) ? ' is-active' : '';
     var linked = listsForEvent(e.id);
@@ -6457,13 +6459,15 @@
     var metaHtml = underBits.length
       ? '<div class="ec-meta">' + esc(underBits.join(' · ')) + '</div>'
       : '';
-    // Same shell as personal list cards: name + countdown, no Edit button on the card
+    // Name + countdown + Edit event (on the dropdown card)
     return (
       '<div class="event-card-wrap' + active + (membersBlock ? ' has-members' : '') + '">' +
         '<div class="event-card' + active + '" data-open-event="' + esc(e.id) + '" role="button" tabindex="0">' +
           '<div class="ec-top">' +
             '<strong class="ec-name">' + esc(e.name) + '</strong>' +
             (cd ? ('<span class="ec-countdown">' + cd + '</span>') : '') +
+            '<button type="button" class="btn ec-edit-btn" data-edit-event="' + esc(e.id) +
+              '" title="Edit event">Edit event</button>' +
           '</div>' +
           metaHtml +
         '</div>' +

@@ -1,0 +1,7 @@
+PlanSlayer V1.3.30 — Restore Edit list / Edit event on cards
+
+- Edit list back on personal / event packing list cards in the left list
+- Edit event back on event cards under the calendar
+- Existing click handlers (data-edit-list / data-edit-event) unchanged
+
+Shell: plan-slayer-shell-v63

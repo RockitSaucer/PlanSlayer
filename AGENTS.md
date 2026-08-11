@@ -1,7 +1,7 @@
 # PlanSlayer — agent notes
 
 **Product:** group event planning (lists, invites, expenses, Hunt-style map + calendar).  
-**Current version:** **V1.3.29** (`app.js` `APP_VERSION`)
+**Current version:** **V1.3.30** (`app.js` `APP_VERSION`)
 
 ### Three-site family
 Map/calendar fixes shared with Hunt/Reg unless noted. **Other ways to slay** → Hunt + Reg. See `Desktop/HuntApp/reusable-kits/SYNC_POLICY.md`.

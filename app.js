@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.34';
+  var APP_VERSION = '1.3.35';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -716,20 +716,26 @@
         } catch (err2) {}
       }
     });
-    // When tab becomes visible, pull cloud events so member deletes show up sooner
+    // When tab becomes visible, re-sync Plan events + Hunt calendar cloud
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState !== 'visible') return;
-      if (typeof loadEvents === 'function') {
+      if (typeof resyncHuntEventsNow === 'function') {
+        resyncHuntEventsNow({ quiet: true }).then(function () {
+          if (typeof loadEvents === 'function') return loadEvents();
+        }).then(function () { render(); }).catch(function () { render(); });
+      } else if (typeof loadEvents === 'function') {
         loadEvents().then(function () { render(); }).catch(function () { render(); });
       }
     });
     // Light poll while tab is open (multi-device / multi-user) — keep lists fresher across phones
     setInterval(function () {
       if (document.visibilityState !== 'visible') return;
-      if (typeof loadEvents === 'function') {
+      if (typeof resyncHuntEventsNow === 'function') {
+        resyncHuntEventsNow({ quiet: true }).then(function () { render(); }).catch(function () {});
+      } else if (typeof loadEvents === 'function') {
         loadEvents().then(function () { render(); }).catch(function () {});
       }
-    }, 5000);
+    }, 12000);
   }
   function isMobileLayout() {
     try {
@@ -3685,12 +3691,21 @@
       state.events = Object.keys(byId).map(function (k) { return byId[k]; });
       persistLocal({ quiet: true });
     }
-    // Hunt/Reg calendar events → PlanSlayer events + associated lists
+    // Cross-origin re-sync from Hunt/Reg Supabase calendar (same login)
     try {
-      var nImp = importHuntCalendarEvents();
-      if (nImp) appToast('Imported ' + nImp + ' event' + (nImp === 1 ? '' : 's') + ' from Hunt/Reg');
-    } catch (eImp) {}
-    // Ensure every plan event has a linked list pack; pull cloud list packs onto this device
+      var sync = await pullHuntCalendarFromCloud();
+      if (sync && sync.added > 0) {
+        appToast('Synced ' + sync.added + ' event' + (sync.added === 1 ? '' : 's') + ' from Hunt/Reg');
+      }
+    } catch (ePull) {
+      console.warn('pullHuntCalendarFromCloud', ePull);
+      // Same-origin fallback (only works if user used Plan in same browser as Hunt)
+      try {
+        var nImp = importHuntCalendarEvents();
+        if (nImp) appToast('Imported ' + nImp + ' event' + (nImp === 1 ? '' : 's') + ' from Hunt/Reg');
+      } catch (eImp) {}
+    }
+    // Ensure every plan event has a linked list pack + personal claim list
     state.events.forEach(function (e) {
       try { applyCloudListPackToLocal(e); } catch (eA) {
         try { ensureAssociatedListForEvent(e); } catch (e2) {}
@@ -3698,6 +3713,27 @@
     });
     fillTypeDatalist();
     render();
+  }
+
+  /** Manual / visibility re-sync for mobile when Hunt has events Plan doesn't */
+  async function resyncHuntEventsNow(opts) {
+    opts = opts || {};
+    try {
+      var sync = await pullHuntCalendarFromCloud();
+      fillTypeDatalist();
+      render();
+      if (opts.quiet) return sync;
+      var n = (sync && sync.added) || 0;
+      var p = (sync && sync.pulled) || 0;
+      if (n > 0) appToast('Synced ' + n + ' new event' + (n === 1 ? '' : 's') + ' from Hunt');
+      else if (p > 0) appToast('Re-synced Hunt calendar (' + p + ' rows)');
+      else appToast('Hunt calendar up to date — open Hunt while logged in if missing');
+      return sync;
+    } catch (e) {
+      console.warn('resyncHuntEventsNow', e);
+      if (!opts.quiet) appToast('Could not sync from Hunt — check login');
+      return { added: 0, pulled: 0 };
+    }
   }
 
   function fillTypeDatalist() {
@@ -3982,7 +4018,64 @@
     }
   }
 
-  /** Pull Hunt/Reg calendar events from shared localStorage into PlanSlayer */
+  function huntEventStartEnd(he) {
+    var start = he.startDate || he.start_date || he.date || null;
+    var end = he.endDate || he.end_date || start;
+    var startAt = start ? (String(start).length === 10 ? start + 'T12:00:00' : String(start)) : null;
+    var endAt = end ? (String(end).length === 10 ? end + 'T12:00:00' : String(end)) : null;
+    return { startAt: startAt, endAt: endAt };
+  }
+  /** Apply Hunt listPack (or bridge pack) onto a Plan event + free list store */
+  function applyHuntListPackToPlanEvent(ev, he) {
+    if (!ev || !ev.id) return null;
+    var pack = null;
+    if (he) {
+      pack = he.listPack || he.list_pack || null;
+      if (!pack && he.hunt_link) pack = he.hunt_link.listPack || null;
+    }
+    // Bridge bag (same-origin only, but also filled by cloud pull below)
+    if (!pack || !pack.columns) {
+      try {
+        var bag = loadJson(SLAYER_EVENT_LISTS_KEY, null) || {};
+        var huntId = he && he.id ? String(he.id) : (ev.hunt_event_id || '');
+        pack = bag[String(ev.id)] ||
+          (huntId ? bag['hunt:' + huntId] : null) ||
+          (ev.planListId ? bag['list:' + String(ev.planListId)] : null) ||
+          pack;
+      } catch (eB) {}
+    }
+    if (pack && pack.columns && pack.columns.length) {
+      if (!ev.state) ev.state = {};
+      ev.state.namedListPack = {
+        listId: pack.listId || null,
+        name: pack.name || ((ev.name || 'Event') + ' · lists'),
+        members: pack.members || [],
+        columns: pack.columns,
+        invite_code: pack.invite_code || null,
+        updated_at: pack.updated_at || he.updatedAt || he.updated_at || new Date().toISOString()
+      };
+      // Also seed classic buckets from columns so empty-items heal works
+      if (!ev.state.lists) ev.state.lists = emptyLists();
+      (pack.columns || []).forEach(function (c) {
+        if (!c || !c.id) return;
+        if (['todo', 'buy', 'bring'].indexOf(String(c.id)) < 0) return;
+        if (!ev.state.lists[c.id]) ev.state.lists[c.id] = { group: [], personal: {} };
+        if (Array.isArray(c.items) && c.items.length) {
+          ev.state.lists[c.id].group = c.items.map(function (it) {
+            return Object.assign({}, it, { id: it.id || uid() });
+          });
+        }
+      });
+      try { applyCloudListPackToLocal(ev); } catch (eA) {}
+    }
+    var list = null;
+    try { list = ensureAssociatedListForEvent(ev); } catch (eE) {}
+    return list;
+  }
+  /**
+   * Pull Hunt/Reg calendar events from localStorage (same browser origin only)
+   * into PlanSlayer. Also re-syncs names/dates/list packs for already-imported events.
+   */
   function importHuntCalendarEvents() {
     var raw;
     try { raw = JSON.parse(localStorage.getItem(HUNT_CAL_EVENTS_KEY) || '[]'); } catch (e) { raw = []; }
@@ -3990,34 +4083,68 @@
     var map = {};
     try { map = JSON.parse(localStorage.getItem(HUNT_IMPORT_MAP_KEY) || '{}') || {}; } catch (e2) { map = {}; }
     var added = 0;
+    var updated = 0;
     raw.forEach(function (he) {
       if (!he || !he.id) return;
       var huntId = String(he.id);
+      var existingEv = null;
       if (map[huntId]) {
-        // already imported — ensure list still exists
-        var existingEv = state.events.find(function (e) { return String(e.id) === String(map[huntId]); });
-        if (existingEv) ensureAssociatedListForEvent(existingEv);
+        existingEv = state.events.find(function (e) { return String(e.id) === String(map[huntId]); }) || null;
+      }
+      if (!existingEv) {
+        existingEv = state.events.find(function (e) {
+          return e.hunt_event_id && String(e.hunt_event_id) === huntId;
+        }) || null;
+      }
+      // Match by planEventId stamped on Hunt row
+      if (!existingEv && (he.planEventId || he.plan_event_id)) {
+        var pid = he.planEventId || he.plan_event_id;
+        existingEv = state.events.find(function (e) { return String(e.id) === String(pid); }) || null;
+      }
+      // Match by name (e.g. Gator Hunt)
+      if (!existingEv) {
+        var hn = String(he.text || he.name || he.title || '').trim().toLowerCase();
+        if (hn) {
+          existingEv = state.events.find(function (e) {
+            return e && String(e.name || '').trim().toLowerCase() === hn;
+          }) || null;
+        }
+      }
+
+      var se = huntEventStartEnd(he);
+      if (existingEv) {
+        map[huntId] = existingEv.id;
+        existingEv.hunt_event_id = huntId;
+        var nameIn = he.text || he.name || he.title;
+        if (nameIn) existingEv.name = nameIn;
+        if (se.startAt) existingEv.start_at = se.startAt;
+        if (se.endAt) existingEv.end_at = se.endAt;
+        if (he.lat != null) existingEv.lat = Number(he.lat);
+        if (he.lng != null) existingEv.lng = Number(he.lng);
+        if (he.locationLabel || he.location_label) {
+          existingEv.location_label = he.locationLabel || he.location_label;
+        }
+        if (he.color) {
+          if (!existingEv.state) existingEv.state = {};
+          existingEv.state.color = he.color;
+        }
+        existingEv.updated_at = he.updatedAt || he.updated_at || existingEv.updated_at || new Date().toISOString();
+        applyHuntListPackToPlanEvent(existingEv, he);
+        updated++;
         return;
       }
-      // skip if plan event already has this hunt id stamped
-      if (state.events.some(function (e) {
-        return e.hunt_event_id && String(e.hunt_event_id) === huntId;
-      })) return;
-      var start = he.startDate || he.start_date || he.date || null;
-      var end = he.endDate || he.end_date || start;
-      var startAt = start ? (String(start).length === 10 ? start + 'T12:00:00' : start) : null;
-      var endAt = end ? (String(end).length === 10 ? end + 'T12:00:00' : end) : null;
+
       var ev = normalizeEvent({
-        id: uid(),
+        id: (he.planEventId || he.plan_event_id) || uid(),
         owner_user_id: myId() || 'local',
         name: he.text || he.name || he.title || 'Hunt event',
         event_type: he.weapon ? String(he.weapon).toLowerCase() : 'hunt',
-        start_at: startAt,
-        end_at: endAt,
+        start_at: se.startAt,
+        end_at: se.endAt,
         lat: he.lat != null ? Number(he.lat) : null,
         lng: he.lng != null ? Number(he.lng) : null,
         location_label: he.locationLabel || he.location_label || null,
-        invite_code: null,
+        invite_code: he.inviteCode || he.invite_code || null,
         state: { lists: emptyLists(), expenses: [], mapPins: [], color: he.color || '#e59a18' },
         hunt_event_id: huntId,
         source: 'hunt',
@@ -4026,14 +4153,100 @@
       });
       state.events.push(ev);
       map[huntId] = ev.id;
-      ensureAssociatedListForEvent(ev);
+      applyHuntListPackToPlanEvent(ev, he);
       added++;
     });
-    if (added) {
-      persistLocal();
+    if (added || updated) {
+      persistLocal({ quiet: true });
       try { localStorage.setItem(HUNT_IMPORT_MAP_KEY, JSON.stringify(map)); } catch (e3) {}
     }
     return added;
+  }
+  /**
+   * Cross-origin re-sync: pull Hunt/Reg map_calendar_events from Supabase into
+   * local Hunt key + Plan events/lists. Required because huntslayer.com and
+   * planslayer.com do NOT share localStorage.
+   */
+  async function pullHuntCalendarFromCloud() {
+    var client = sb();
+    var user = me();
+    if (!client || !user) return { added: 0, pulled: 0 };
+    var res;
+    try {
+      res = await client.from('map_calendar_events').select('*');
+    } catch (e) {
+      console.warn('pullHuntCalendarFromCloud', e);
+      return { added: 0, pulled: 0 };
+    }
+    if (!res || res.error || !Array.isArray(res.data)) {
+      if (res && res.error) console.warn('pullHuntCalendarFromCloud error', res.error);
+      return { added: 0, pulled: 0 };
+    }
+    var raw = [];
+    try { raw = JSON.parse(localStorage.getItem(HUNT_CAL_EVENTS_KEY) || '[]') || []; } catch (eR) { raw = []; }
+    if (!Array.isArray(raw)) raw = [];
+    var pulled = 0;
+    res.data.forEach(function (row) {
+      if (!row || !row.id) return;
+      var hl = row.hunt_link || {};
+      var he = {
+        id: row.id,
+        text: row.name || row.text || 'Event',
+        name: row.name || row.text || 'Event',
+        color: row.color || '#e59a18',
+        startDate: row.start_date,
+        endDate: row.end_date || row.start_date,
+        mapScope: row.map_scope || 'personal',
+        sharedMapId: row.shared_map_id || null,
+        privateMapId: row.private_map_id || hl.privateMapId || null,
+        lat: row.lat,
+        lng: row.lng,
+        locationLabel: row.location_label || null,
+        planEventId: hl.planEventId || null,
+        planListId: hl.planListId || null,
+        inviteCode: hl.inviteCode || null,
+        members: Array.isArray(hl.members) ? hl.members : [],
+        listPack: hl.listPack || null,
+        updatedAt: row.updated_at || new Date().toISOString(),
+        _fromPlanSlayer: !!hl.fromPlanSlayer,
+        hunt_link: hl
+      };
+      var idx = raw.findIndex(function (x) { return x && String(x.id) === String(he.id); });
+      if (idx >= 0) {
+        var locU = raw[idx].updatedAt || raw[idx].updated_at || 0;
+        var cloudU = he.updatedAt || 0;
+        if (new Date(cloudU) >= new Date(locU)) {
+          raw[idx] = Object.assign({}, raw[idx], he);
+          pulled++;
+        }
+      } else {
+        raw.push(he);
+        pulled++;
+      }
+      // Mirror list pack into bridge for this origin
+      if (he.listPack && he.listPack.columns) {
+        try {
+          var bag = loadJson(SLAYER_EVENT_LISTS_KEY, null) || {};
+          if (he.planEventId) bag[String(he.planEventId)] = he.listPack;
+          bag['hunt:' + String(he.id)] = he.listPack;
+          if (he.planListId) bag['list:' + String(he.planListId)] = he.listPack;
+          bag[String(he.id)] = he.listPack;
+          saveJson(SLAYER_EVENT_LISTS_KEY, bag);
+        } catch (eBag) {}
+      }
+    });
+    try { localStorage.setItem(HUNT_CAL_EVENTS_KEY, JSON.stringify(raw)); } catch (eW) {}
+    var added = 0;
+    try { added = importHuntCalendarEvents() || 0; } catch (eI) {}
+    // Ensure packs for all plan events after import
+    (state.events || []).forEach(function (e) {
+      try {
+        applyCloudListPackToLocal(e);
+        ensureAssociatedListForEvent(e);
+      } catch (eA) {}
+    });
+    try { persistLocal({ quiet: true }); } catch (eP) {}
+    return { added: added, pulled: pulled };
   }
 
   async function joinEvent(code) {
@@ -10423,6 +10636,19 @@
     click('create-cancel', closeCreateModal);
     // Do NOT close create-event by clicking the overlay — Cancel only
     click('btn-create-list', openListModal);
+    click('btn-sync-hunt', function () {
+      appToast('Syncing from Hunt…');
+      resyncHuntEventsNow({ quiet: false }).then(function () {
+        return loadEvents();
+      }).then(function () {
+        render();
+        if (state.mobileSheetOpen) {
+          try { renderMobileListSheet(); } catch (eM) {}
+        }
+      }).catch(function () {
+        appToast('Sync failed — stay logged in on Plan and Hunt');
+      });
+    });
 
     // My lists only (events are under the calendar like Hunt)
     document.querySelectorAll('[data-left-tab]').forEach(function (btn) {
@@ -13113,7 +13339,8 @@
     version: APP_VERSION,
     huntKitSource: HUNT_KIT_SOURCE,
     openQuickLoadMenu: openQuickLoadMenu,
-    clearEventPinsFilter: clearEventPinsFilter
+    clearEventPinsFilter: clearEventPinsFilter,
+    resyncHunt: function () { return resyncHuntEventsNow({ quiet: false }); }
   };
 
   if (document.readyState === 'loading') {

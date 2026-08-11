@@ -1,0 +1,16 @@
+PlanSlayer V1.3.35 — Re-sync Hunt calendar → Plan (cross-origin)
+
+Problem: Hunt and Plan are different origins, so localStorage Hunt events
+never appear on Plan mobile. Gator Hunt lived on Hunt; Plan only saw it if
+it was also in plan_events cloud or same-browser storage.
+
+Fix
+- pullHuntCalendarFromCloud(): fetch map_calendar_events (same Supabase login),
+  write into reg_slayer_cal_events_v2 on this origin, import into plan events
+- importHuntCalendarEvents now re-syncs existing events (name/dates/list packs)
+  and applies Hunt listPack → free lists
+- applyHuntListPackToPlanEvent seeds namedListPack + classic buckets
+- “Sync Hunt” button next to + list; auto re-sync on tab focus / poll
+- ensureAssociatedList + Personal {Event} still created on import
+
+Shell: plan-slayer-shell-v68

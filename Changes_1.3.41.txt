@@ -1,0 +1,29 @@
+PlanSlayer V1.3.41 — mini toolbar, map settings cards, $ default off
+====================================================================
+Date: 2026-08-11
+
+Shell: plan-slayer-shell-v74
+
+Issues
+------
+- Hunt-Slayer #57: Mini map toolbar shrinks so all tools fit
+- Hunt-Slayer #58: Map settings Hunt-like card layout (shared options only)
+- Hunt-Slayer #59: $ expense button default OFF unless creator enables
+
+#57
+---
+- html.map-mode-mini: --mbb-icon 28px, tighter bar, smaller search toggle.
+
+#58
+---
+- Map settings modal regrouped into Basemap / Display / Tools cards like Hunt.
+- Hunt-only features (tracker, etc.) not shown.
+
+#59
+---
+- showExpenseEnabled defaults false when unset.
+- Edit list/event checkboxes default unchecked; save writes explicit true/false.
+
+Files
+-----
+- app.js, index.html, sw.js, AGENTS.md, Changes_1.3.41.txt

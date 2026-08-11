@@ -1556,12 +1556,58 @@
     }
     .map-search-item:hover { background: rgba(229, 154, 24, 0.14); }
 
-    /* Hunt exact bar metrics */
+    /* Default bar metrics (max mode keeps larger icons) */
     .map-dock.map-wrapper {
       --mbb-h: 43px !important;
       --mbb-gap: 6px !important;
       --mbb-icon: 43px !important;
       --mbb-bar-h: calc(var(--mbb-h) * 1.05) !important;
+    }
+    /* Mini / condensed map: shrink toolbar so all tools fit (#57) */
+    html.map-mode-mini .map-dock.map-wrapper,
+    html.map-mode-mini .map-dock.map-wrapper.is-visible {
+      --mbb-h: 30px !important;
+      --mbb-gap: 2px !important;
+      --mbb-icon: 28px !important;
+      --mbb-bar-h: calc(var(--mbb-h) * 1.06) !important;
+    }
+    html.map-mode-mini .map-bottom-bar {
+      padding-left: 4px !important;
+      padding-right: 4px !important;
+      justify-content: space-between !important;
+    }
+    html.map-mode-mini .map-bottom-bar .mbb-ctrl,
+    html.map-mode-mini .map-bottom-bar button,
+    html.map-mode-mini .map-bottom-bar .map-settings-btn {
+      width: var(--mbb-icon) !important;
+      height: var(--mbb-icon) !important;
+      min-width: var(--mbb-icon) !important;
+      min-height: var(--mbb-icon) !important;
+      max-width: var(--mbb-icon) !important;
+      max-height: var(--mbb-icon) !important;
+      padding: 0 !important;
+      font-size: 11px !important;
+      flex: 0 0 auto !important;
+    }
+    html.map-mode-mini .map-bottom-bar .mbb-ctrl svg,
+    html.map-mode-mini .map-bottom-bar button svg,
+    html.map-mode-mini .map-bottom-bar .map-settings-btn svg {
+      width: 16px !important;
+      height: 16px !important;
+    }
+    html.map-mode-mini .map-bottom-bar [data-mbb-tip]::after,
+    html.map-mode-mini .map-bottom-bar .mbb-tip {
+      display: none !important;
+    }
+    html.map-mode-mini .map-search-toggle {
+      width: 32px !important;
+      height: 32px !important;
+      min-width: 32px !important;
+      min-height: 32px !important;
+    }
+    html.map-mode-mini .map-search-toggle svg {
+      width: 16px !important;
+      height: 16px !important;
     }
     .map-bottom-bar {
       position: absolute !important; left: 0 !important; right: 0 !important;
@@ -3771,7 +3817,7 @@
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
-      <div class="brand-sub"><span class="ver-badge">V1.3.40</span></div>
+      <div class="brand-sub"><span class="ver-badge">V1.3.41</span></div>
     </div>
     <div class="brand-right brand-header-actions">
       <div class="brand-user-stack">
@@ -4742,22 +4788,36 @@
     </div>
   </div>
 
-  <!-- PlanSlayer map settings (map chrome matches Hunt; options are plan-only) -->
+  <!-- PlanSlayer map settings — Hunt-like layout; Hunt-only tools (tracker, etc.) omitted (#58) -->
   <div class="modal-overlay" id="map-settings-modal" aria-hidden="true">
-    <div class="modal" role="dialog" style="max-width:380px">
-      <h3>Map settings</h3>
-      <p class="muted" style="font-size:12px;margin:0 0 10px">PlanSlayer only — does not change Hunt Slayer.</p>
-      <div class="field">
-        <label for="ms-default-basemap">Default basemap on open</label>
-        <select id="ms-default-basemap">
-          <option value="topo">USGS Topography</option>
-          <option value="streets">Roads &amp; Waterways</option>
-          <option value="satellite">Satellite</option>
-        </select>
+    <div class="modal modal-tight" role="dialog" style="max-width:400px;max-height:min(86vh,640px);overflow:auto">
+      <h3 style="margin:0 0 6px">Map settings</h3>
+      <p class="muted" style="font-size:11px;margin:0 0 12px">Same shared controls as Hunt Slayer. Tracker and hunt-only tools are not shown on Plan.</p>
+
+      <div class="ps-ms-card" style="background:var(--panel-light);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px">Basemap</div>
+        <div class="field" style="margin:0">
+          <label for="ms-default-basemap">Default basemap on open</label>
+          <select id="ms-default-basemap">
+            <option value="topo">USGS Topography</option>
+            <option value="streets">Roads &amp; Waterways</option>
+            <option value="satellite">Satellite</option>
+          </select>
+        </div>
+        <label class="check-row" style="margin-top:8px"><input type="checkbox" id="ms-labels" /> Show labels by default</label>
       </div>
-      <label class="check-row"><input type="checkbox" id="ms-labels" /> Show labels by default</label>
-      <label class="check-row"><input type="checkbox" id="ms-coord-hud" checked /> Show coordinate HUD</label>
-      <label class="check-row"><input type="checkbox" id="ms-soft-bounds" checked /> Soft Alabama bounds (like Hunt)</label>
+
+      <div class="ps-ms-card" style="background:var(--panel-light);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px">Display</div>
+        <label class="check-row"><input type="checkbox" id="ms-coord-hud" checked /> Show coordinate HUD</label>
+        <label class="check-row"><input type="checkbox" id="ms-soft-bounds" checked /> Soft Alabama bounds (like Hunt)</label>
+      </div>
+
+      <div class="ps-ms-card" style="background:var(--panel-light);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">Tools on this map</div>
+        <p class="muted" style="font-size:11px;margin:0;line-height:1.4">Measure, draw, pins, layers, search, and settings live on the map toolbar (Hunt layout). Compass / wind dials follow the same chrome when enabled on Plan.</p>
+      </div>
+
       <div class="modal-actions">
         <button type="button" class="btn" id="ms-cancel">Cancel</button>
         <button type="button" class="btn btn-primary" id="ms-save">Save</button>

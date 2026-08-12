@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '8.0.29';
+  var APP_VERSION = '8.0.30';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -680,7 +680,12 @@
           return true;
         });
       }
-      saveJson(LOCAL_FREE_LISTS_KEY, store);
+      // Use saveFreeListsStore so cloud gets the delete (saveJson alone never pushed)
+      if (!saveFreeListsStore(store)) {
+        saveJson(LOCAL_FREE_LISTS_KEY, store);
+      }
+      // Immediate cloud push (don't wait for debounce) so desktop/phone drop it soon
+      try { pushFreeListsCloud(); } catch (ePushDel) {}
     } catch (eS) {
       console.warn('permanentlyDeleteNamedList', eS);
       return false;
@@ -3727,24 +3732,47 @@
     }, 450);
   }
 
-  /** Snapshot named free lists for plan_personal_boards.state.freeLists */
+  /** Snapshot named free lists + delete tombstones for plan_personal_boards.state.freeLists */
   function freeListsCloudPayload() {
     var store = loadFreeListsStoreRaw();
     var named = [];
     (store.named || []).forEach(function (n) {
       if (!n || !n.id) return;
+      // Never re-upload tombstoned ids
+      if (isTombstoned('list', n.id)) return;
       try {
         named.push(sanitizeNamedList(JSON.parse(JSON.stringify(n))));
       } catch (e) {
         try { named.push(sanitizeNamedList(n)); } catch (e2) {}
       }
     });
-    return { named: named, updated_at: new Date().toISOString() };
+    // Propagate deletes so other devices drop the same list ids
+    var deleted = {};
+    try {
+      var tombs = loadTombstones().lists || {};
+      Object.keys(tombs).forEach(function (id) {
+        deleted[String(id)] = Number(tombs[id]) || Date.now();
+      });
+    } catch (eD) {}
+    var eventLists = {};
+    try {
+      var et = loadTombstones().eventLists || {};
+      Object.keys(et).forEach(function (id) {
+        eventLists[String(id)] = Number(et[id]) || Date.now();
+      });
+    } catch (eE) {}
+    return {
+      named: named,
+      deleted: deleted,
+      eventListsDeleted: eventLists,
+      updated_at: new Date().toISOString()
+    };
   }
 
   /**
    * Push My lists (personal + free packs) to Supabase so Plan mobile / other devices see them.
    * Uses existing plan_personal_boards.state.freeLists (no new migration).
+   * Includes deleted[] so deletes on phone remove lists on desktop (and vice versa).
    */
   function pushFreeListsCloud() {
     var client = sb();
@@ -3756,6 +3784,20 @@
         var st = (res && res.data && res.data.state && typeof res.data.state === 'object')
           ? Object.assign({}, res.data.state)
           : {};
+        // Merge deleted maps (union) so we never lose a tombstone from the other device
+        var prev = st.freeLists || {};
+        var prevDel = (prev.deleted && typeof prev.deleted === 'object') ? prev.deleted : {};
+        var nextDel = Object.assign({}, prevDel, payload.deleted || {});
+        var prevEvDel = (prev.eventListsDeleted && typeof prev.eventListsDeleted === 'object')
+          ? prev.eventListsDeleted : {};
+        var nextEvDel = Object.assign({}, prevEvDel, payload.eventListsDeleted || {});
+        // Prefer our named snapshot (authoritative after local delete)
+        payload.deleted = nextDel;
+        payload.eventListsDeleted = nextEvDel;
+        // Drop any named entry that is in deleted
+        payload.named = (payload.named || []).filter(function (n) {
+          return n && n.id && !nextDel[String(n.id)];
+        });
         st.freeLists = payload;
         st.freeListsUpdatedAt = payload.updated_at;
         return client.from('plan_personal_boards').upsert({
@@ -3788,8 +3830,9 @@
   }
 
   /**
-   * Pull free/personal lists from cloud and merge into local store (prefer newer / richer).
-   * @returns {Promise<number>} number of lists added or updated
+   * Pull free/personal lists from cloud and merge into local store.
+   * Applies cloud delete tombstones so lists deleted on phone disappear on desktop.
+   * @returns {Promise<number>} number of lists added, updated, or removed
    */
   function pullFreeListsCloud() {
     var client = sb();
@@ -3800,18 +3843,65 @@
         if (!res || res.error || !res.data) return 0;
         var st = res.data.state || {};
         var cloud = st.freeLists || null;
-        if (!cloud || !Array.isArray(cloud.named) || !cloud.named.length) return 0;
+        if (!cloud) return 0;
+        var cloudNamed = Array.isArray(cloud.named) ? cloud.named : [];
+        var cloudDeleted = (cloud.deleted && typeof cloud.deleted === 'object') ? cloud.deleted : {};
+        var cloudEvDeleted = (cloud.eventListsDeleted && typeof cloud.eventListsDeleted === 'object')
+          ? cloud.eventListsDeleted : {};
+
+        // 1) Absorb delete tombstones from cloud → local
+        var delChanged = 0;
+        Object.keys(cloudDeleted).forEach(function (id) {
+          var ts = Number(cloudDeleted[id]) || Date.now();
+          if (!isTombstoned('list', id)) {
+            markTombstone('list', id);
+            // force timestamp from cloud if newer
+            try {
+              var t = loadTombstones();
+              if (!t.lists[id] || Number(t.lists[id]) < ts) {
+                t.lists[id] = ts;
+                saveJson(LOCAL_TOMBSTONES_KEY, t);
+              }
+            } catch (eT) {}
+            delChanged++;
+          }
+        });
+        Object.keys(cloudEvDeleted).forEach(function (id) {
+          if (!isTombstoned('eventList', id)) {
+            markTombstone('eventList', id);
+            delChanged++;
+          }
+        });
+
         var store = loadFreeListsStoreRaw();
         if (!Array.isArray(store.named)) store.named = [];
         var byId = {};
         store.named.forEach(function (n) {
           if (n && n.id) byId[String(n.id)] = n;
         });
-        var changed = 0;
-        cloud.named.forEach(function (cn) {
+
+        // 2) Remove local lists that cloud says are deleted
+        Object.keys(cloudDeleted).forEach(function (id) {
+          if (byId[String(id)]) {
+            delete byId[String(id)];
+            delChanged++;
+          }
+        });
+        // Also drop anything already tombstoned locally
+        Object.keys(byId).forEach(function (id) {
+          if (isTombstoned('list', id)) {
+            delete byId[id];
+            delChanged++;
+          }
+        });
+
+        var changed = delChanged;
+        // 3) Merge/add from cloud named (skip tombstoned)
+        cloudNamed.forEach(function (cn) {
           if (!cn || !cn.id) return;
-          try { cn = sanitizeNamedList(cn); } catch (eS) {}
           var id = String(cn.id);
+          if (isTombstoned('list', id) || cloudDeleted[id]) return;
+          try { cn = sanitizeNamedList(cn); } catch (eS) {}
           var local = byId[id];
           if (!local) {
             byId[id] = cn;
@@ -3822,10 +3912,8 @@
           var ct = cn.updated_at ? new Date(cn.updated_at).getTime() : 0;
           var li = freeListItemCount(local);
           var ci = freeListItemCount(cn);
-          // Cloud wins if newer, or same age but has more items (phone empty / desktop full)
           if (ct > lt + 200 || (ci > li && ct >= lt - 2000) || (li === 0 && ci > 0)) {
             var merged = Object.assign({}, local, cn);
-            // Keep local invite/shared if cloud snapshot is older incomplete
             if (local.invite_code && !merged.invite_code) merged.invite_code = local.invite_code;
             if (local.shared || cn.shared || merged.invite_code) merged.shared = true;
             if ((local.members || []).length > (merged.members || []).length) {
@@ -3834,7 +3922,6 @@
             byId[id] = merged;
             changed++;
           } else {
-            // Still absorb share flags / members from cloud
             if (cn.invite_code && !local.invite_code) {
               local.invite_code = cn.invite_code;
               local.shared = true;
@@ -3851,9 +3938,9 @@
             }
           }
         });
+
         if (!changed) return 0;
         store.named = Object.keys(byId).map(function (k) { return byId[k]; });
-        // Write local only without re-push storm
         try { saveJson(LOCAL_FREE_LISTS_KEY, store); } catch (eW) {}
         return changed;
       })
@@ -13807,7 +13894,16 @@
       }
       closeEditListModal();
       broadcastSync({ type: 'delete-list', id: lid, eventId: eid });
-      appToast('List deleted');
+      // Ensure delete hits cloud even if saveFreeListsStore debounce was cancelled
+      try {
+        pushFreeListsCloud().then(function () {
+          appToast('List deleted · synced');
+        }).catch(function () {
+          appToast('List deleted (will sync when online)');
+        });
+      } catch (ePush) {
+        appToast('List deleted');
+      }
       render();
       closeMobileListSheet(true);
     });

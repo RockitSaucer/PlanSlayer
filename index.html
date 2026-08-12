@@ -4429,7 +4429,8 @@
               <button type="button" data-mode="friends">Friends</button>
             </div>
 
-            <div class="map-context-bar" id="map-context-bar" aria-label="Map context (party / personal)"></div>
+            <!-- #125: map context chips removed — calendar sits under My lists -->
+            <div class="map-context-bar" id="map-context-bar" hidden aria-hidden="true" style="display:none"></div>
             <div class="event-pins-banner" id="event-pins-banner" hidden></div>
             <!-- Calendar + Add Event (Hunt-style): collapse together -->
             <div id="side-cal-block">
@@ -4450,6 +4451,13 @@
                   <div class="cal-mode-switch" role="group" aria-label="Calendar list mode">
                     <button type="button" class="cal-mode-btn is-active" data-cal-mode="events">Events</button>
                     <button type="button" class="cal-mode-btn" data-cal-mode="chores">Chores</button>
+                  </div>
+                </div>
+                <!-- #125: Personal | Events filter for My lists under calendar -->
+                <div class="plan-cal-events-head" style="margin-top:4px">
+                  <div class="cal-mode-switch home-list-scope-switch" role="group" aria-label="List scope">
+                    <button type="button" class="cal-mode-btn is-active" data-home-list-scope="personal">Personal</button>
+                    <button type="button" class="cal-mode-btn" data-home-list-scope="events">Events</button>
                   </div>
                 </div>
               </div>

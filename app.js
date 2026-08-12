@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.62';
+  var APP_VERSION = '1.3.63';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -130,6 +130,8 @@
     calCollapsed: false,
     /** Under-calendar list: events | chores */
     calListMode: 'events',
+    /** #125: under My lists filter — personal lists only | event-linked lists only */
+    homeListScope: 'personal',
     /** Item id whose Make Chore panel is expanded */
     makeChoreOpenId: null,
     /** Multi-step chore schedule picker */
@@ -6668,21 +6670,13 @@
 
   function renderMapContextBar() {
     var el = $('map-context-bar');
-    if (!el) return;
-    // Left stack context chips stay as quick filters; main switcher is on-map chip
-    var parts = [
-      { id: 'auto', label: 'Auto' },
-      { id: 'personal', label: 'Personal map' }
-    ];
-    (state.events || []).slice(0, 8).forEach(function (e) {
-      if (e && e.id) parts.push({ id: 'event:' + e.id, label: (e.name || 'Event').slice(0, 18) });
-    });
-    var cur = state.mapContext || 'auto';
-    el.innerHTML = parts.map(function (p) {
-      var on = cur === p.id ? ' is-active' : '';
-      return '<button type="button" class="map-ctx-btn' + on + '" data-map-ctx="' + esc(p.id) + '">' +
-        esc(p.label) + '</button>';
-    }).join('');
+    // #125: remove Auto / Personal map / event chips under My lists — calendar sits directly under My lists
+    if (el) {
+      el.innerHTML = '';
+      el.hidden = true;
+      el.style.display = 'none';
+      el.setAttribute('aria-hidden', 'true');
+    }
     updateMapViewingChip();
   }
 
@@ -7992,6 +7986,7 @@
   function renderHomeList() {
     // Always My lists under the calendar (events live under calendar like Hunt)
     state.leftTab = 'lists';
+    var scope = state.homeListScope === 'events' ? 'events' : 'personal';
     var personal = personalListsOnly();
     var eventLists = eventLinkedListsAll().filter(function (n) {
       return eventNameById(n.eventId);
@@ -8000,25 +7995,43 @@
       return !eventNameById(n.eventId);
     });
     var htmlL = '';
-    htmlL += '<div class="section-label section-label-lists">Personal lists</div>';
-    if (!personal.length) {
-      htmlL += '<p class="empty" style="margin:0 0 10px">No personal lists yet. Tap <strong>+</strong> — shopping, home, etc. stay here.</p>';
+    // #125: Personal | Events switch under Events/Chores filters this list
+    if (scope === 'personal') {
+      htmlL += '<div class="section-label section-label-lists">Personal lists</div>';
+      if (!personal.length) {
+        htmlL += '<p class="empty" style="margin:0 0 10px">No personal lists yet. Tap <strong>+</strong> — shopping, home, etc. stay here.</p>';
+      } else {
+        htmlL += personal.map(function (n) { return renderListCardHtml(n); }).join('');
+      }
     } else {
-      htmlL += personal.map(function (n) { return renderListCardHtml(n); }).join('');
-    }
-    htmlL += '<div class="section-label section-label-lists" style="margin-top:14px">Event lists</div>';
-    if (!eventLists.length && !orphanLists.length) {
-      htmlL += '<p class="empty">No event packing lists yet. Use <strong>+ Add Event</strong> under the calendar — its To do / To buy / To bring pack appears here.</p>';
-    } else {
-      htmlL += eventLists.map(function (n) {
-        return renderListCardHtml(n, { badge: eventNameById(n.eventId) || 'event' });
-      }).join('');
-      if (orphanLists.length) {
-        htmlL += '<div class="section-label" style="margin-top:10px">Event lists (event not loaded)</div>' +
-          orphanLists.map(function (n) { return renderListCardHtml(n); }).join('');
+      htmlL += '<div class="section-label section-label-lists">Event lists</div>';
+      if (!eventLists.length && !orphanLists.length) {
+        htmlL += '<p class="empty">No event packing lists yet. Use <strong>+ Add event</strong> under the calendar.</p>';
+      } else {
+        htmlL += eventLists.map(function (n) {
+          return renderListCardHtml(n, { badge: eventNameById(n.eventId) || 'event' });
+        }).join('');
+        if (orphanLists.length) {
+          htmlL += '<div class="section-label" style="margin-top:10px">Event lists (event not loaded)</div>' +
+            orphanLists.map(function (n) { return renderListCardHtml(n); }).join('');
+        }
       }
     }
     return htmlL;
+  }
+
+  /** #125: Personal | Events switch UI (mirrors Events/Chores switch style) */
+  function syncHomeListScopeSwitchUi() {
+    var scope = state.homeListScope === 'events' ? 'events' : 'personal';
+    var switchEl = document.querySelector('.home-list-scope-switch');
+    if (!switchEl) return;
+    var leftMode = scope;
+    var rightMode = scope === 'personal' ? 'events' : 'personal';
+    var leftLabel = leftMode === 'personal' ? 'Personal' : 'Events';
+    var rightLabel = rightMode === 'personal' ? 'Personal' : 'Events';
+    switchEl.innerHTML =
+      '<button type="button" class="cal-mode-btn is-active" data-home-list-scope="' + leftMode + '">' + leftLabel + '</button>' +
+      '<button type="button" class="cal-mode-btn" data-home-list-scope="' + rightMode + '">' + rightLabel + '</button>';
   }
 
   function syncCalModeSwitchUi() {
@@ -8036,6 +8049,7 @@
         '<button type="button" class="cal-mode-btn" id="cal-mode-' + rightMode +
           '" data-cal-mode="' + rightMode + '">' + rightLabel + '</button>';
     }
+    try { syncHomeListScopeSwitchUi(); } catch (eHs) {}
     var addBtn = $('add-event-tab-btn');
     if (addBtn) {
       if (mode === 'chores') {
@@ -8462,6 +8476,13 @@
       sideCal.classList.toggle('is-collapsed', !!state.calCollapsed);
       sideCal.style.display = state.calCollapsed ? 'none' : '';
     }
+    // #125: Events/Chores + Personal/Events switches live in side-cal-block — hide with calendar
+    try {
+      var calHeader = $('plan-cal-events-header');
+      var calBox = $('plan-cal-events-box');
+      if (calHeader) calHeader.style.display = state.calCollapsed ? 'none' : '';
+      if (calBox) calBox.style.display = state.calCollapsed ? 'none' : '';
+    } catch (eCalUi) {}
     if (calFab) {
       calFab.style.display = state.calCollapsed ? '' : 'none';
       calFab.setAttribute('aria-hidden', state.calCollapsed ? 'false' : 'true');
@@ -12622,6 +12643,19 @@
     click('edit-list-merge-toggle', function () { toggleMergeBox('edit-list-merge-box', 'edit-list-merge-toggle'); });
     // Events / Chores switch (buttons re-order; use delegation)
     on('plan-cal-events-header', 'click', function (e) {
+      var scopeBtn = e.target.closest && e.target.closest('[data-home-list-scope]');
+      if (scopeBtn) {
+        var sc = scopeBtn.getAttribute('data-home-list-scope');
+        if (sc === 'personal' || sc === 'events') {
+          state.homeListScope = sc;
+          try { syncHomeListScopeSwitchUi(); } catch (eS) {}
+          try {
+            var homeL = $('view-home-list');
+            if (homeL) homeL.innerHTML = renderHomeList();
+          } catch (eH) {}
+        }
+        return;
+      }
       var b = e.target.closest && e.target.closest('[data-cal-mode]');
       if (!b) return;
       var mode = b.getAttribute('data-cal-mode');

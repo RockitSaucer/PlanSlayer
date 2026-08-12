@@ -4216,11 +4216,13 @@
       order: 2;
       z-index: 3;
     }
-    #mls-share {
-      flex: 0 0 auto;
-    }
+    #mls-share,
+    #mls-sync,
     #mls-close {
       flex: 0 0 auto;
+    }
+    #mls-sync {
+      font-weight: 900;
     }
     /* Section tabs — own row fully below the title (never under list name) */
     .mls-tabs {
@@ -4426,7 +4428,7 @@
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Outdoor trip planner</div>
       <div class="brand-sub">
-        <span class="ver-badge" id="ver-badge">V8.0.26</span>
+        <span class="ver-badge" id="ver-badge">V8.0.27</span>
       </div>
     </div>
     <div class="brand-right brand-header-actions">
@@ -5066,6 +5068,7 @@
       <h3 id="mls-title">List</h3>
       <div class="mls-head-actions">
         <button type="button" class="btn btn-accent" id="mls-share" title="Share list">Share</button>
+        <button type="button" class="btn btn-accent" id="mls-sync" title="Sync from cloud">Sync</button>
         <button type="button" class="btn" id="mls-close" aria-label="Close list">Close</button>
       </div>
     </div>

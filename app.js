@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '8.0.26';
+  var APP_VERSION = '8.0.27';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -949,6 +949,10 @@
           return;
         }
         try { render(); } catch (eR) {}
+        // Mobile sheet is separate from desktop render path — always refresh when open
+        if (state.mobileSheetOpen) {
+          try { renderMobileListSheet(); } catch (eMs) {}
+        }
       }, 180);
     } catch (e) {
       try { renderUnlessTypingInListAdd(); } catch (e2) {}
@@ -5624,6 +5628,64 @@
     }
     try { document.body.classList.add('mls-open'); } catch (e) {}
     renderMobileListSheet();
+    // Force cloud pack pull so Hunt/desktop items appear on phone
+    try { refreshOpenListFromCloud(); } catch (eRf) {}
+  }
+
+  /** Pull plan_events namedListPack for the open list/event and repaint mobile sheet. */
+  function refreshOpenListFromCloud() {
+    var client = sb();
+    var user = me();
+    if (!client || !user) return Promise.resolve(false);
+    var list = null;
+    try {
+      list = resolveOpenNamedList(null) || findNamedListById(state.activeNamedListId);
+    } catch (eL) { list = null; }
+    var ev = null;
+    try {
+      ev = (list && resolveEventForList(list)) || activeEvent();
+    } catch (eE) { ev = activeEvent(); }
+    return cloudListEvents().then(function (cloud) {
+      if (!cloud || !cloud.length) return false;
+      var changed = false;
+      // Prefer matching the open event / list pack
+      var targetId = (ev && ev.id) || (list && list.eventId) || null;
+      cloud.forEach(function (pev) {
+        if (!pev || !pev.id) return;
+        if (targetId && String(pev.id) !== String(targetId) &&
+            !(list && list.eventId && String(list.eventId) === String(pev.id))) {
+          // Still apply all packs if no target — keeps multi-list phones fresh
+          if (targetId) return;
+        }
+        try {
+          applyCloudListPackToLocal(pev);
+          // Keep state.events in sync for this id
+          var idx = (state.events || []).findIndex(function (e) {
+            return e && String(e.id) === String(pev.id);
+          });
+          if (idx >= 0) state.events[idx] = normalizeEvent(Object.assign({}, state.events[idx], pev));
+          else state.events.push(normalizeEvent(pev));
+          changed = true;
+        } catch (eA) {}
+      });
+      if (changed) {
+        try { persistLocal({ quiet: true }); } catch (eP) {}
+        try {
+          if (list && list.id) {
+            var healed = findNamedListById(list.id);
+            if (healed) state.activeNamedListId = healed.id;
+          } else if (ev && ev.id) {
+            var linked = ensureAssociatedListForEvent(ev);
+            if (linked) state.activeNamedListId = linked.id;
+          }
+        } catch (eH) {}
+        if (state.mobileSheetOpen) {
+          try { renderMobileListSheet(); } catch (eM) {}
+        }
+        try { softRenderIfListChanged(); } catch (eS) {}
+      }
+      return changed;
+    }).catch(function () { return false; });
   }
   function closeMobileListSheet(keepSelection) {
     state.mobileSheetOpen = false;
@@ -14371,6 +14433,31 @@
       var list = resolveOpenNamedList(null) || findNamedListById(state.activeNamedListId);
       if (!list) { appToast('Open a list first'); return; }
       openShareScopeModal(list, state.listTab || 'todo');
+    });
+    click('mls-sync', function () {
+      appToast('Syncing…');
+      Promise.resolve()
+        .then(function () {
+          return typeof resyncHuntEventsNow === 'function'
+            ? resyncHuntEventsNow({ quiet: true })
+            : null;
+        })
+        .then(function () {
+          return typeof loadEvents === 'function' ? loadEvents() : null;
+        })
+        .then(function () {
+          return refreshOpenListFromCloud();
+        })
+        .then(function (ok) {
+          if (state.mobileSheetOpen) {
+            try { renderMobileListSheet(); } catch (eM) {}
+          }
+          try { render(); } catch (eR) {}
+          appToast(ok ? 'List synced from cloud' : 'Sync done');
+        })
+        .catch(function () {
+          appToast('Sync failed — stay logged in');
+        });
     });
     click('share-scope-cancel', closeShareScopeModal);
     on('share-scope-modal', 'click', function (e) {

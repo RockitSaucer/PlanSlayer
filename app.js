@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.68';
+  var APP_VERSION = '1.3.69';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -48,8 +48,8 @@
   var LOCAL_ITEM_TEMPLATES_KEY = 'plan_slayer_item_templates_v1';
   var LOCAL_SECTION_TEMPLATES_KEY = 'plan_slayer_section_templates_v1';
   /** One-shot clean slate for this build (lists + events wiped once) */
-  /** #132: bump key to wipe local lists/events once (new users / stale dual-write) */
-  var LOCAL_CLEAN_SLATE_KEY = 'plan_slayer_clean_slate_v1365';
+  /** #132 / ghost-dots: bump key to wipe stale local events that survived delete */
+  var LOCAL_CLEAN_SLATE_KEY = 'plan_slayer_clean_slate_v1368';
   var LOCAL_LAST_UID_KEY = 'plan_slayer_last_uid_v1';
   var LOCAL_DEFAULT_LIST_KEY = 'plan_slayer_default_list_v1';
   /** Shared across Hunt / Reg / Plan for friends + nicknames */
@@ -3526,9 +3526,36 @@
         '</button>';
     }).join('') || '<p class="muted">No map partners yet. Share maps on Hunt/Reg, or type a name below.</p>';
   }
+  /** Deep link so Share opens Plan Slayer with join access */
+  function planJoinLink(code, type) {
+    var c = String(code || '').replace(/\D/g, '').slice(0, 6);
+    var t = type === 'list' ? 'list' : (type === 'map' ? 'map' : 'event');
+    var base = '';
+    try { base = (location.origin || '').replace(/\/$/, ''); } catch (e) {}
+    if (!base) base = 'https://www.planslayer.com';
+    return base + '/?join=' + c + '&type=' + t;
+  }
+  function shareInviteLink(code, type, title) {
+    var url = planJoinLink(code, type);
+    var label = title || (type === 'list' ? 'Plan Slayer list' : 'Plan Slayer event');
+    var text = 'Join me on Plan Slayer — ' + label + '\n' + url;
+    if (navigator.share) {
+      return navigator.share({ title: label, text: text, url: url }).then(function () {
+        return true;
+      }).catch(function (err) {
+        if (err && (err.name === 'AbortError' || err.name === 'NotAllowedError')) return false;
+        return copyText(url);
+      });
+    }
+    return copyText(url).then(function (ok) {
+      if (ok) appToast('Invite link copied');
+      return ok;
+    });
+  }
   function copyShareCodeForCtx() {
     var code = '';
-    var label = 'Code';
+    var type = 'event';
+    var title = 'Plan Slayer';
     if (_sharePeopleCtx.kind === 'event') {
       var ev = findEventById(_sharePeopleCtx.id) || activeEvent();
       if (ev) {
@@ -3537,7 +3564,8 @@
           try { saveActiveEvent(); } catch (eS) { persistLocal(); }
         }
         code = ev.invite_code;
-        label = 'Event code';
+        type = 'event';
+        title = ev.name || 'Event';
       }
     } else {
       var list = findNamedListById(_sharePeopleCtx.id || state.activeNamedListId);
@@ -3547,21 +3575,17 @@
           saveNamedList(list);
         }
         code = list.invite_code;
-        label = 'List code';
+        type = 'list';
+        title = list.name || 'List';
       }
     }
     if (!code) {
       appToast('Could not create a code');
       return;
     }
-    var text = code;
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function () {
-        appToast(label + ' copied: ' + code);
-      }).catch(function () { appToast(code); });
-    } else {
-      appToast(code);
-    }
+    shareInviteLink(code, type, title).then(function (ok) {
+      if (ok) appToast('Share link ready — opens Plan Slayer with access');
+    });
   }
   function isUuidLike(id) {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(id || ''));
@@ -4590,41 +4614,81 @@
     } catch (eDw) {}
   }
 
+  /**
+   * Keep local Hunt dual-write calendar aligned with Plan cloud ids.
+   * Drops ghost rows so calendar dots vanish after delete + refresh.
+   */
+  function purgeHuntDualWriteToMatchPlan(planIdSet) {
+    planIdSet = planIdSet || {};
+    try {
+      var raw = JSON.parse(localStorage.getItem(HUNT_CAL_EVENTS_KEY) || '[]') || [];
+      if (!Array.isArray(raw)) raw = [];
+      var next = raw.filter(function (x) {
+        if (!x) return false;
+        // Keep pure Hunt-only rows (no plan link) only if they still look valid
+        var pid = x.planEventId || x.plan_event_id || null;
+        if (pid) return !!planIdSet[String(pid)];
+        // Dual-write plan_* ids
+        if (String(x.id || '').indexOf('plan_') === 0) {
+          var p2 = String(x.id).slice(5);
+          return !!planIdSet[p2];
+        }
+        // _fromPlanSlayer without planEventId → drop unless mapped
+        if (x._fromPlanSlayer) return false;
+        // Hunt-native events (no plan link): keep for now
+        return true;
+      });
+      localStorage.setItem(HUNT_CAL_EVENTS_KEY, JSON.stringify(next));
+    } catch (e) {}
+  }
+
   async function loadEvents() {
     var deadEv = loadTombstones().events;
     var local = loadJson(LOCAL_EVENTS_KEY, []);
     if (!Array.isArray(local)) local = [];
-    state.events = local.filter(function (e) { return e && !deadEv[String(e.id)]; }).map(normalizeEvent);
-    var cloud = await cloudListEvents();
-    if (cloud && cloud.length) {
+    var user = me();
+    var cloud = null;
+    try { cloud = await cloudListEvents(); } catch (eC) { cloud = null; }
+
+    // Signed-in + cloud reachable (including empty list): cloud is source of truth
+    if (user && cloud !== null) {
       var byId = {};
-      state.events.forEach(function (e) { byId[e.id] = e; });
       cloud.forEach(function (e) {
-        if (!e || deadEv[String(e.id)]) return; // respect local delete tombstones
-        var prev = byId[e.id];
-        if (!prev || new Date(e.updated_at || 0) >= new Date(prev.updated_at || 0)) {
-          byId[e.id] = normalizeEvent(e);
+        if (!e || deadEv[String(e.id)]) return;
+        byId[String(e.id)] = normalizeEvent(e);
+      });
+      // Keep device-only personal events not in cloud
+      local.forEach(function (e) {
+        if (!e || !e.id || deadEv[String(e.id)]) return;
+        if (e._personalOnly || e._localOnly) {
+          if (!byId[String(e.id)]) byId[String(e.id)] = normalizeEvent(e);
         }
       });
-      // Remove tombstoned ids that may have been in byId from earlier
       Object.keys(deadEv).forEach(function (id) { delete byId[id]; });
       state.events = Object.keys(byId).map(function (k) { return byId[k]; });
       persistLocal({ quiet: true });
-    }
-    // Cross-origin re-sync from Hunt/Reg Supabase calendar (same login)
-    try {
-      var sync = await pullHuntCalendarFromCloud();
-      if (sync && sync.added > 0) {
-        appToast('Synced ' + sync.added + ' event' + (sync.added === 1 ? '' : 's') + ' from Hunt/Reg');
+      // Drop ghost dual-write rows not in cloud (fixes calendar dots after delete)
+      purgeHuntDualWriteToMatchPlan(byId);
+      // Pull Hunt calendar only to refresh dual-write metadata — never resurrect missing plan events
+      try {
+        await pullHuntCalendarFromCloud({ planIdsOnly: byId });
+      } catch (ePull) {
+        console.warn('pullHuntCalendarFromCloud', ePull);
       }
-    } catch (ePull) {
-      console.warn('pullHuntCalendarFromCloud', ePull);
-      // Same-origin fallback (only works if user used Plan in same browser as Hunt)
+    } else {
+      // Offline / signed-out: local + tombstones only
+      state.events = local.filter(function (e) { return e && !deadEv[String(e.id)]; }).map(normalizeEvent);
       try {
         var nImp = importHuntCalendarEvents();
-        if (nImp) appToast('Imported ' + nImp + ' event' + (nImp === 1 ? '' : 's') + ' from Hunt/Reg');
+        if (nImp && !user) { /* silent offline import */ }
       } catch (eImp) {}
     }
+    // Final tombstone filter after any import
+    try {
+      deadEv = loadTombstones().events;
+      state.events = (state.events || []).filter(function (e) { return e && !deadEv[String(e.id)]; });
+      persistLocal({ quiet: true });
+    } catch (eF) {}
     // Ensure every plan event has a linked list pack + personal claim list
     state.events.forEach(function (e) {
       try { applyCloudListPackToLocal(e); } catch (eA) {
@@ -5103,7 +5167,9 @@
    * local Hunt key + Plan events/lists. Required because huntslayer.com and
    * planslayer.com do NOT share localStorage.
    */
-  async function pullHuntCalendarFromCloud() {
+  async function pullHuntCalendarFromCloud(opts) {
+    opts = opts || {};
+    var planIdsOnly = opts.planIdsOnly || null; // when set, only keep dual-writes for these plan ids
     var client = sb();
     var user = me();
     if (!client || !user) return { added: 0, pulled: 0 };
@@ -5132,6 +5198,12 @@
       if (he.planEventId && (huntDeleted[String(he.planEventId)] || planDead[String(he.planEventId)])) return true;
       if (he.planEventId && huntDeleted['plan_' + String(he.planEventId)]) return true;
       if (planDead[String(he.id)]) return true;
+      // When Plan cloud is source of truth, drop dual-writes whose plan id is gone
+      if (planIdsOnly) {
+        if (he.planEventId && !planIdsOnly[String(he.planEventId)]) return true;
+        if (he._fromPlanSlayer && he.planEventId && !planIdsOnly[String(he.planEventId)]) return true;
+        if (String(he.id || '').indexOf('plan_') === 0 && !planIdsOnly[String(he.id).slice(5)]) return true;
+      }
       return false;
     }
     var liveCloudIds = {};
@@ -5162,6 +5234,8 @@
         hunt_link: hl
       };
       if (isHuntDualDead(he)) return;
+      // Don't re-import plan dual-writes into Plan events when planIdsOnly is set
+      // (plan cloud already has the truth)
       liveCloudIds[String(he.id)] = true;
       if (he.planEventId) liveCloudIds['plan:' + String(he.planEventId)] = true;
       var idx = raw.findIndex(function (x) { return x && String(x.id) === String(he.id); });
@@ -5203,13 +5277,43 @@
     });
     try { localStorage.setItem(HUNT_CAL_EVENTS_KEY, JSON.stringify(raw)); } catch (eW) {}
     var added = 0;
-    try { added = importHuntCalendarEvents() || 0; } catch (eI) {}
+    // Import Hunt calendar into Plan:
+    // - full import when not using plan cloud SoT
+    // - Hunt-native only (no planEventId) when plan cloud is SoT (avoid ghost dual-writes)
+    try {
+      if (!planIdsOnly) {
+        added = importHuntCalendarEvents() || 0;
+      } else {
+        var rawFull = JSON.parse(localStorage.getItem(HUNT_CAL_EVENTS_KEY) || '[]') || [];
+        var huntOnly = (Array.isArray(rawFull) ? rawFull : []).filter(function (x) {
+          if (!x) return false;
+          if (x.planEventId || x._fromPlanSlayer) return false;
+          if (String(x.id || '').indexOf('plan_') === 0) return false;
+          return true;
+        });
+        var savedRaw = rawFull;
+        try {
+          localStorage.setItem(HUNT_CAL_EVENTS_KEY, JSON.stringify(huntOnly));
+          added = importHuntCalendarEvents() || 0;
+        } finally {
+          try { localStorage.setItem(HUNT_CAL_EVENTS_KEY, JSON.stringify(savedRaw)); } catch (eRes) {}
+        }
+      }
+    } catch (eI) {}
     // Drop Plan state.events that are tombstoned (import may have re-added)
     try {
       var deadEv = loadTombstones().events || {};
       state.events = (state.events || []).filter(function (e) {
         return e && !deadEv[String(e.id)];
       });
+      // When planIdsOnly is set, drop any event not in that set (except personal-only)
+      if (planIdsOnly) {
+        state.events = state.events.filter(function (e) {
+          if (!e) return false;
+          if (e._personalOnly || e._localOnly) return true;
+          return !!planIdsOnly[String(e.id)];
+        });
+      }
     } catch (eFilt) {}
     // Ensure packs for all plan events after import
     (state.events || []).forEach(function (e) {
@@ -9886,10 +9990,17 @@
       }
       code = list.invite_code;
     }
-    if ($('list-invite-code-input')) $('list-invite-code-input').value = code;
+    if ($('list-invite-code-input')) {
+      // Prefer deep link so Share opens Plan Slayer with access
+      try {
+        $('list-invite-code-input').value = planJoinLink(code, 'list');
+      } catch (eL) {
+        $('list-invite-code-input').value = code;
+      }
+    }
     if ($('list-invite-blurb')) {
       $('list-invite-blurb').textContent =
-        'Share this code so others can join “' + label + '”. Leave it private if you only want it for yourself.';
+        'Share this link so others open Plan Slayer and join “' + label + '”. Code: ' + code;
     }
     if ($('list-invite-modal')) {
       $('list-invite-modal').classList.add('is-open');
@@ -14902,13 +15013,12 @@
 
     click('btn-copy-code', function () {
       var ev = activeEvent();
-      if (!ev || !ev.invite_code) return;
-      var url = location.origin + location.pathname + '?join=' + ev.invite_code;
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(url).then(function () { appToast('Invite link copied'); });
-      } else {
-        appPrompt('Copy this invite link', url, 'Invite link');
+      if (!ev) return;
+      if (!ev.invite_code) {
+        ev.invite_code = String(Math.floor(100000 + Math.random() * 900000));
+        try { saveActiveEvent(); } catch (eS) {}
       }
+      shareInviteLink(ev.invite_code, 'event', ev.name || 'Event');
     });
 
     function closeGot() {
@@ -15566,11 +15676,50 @@
     try {
       var u = new URL(location.href);
       var code = (u.searchParams.get('join') || '').replace(/\D/g, '').slice(0, 6);
+      var type = String(u.searchParams.get('type') || 'event').toLowerCase();
       if (code.length === 6) {
         u.searchParams.delete('join');
+        u.searchParams.delete('type');
         history.replaceState({}, '', u.pathname + (u.search || '') + (u.hash || ''));
         setTimeout(function () {
-          joinEvent(code).catch(function (e) { appAlert(e.message || String(e), 'Join failed'); });
+          // Prefer list when type=list; otherwise event then list fallback
+          function tryList() {
+            var store = loadFreeListsStore();
+            var found = (store.named || []).find(function (n) { return String(n.invite_code) === code; });
+            if (found) {
+              state.activeNamedListId = found.id;
+              if (found.kind) state.listTab = found.kind;
+              state.view = 'home';
+              appToast('Opened shared list “' + (found.name || '') + '”');
+              render();
+              return true;
+            }
+            return false;
+          }
+          if (type === 'list') {
+            if (tryList()) return;
+            joinEvent(code).then(function () {
+              appToast('Joined via invite link');
+            }).catch(function (e) {
+              appAlert(e.message || 'No list or event found for that link.', 'Join failed');
+            });
+            return;
+          }
+          if (type === 'map') {
+            // Map codes live on Hunt/Reg — send user there with same join param
+            var mapUrl = 'https://www.huntslayer.com/?join=' + code;
+            try { window.location.href = mapUrl; } catch (eM) {
+              appAlert('Open Hunt Slayer and join with code ' + code, 'Shared map');
+            }
+            return;
+          }
+          joinEvent(code).then(function () {
+            appToast('Joined event via invite link');
+          }).catch(function () {
+            if (!tryList()) {
+              appAlert('No event or list found for that invite link.', 'Join failed');
+            }
+          });
         }, 400);
       }
     } catch (e) {}

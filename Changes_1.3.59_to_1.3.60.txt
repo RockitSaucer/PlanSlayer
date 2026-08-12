@@ -1,0 +1,6 @@
+﻿# Changes 1.3.59 → 1.3.60
+
+- **#115** Qty no longer snaps to 1 mid-edit (protect detail focus from re-render; blur commit).
+- **#116** Camera/OCR on My checklist (private) column.
+
+Shell: plan-slayer-shell-v87

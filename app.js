@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.59';
+  var APP_VERSION = '1.3.60';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -757,7 +757,11 @@
   function isTypingInListAdd() {
     try {
       var ae = document.activeElement;
-      if (!ae || ae.tagName !== 'INPUT') return false;
+      if (!ae) return false;
+      // #115: also protect qty / expanded item detail fields from mid-edit re-render → snap to 1
+      if (ae.matches && ae.matches('.li-detail input, .li-detail textarea, .li-detail select')) return true;
+      if (ae.closest && ae.closest('.li-detail')) return true;
+      if (ae.tagName !== 'INPUT' && ae.tagName !== 'TEXTAREA') return false;
       if (ae.matches && ae.matches(LIST_ADD_INPUT_SEL)) return true;
       if (ae.closest && ae.closest('.list-col-add')) return true;
       return false;
@@ -6133,7 +6137,7 @@
             '<div class="field field-grow"><label>Item name</label><input data-f="title" value="' + esc(item.title) + '" style="text-transform:capitalize" autocomplete="off"' + lockAttr + ' /></div>' +
             '<div class="field field-sm"><label>Qty</label>' +
               '<input data-f="qty" type="number" min="1" step="1" inputmode="numeric" pattern="[0-9]*" ' +
-                'value="' + (item.qty || 1) + '" title="How many" style="width:100%;text-align:center;font-weight:800;"' +
+                'value="' + (item.qty != null && item.qty !== '' ? item.qty : 1) + '" title="How many" style="width:100%;text-align:center;font-weight:800;"' +
                 lockAttr + ' /></div>' +
             '<div class="field field-md"><label>Category</label><select data-f="qualifier" data-cat-select' + lockAttr + '>' + qOpts + '</select></div>' +
             '<div class="field field-sm"><label>Priority</label>' +
@@ -6387,10 +6391,9 @@
                 '<input type="text" class="list-col-add-input" data-col-add-input="' + esc(cid) + '" placeholder="' +
                   (String(cid) === 'personal' ? 'Add private item…' : 'Type item, press Enter…') +
                   '" autocomplete="off" style="text-transform:capitalize" />' +
-                (String(cid) !== 'personal'
-                  ? ('<button type="button" class="btn btn-icon list-ocr-cam" data-ocr-list="' + esc(cid) +
-                    '" title="Photo of handwritten list → items"><img src="icons/pins/camera.png" alt="" width="18" height="18" /></button>')
-                  : '') +
+                /* #116: camera/OCR on My checklist (private) same as other columns */
+                ('<button type="button" class="btn btn-icon list-ocr-cam" data-ocr-list="' + esc(cid) +
+                  '" title="Photo of handwritten list → items"><img src="icons/pins/camera.png" alt="" width="18" height="18" /></button>') +
                 '<button type="button" class="btn btn-primary list-col-add-btn" data-col-add="' + esc(cid) + '">Add</button>' +
               '</div>') +
           '</div>';
@@ -11807,13 +11810,17 @@
     if (get('expense_amount')) item.expense_amount = Math.max(0, parseFloat(get('expense_amount').value) || 0);
     if (!allowSettings) return 'locked';
     if (get('title')) item.title = autoCap(get('title').value.trim()) || item.title;
-    // #94: never snap qty to 1 on empty/partial spinner values
+    // #94 / #115: never snap qty to 1 on empty/partial spinner values
     if (get('qty')) {
       var qRaw = String(get('qty').value != null ? get('qty').value : '').trim();
       if (qRaw !== '') {
         var qn = parseInt(qRaw, 10);
-        if (!isNaN(qn) && qn >= 1) item.qty = qn;
+        if (!isNaN(qn) && qn >= 1) {
+          item.qty = qn;
+        }
+        // invalid partial (e.g. "-") — leave prior item.qty untouched
       }
+      // empty while focused: leave prior item.qty (do not force 1)
     }
     if (get('priority')) item.priority = parseInt(get('priority').value, 10) || 0;
     var qVal = get('qualifier') ? get('qualifier').value : (item.qualifier || 'other');
@@ -13244,7 +13251,29 @@
         // Related target still inside same detail → skip
         var rt = e.relatedTarget;
         if (rt && row.contains(rt)) return;
+        // #115: qty — if empty on blur, restore committed value in the field before save
+        try {
+          if (t.getAttribute('data-f') === 'qty') {
+            var qRawB = String(t.value != null ? t.value : '').trim();
+            var qnB = parseInt(qRawB, 10);
+            if (qRawB === '' || isNaN(qnB) || qnB < 1) {
+              var metaB = findItemFromRow(row);
+              var keep = (metaB && metaB.item && metaB.item.qty != null) ? metaB.item.qty : 1;
+              t.value = String(keep);
+            } else {
+              t.value = String(qnB);
+            }
+          }
+        } catch (eQty) {}
         try { commitExpandedItemDetail(row); } catch (eF) {}
+      }, true);
+      // #115: commit qty on Enter without full page churn mid-type
+      document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter') return;
+        var t = e.target;
+        if (!t || !t.getAttribute || t.getAttribute('data-f') !== 'qty') return;
+        e.preventDefault();
+        try { t.blur(); } catch (eB) {}
       }, true);
       // Item name template suggestions while typing in column add fields
       document.addEventListener('input', function (e) {

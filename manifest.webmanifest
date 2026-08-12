@@ -1,7 +1,7 @@
 {
-  "name": "Plan Slayer",
+  "name": "PlanSlayer",
   "short_name": "PlanSlayer",
-  "description": "Outdoor trip packing lists, shared calendars, expenses, and maps.",
+  "description": "Trip packing checklists, shared calendars, expenses, and outdoor maps.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

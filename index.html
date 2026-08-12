@@ -4,14 +4,19 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#0a0c09" />
-  <!-- #101: family-safe outdoor trip planner wording (reduce false “adult” blocks) -->
-  <meta name="description" content="Plan Slayer — outdoor trip packing lists, shared calendars, expenses, and maps for hunting and camping." />
+  <!-- #101: family / school-safe product meta (avoid filter false positives) -->
+  <meta name="description" content="PlanSlayer: packing checklists, shared trip calendars, group expenses, and outdoor maps for camping and field trips." />
   <meta name="rating" content="general" />
+  <meta name="rating" content="safe for kids" />
+  <meta name="classification" content="Family,Travel,Productivity" />
   <meta name="robots" content="index,follow" />
-  <meta property="og:title" content="Plan Slayer — Outdoor trip planner" />
-  <meta property="og:description" content="Packing lists, trip calendars, shared expenses, and maps for outdoor trips." />
+  <meta property="og:title" content="PlanSlayer — Trip packing &amp; calendar" />
+  <meta property="og:description" content="Shared packing checklists, trip calendars, expenses, and maps for outdoor groups." />
   <meta property="og:type" content="website" />
-  <title>Plan Slayer — Outdoor trip planner</title>
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="PlanSlayer — Trip packing &amp; calendar" />
+  <meta name="twitter:description" content="Shared packing checklists, trip calendars, expenses, and maps for outdoor groups." />
+  <title>PlanSlayer — Trip packing &amp; calendar</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" href="./icons/app/plan-192.png" />
   <link rel="apple-touch-icon" href="./icons/app/plan-180.png" />
@@ -4354,8 +4359,8 @@
       <div class="brand-user-stack">
         <div class="brand-user-links">
           <button type="button" class="brand-report-btn" id="brand-report-issue-btn" title="Report a problem with the app">Report an issue</button>
-          <button type="button" class="brand-sister-link" id="brand-other-slay-btn" title="Open Hunt or Reg Slayer">
-            <span class="brand-sister-label">Other ways to slay</span>
+          <button type="button" class="brand-sister-link" id="brand-other-slay-btn" title="Open Hunt Slayer or Reg Slayer">
+            <span class="brand-sister-label">Sister sites</span>
           </button>
           <button type="button" class="btn btn-accent" id="btn-join-event" title="Join event or list with code">Join</button>
           <button type="button" class="user-chip" id="user-chip-btn" title="User settings">—</button>
@@ -4380,7 +4385,7 @@
   <!-- Other ways to slay — Hunt / Reg from Plan -->
   <div id="other-slay-overlay" class="report-issue-overlay" aria-hidden="true">
     <div class="report-issue-modal" role="dialog" aria-modal="true" aria-labelledby="other-slay-title" style="max-width:360px">
-      <h3 id="other-slay-title">Other ways to slay</h3>
+      <h3 id="other-slay-title">Sister sites</h3>
       <p class="ri-sub">Same account works across sites. Pick a tool:</p>
       <div id="other-slay-list" style="display:flex;flex-direction:column;gap:8px;margin:0 0 12px"></div>
       <div class="ri-actions">

@@ -3373,6 +3373,10 @@
       width: 44px; text-align: center; border: 0; border-left: 1px solid var(--border);
       border-right: 1px solid var(--border); border-radius: 0; height: 36px; padding: 0;
     }
+    /* #94 compact qty in item options */
+    .li-detail .qty-stepper-detail { width: 100%; max-width: 110px; }
+    .li-detail .qty-stepper-detail button { width: 26px; height: 28px; font-size: 14px; }
+    .li-detail .qty-stepper-detail input { width: 36px; height: 28px; font-size: 12px !important; }
     .suggest {
       position: absolute; left: 10px; right: 10px; top: calc(100% - 4px); z-index: 30;
       background: #161a12; border: 1px solid var(--border); border-radius: 8px;
@@ -3958,7 +3962,7 @@
     }
     /* Confirm / alert / prompt always above edit/create modals */
     #app-confirm-modal, #app-alert-modal, #app-prompt-modal {
-      z-index: 30000 !important;
+      z-index: 50000 !important;
     }
     /* How many / Got it qty must sit above mobile list sheet (#64) */
     #got-modal {
@@ -4295,7 +4299,7 @@
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
       <div class="brand-sub">
-        <span class="ver-badge" id="ver-badge">V1.3.55</span>
+        <span class="ver-badge" id="ver-badge">V1.3.56</span>
       </div>
     </div>
     <div class="brand-right brand-header-actions">

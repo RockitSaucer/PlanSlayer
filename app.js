@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.55';
+  var APP_VERSION = '1.3.56';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -234,8 +234,8 @@
       if ($('app-confirm-title')) $('app-confirm-title').textContent = title || 'Confirm';
       if ($('app-confirm-msg')) $('app-confirm-msg').textContent = String(msg || '');
       _dialogResolvers.confirm = resolve;
-      // Always on top of other modals (edit event, etc.)
-      modal.style.zIndex = '30000';
+      // #93: always above expanded list item options + other modals
+      modal.style.zIndex = '50000';
       modal.classList.add('is-open');
       modal.setAttribute('aria-hidden', 'false');
     });
@@ -6002,7 +6002,7 @@
     var hlColor = String(item.highlight_color || 'red').toLowerCase();
     if (hlColor !== 'green' && hlColor !== 'yellow' && hlColor !== 'red') hlColor = 'red';
     var hi = item.highlight ? (' is-highlight hl-' + hlColor) : '';
-    var exp = state.expandedItemId === item.id ? ' is-expanded' : '';
+    var exp = String(state.expandedItemId || '') === String(item.id) ? ' is-expanded' : '';
     var done = false;
     try { done = isItemAccounted(item); } catch (eDone) { done = false; }
     // is-claimed = someone grabbed it (keep member colors + brighter glow)
@@ -6126,8 +6126,13 @@
         '<div class="li-detail">' +
           (!canEditSettings ? '<p class="muted" style="font-size:11px;margin:0 0 8px">Only the list creator can change settings. You can still add notes and Got it.</p>' : '') +
           '<div class="field-row">' +
-            '<div class="field field-grow"><label>Title</label><input data-f="title" value="' + esc(item.title) + '" style="text-transform:capitalize"' + lockAttr + ' /></div>' +
-            '<div class="field field-sm"><label>Qty</label><input data-f="qty" type="number" min="1" value="' + (item.qty || 1) + '"' + lockAttr + ' /></div>' +
+            '<div class="field field-grow"><label>Item name</label><input data-f="title" value="' + esc(item.title) + '" style="text-transform:capitalize" autocomplete="off"' + lockAttr + ' /></div>' +
+            '<div class="field field-sm"><label>Qty</label>' +
+              '<div class="qty-stepper qty-stepper-detail" title="How many">' +
+                '<button type="button" data-act="qty-dec"' + lockAttr + ' aria-label="Decrease quantity">−</button>' +
+                '<input data-f="qty" type="number" min="1" step="1" value="' + (item.qty || 1) + '"' + lockAttr + ' />' +
+                '<button type="button" data-act="qty-inc"' + lockAttr + ' aria-label="Increase quantity">+</button>' +
+              '</div></div>' +
             '<div class="field field-md"><label>Category</label><select data-f="qualifier" data-cat-select' + lockAttr + '>' + qOpts + '</select></div>' +
             '<div class="field field-sm"><label>Priority</label>' +
               '<select data-f="priority"' + lockAttr + '>' +
@@ -11800,7 +11805,14 @@
     if (get('expense_amount')) item.expense_amount = Math.max(0, parseFloat(get('expense_amount').value) || 0);
     if (!allowSettings) return 'locked';
     if (get('title')) item.title = autoCap(get('title').value.trim()) || item.title;
-    if (get('qty')) item.qty = Math.max(1, parseInt(get('qty').value, 10) || 1);
+    // #94: never snap qty to 1 on empty/partial spinner values
+    if (get('qty')) {
+      var qRaw = String(get('qty').value != null ? get('qty').value : '').trim();
+      if (qRaw !== '') {
+        var qn = parseInt(qRaw, 10);
+        if (!isNaN(qn) && qn >= 1) item.qty = qn;
+      }
+    }
     if (get('priority')) item.priority = parseInt(get('priority').value, 10) || 0;
     var qVal = get('qualifier') ? get('qualifier').value : (item.qualifier || 'other');
     if (qVal === '__add_category__') return 'add-category';
@@ -11811,8 +11823,7 @@
         var freeOpenQ = state.activeNamedListId ? findNamedListById(state.activeNamedListId) : null;
         var evQ = activeEvent();
         recordCategoryUse(item.qualifier, evQ, freeOpenQ);
-        // Jump filter chip to this category so user can scan matching items
-        state.filterQualifier = item.qualifier;
+        // #92: do NOT auto-switch category filter chips — that hid other items on collapse
       } catch (eCat) {}
     }
     if (get('highlight')) item.highlight = !!get('highlight').checked;
@@ -13198,7 +13209,7 @@
                 try {
                   var freeOpenA = state.activeNamedListId ? findNamedListById(state.activeNamedListId) : null;
                   recordCategoryUse(newId, activeEvent(), freeOpenA);
-                  state.filterQualifier = newId;
+                  // #92: do not auto-filter list to this category
                 } catch (eRa) {}
                 persistItemByMeta(metaAdd.kind, metaAdd.scope, metaAdd.id, rowCh);
               }
@@ -14776,10 +14787,23 @@
           saveItemTemplate(item);
           appToast('Item template saved');
           return 'abort';
+        } else if (action === 'qty-inc' || action === 'qty-dec') {
+          // #94: reliable qty steppers in item options
+          var qEl = row.querySelector('[data-f="qty"]');
+          var cur = Math.max(1, parseInt(item.qty, 10) || 1);
+          if (qEl && String(qEl.value || '').trim() !== '') {
+            var parsed = parseInt(qEl.value, 10);
+            if (!isNaN(parsed) && parsed >= 1) cur = parsed;
+          }
+          var next = action === 'qty-inc' ? cur + 1 : Math.max(1, cur - 1);
+          item.qty = next;
+          if (qEl) qEl.value = String(next);
+          try { persistItemByMeta(kind, scope, id, row); } catch (eQ) {}
+          return 'abort';
         } else if (action === 'expand' || action === 'face') {
           // #70 — item minimize removed; always toggle options
           // Clicking another item while one is open: save the previous first
-          if (state.expandedItemId && state.expandedItemId !== id) {
+          if (state.expandedItemId && String(state.expandedItemId) !== String(id)) {
             var prevRow = document.querySelector('.list-item.is-expanded');
             if (prevRow) {
               try { commitExpandedItemDetail(prevRow); } catch (ePrev) {}
@@ -14787,12 +14811,16 @@
           }
           // Toggle options panel; snapshot for Cancel
           state._skipExpandCollapseOnce = true;
-          if (state.expandedItemId === id) {
+          if (String(state.expandedItemId || '') === String(id)) {
             // Closing via re-click on face → save
             try { commitExpandedItemDetail(row); } catch (eCl) {}
             state.expandedItemId = null;
             state.noteItemId = null;
             clearItemDetailEditState();
+            // #92: keep category filter on "all" so items don't vanish after collapse
+            if (state.filterQualifier && state.filterQualifier !== 'all') {
+              /* keep user filter if they set it; only clear if we auto-set (disabled) */
+            }
           } else {
             state.expandedItemId = id;
             state.noteItemId = id;
@@ -14884,14 +14912,34 @@
 
       function doDeleteAndSave(bucket, index, saveFn) {
         var title = bucket[index] && bucket[index].title;
+        var delId = id;
         appConfirm('Delete “' + (title || 'item') + '”?', 'Delete item').then(function (ok) {
           if (!ok) return;
-          bucket.splice(index, 1);
-          if (state.moveItemId === id) state.moveItemId = null;
-          if (state.noteItemId === id) state.noteItemId = null;
-          delete state.minimizedItems[id];
-          if (saveFn) saveFn();
-          render();
+          // #93: re-resolve index by id (async confirm can race re-renders)
+          var idx = -1;
+          if (Array.isArray(bucket)) {
+            idx = bucket.findIndex(function (x) { return x && String(x.id) === String(delId); });
+            if (idx < 0 && index >= 0 && index < bucket.length) idx = index;
+          }
+          if (idx < 0) {
+            appToast('Could not delete — item not found');
+            return;
+          }
+          bucket.splice(idx, 1);
+          if (state.moveItemId === delId) state.moveItemId = null;
+          if (state.noteItemId === delId) state.noteItemId = null;
+          if (state.expandedItemId === delId || String(state.expandedItemId) === String(delId)) {
+            state.expandedItemId = null;
+            clearItemDetailEditState();
+          }
+          try { delete state.minimizedItems[delId]; } catch (eM) {}
+          try {
+            if (saveFn) saveFn();
+          } catch (eSv) {
+            console.warn('delete save', eSv);
+          }
+          try { render(); } catch (eR) { console.warn(eR); }
+          appToast('Deleted');
         });
       }
 
@@ -14908,7 +14956,10 @@
             var rN = mutateBucket(hit.bucket, hit.item, hit.index);
             if (rN === 'abort-async-del') {
               doDeleteAndSave(hit.bucket, hit.index, function () {
-                saveNamedListItemHit(hit);
+                // Persist list after splice (bucket is live column.items)
+                try { saveNamedList(hit.list); } catch (e1) {
+                  try { saveNamedListItemHit(hit); } catch (e2) {}
+                }
               });
               return;
             }

@@ -627,30 +627,24 @@
       text-shadow: 0 1px 2px rgba(0,0,0,0.45);
     }
     /* Header card for trips/events — visually disconnected from the list below */
+    /* #123: slim header — Events title removed; switch only (~50% chrome) */
     .plan-cal-events-header-card {
-      margin-top: 10px;
-      padding: 10px 10px 10px;
-      border: 1px solid rgba(229,154,24,0.4);
-      border-radius: 12px;
-      background: linear-gradient(180deg, #2a3220 0%, #1a2014 100%);
-      box-shadow: 0 2px 0 #0a0c09, 0 4px 12px rgba(0,0,0,0.3);
+      margin-top: 6px;
+      padding: 4px 6px;
+      border: 1px solid rgba(229,154,24,0.28);
+      border-radius: 8px;
+      background: linear-gradient(180deg, #242a1c 0%, #161a12 100%);
+      box-shadow: 0 1px 0 #0a0c09, 0 2px 6px rgba(0,0,0,0.25);
     }
     .plan-cal-events-head {
       display: flex;
-      justify-content: space-between;
+      justify-content: flex-start;
       align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
+      gap: 6px;
+      flex-wrap: nowrap;
     }
     .plan-cal-events-title {
-      font-size: 18px;
-      font-weight: 900;
-      color: var(--accent);
-      text-transform: none;
-      letter-spacing: 0.02em;
-      width: 100%;
-      margin: 0 0 10px;
-      line-height: 1.2;
+      display: none !important; /* #123: drop separate Events font */
     }
     .section-label.section-label-lists {
       font-size: 16px;
@@ -660,10 +654,10 @@
       letter-spacing: 0.02em;
       margin: 4px 0 8px;
     }
-    /* Show events / Show chores selector (Hunt Public/Private style) */
+    /* Show events / Show chores selector (#123: ~50% size, no separate Events title) */
     .cal-mode-switch {
       display: flex;
-      gap: 6px;
+      gap: 4px;
       flex: 1 1 auto;
       min-width: 0;
       align-items: stretch;
@@ -674,40 +668,50 @@
       background: var(--panel);
       color: var(--muted);
       font-weight: 800;
-      font-size: 11px;
-      padding: 7px 10px;
-      border-radius: 8px;
+      font-size: 10px;
+      padding: 4px 8px;
+      border-radius: 6px;
       cursor: pointer;
       font-family: inherit;
       opacity: 0.78;
       transition: flex 0.15s ease, opacity 0.12s, border-color 0.12s, color 0.12s, font-size 0.12s;
-      flex: 0.85 1 auto;
+      flex: 1 1 auto;
+      line-height: 1.15;
     }
     .cal-mode-switch .cal-mode-btn.is-active {
       opacity: 1;
       color: #111;
       border-color: var(--accent);
       background: linear-gradient(180deg, #f0c060 0%, var(--accent) 55%, #b87a12 100%);
-      flex: 1.45 1 auto;
-      font-size: 12px;
-      padding: 9px 12px;
-      box-shadow: 0 2px 8px rgba(229,154,24,0.35);
+      flex: 1.2 1 auto;
+      font-size: 10px;
+      padding: 4px 8px;
+      box-shadow: 0 1px 4px rgba(229,154,24,0.3);
     }
-    #add-event-tab-btn {
+    /* #123: + Add event bottom-right of calendar (Hunt/Reg style) */
+    .calendar-container.side-cal {
+      position: relative;
+    }
+    #side-cal #add-event-tab-btn,
+    .cal-add-event-br {
+      position: absolute;
+      right: 6px;
+      bottom: 6px;
+      z-index: 3;
       background: var(--panel);
-      border: 1px solid var(--border);
+      border: 1px solid var(--accent);
       color: var(--accent);
-      padding: 8px 12px;
-      border-radius: 8px;
+      padding: 4px 8px;
+      border-radius: 6px;
       font-weight: 800;
       cursor: pointer;
       font-size: 11px;
       font-family: inherit;
-      flex: 0 0 auto;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.35);
     }
-    #add-event-tab-btn:hover {
-      border-color: var(--accent);
-      filter: brightness(1.06);
+    #side-cal #add-event-tab-btn:hover,
+    .cal-add-event-br:hover {
+      filter: brightness(1.08);
     }
     /* Events/chores list — grows with members; no fixed max-height (scroll only when page needs it) */
     .plan-cal-events-list-card {
@@ -4437,15 +4441,16 @@
                   <button type="button" class="cal-nav-btn cal-collapse-btn" id="side-cal-collapse" title="Minimize calendar" aria-label="Minimize calendar">−</button>
                 </div>
                 <div class="calendar-grid" id="side-cal-grid" role="grid" aria-label="Event calendar"></div>
+                <!-- #123: + Add event bottom-right of calendar (Hunt/Reg parity) -->
+                <button type="button" id="add-event-tab-btn" class="cal-add-event-br" title="Add event">+ Add event</button>
               </div>
               <div class="plan-cal-events-header-card" id="plan-cal-events-header">
-                <div class="plan-cal-events-title" id="events-title-date">Events</div>
+                <div class="plan-cal-events-title" id="events-title-date" hidden>Events</div>
                 <div class="plan-cal-events-head">
                   <div class="cal-mode-switch" role="group" aria-label="Calendar list mode">
                     <button type="button" class="cal-mode-btn is-active" data-cal-mode="events">Events</button>
                     <button type="button" class="cal-mode-btn" data-cal-mode="chores">Chores</button>
                   </div>
-                  <button type="button" id="add-event-tab-btn" title="Add event">+ Add Event</button>
                 </div>
               </div>
               <div class="plan-cal-events-list-card" id="plan-cal-events-box">

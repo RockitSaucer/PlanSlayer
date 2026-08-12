@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.64';
+  var APP_VERSION = '1.3.65';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -46,7 +46,10 @@
   var LOCAL_ITEM_TEMPLATES_KEY = 'plan_slayer_item_templates_v1';
   var LOCAL_SECTION_TEMPLATES_KEY = 'plan_slayer_section_templates_v1';
   /** One-shot clean slate for this build (lists + events wiped once) */
-  var LOCAL_CLEAN_SLATE_KEY = 'plan_slayer_clean_slate_v1216';
+  /** #132: bump key to wipe local lists/events once (new users / stale dual-write) */
+  var LOCAL_CLEAN_SLATE_KEY = 'plan_slayer_clean_slate_v1365';
+  var LOCAL_LAST_UID_KEY = 'plan_slayer_last_uid_v1';
+  var LOCAL_DEFAULT_LIST_KEY = 'plan_slayer_default_list_v1';
   /** Shared across Hunt / Reg / Plan for friends + nicknames */
   var LOCAL_FRIENDS_KEY = 'slayer_friends_v1';
   var LOCAL_FRIENDS_LEGACY = 'plan_slayer_friends_v1';
@@ -962,33 +965,42 @@
       return window.innerWidth <= 900;
     }
   }
-  /** V1.2.16: wipe lists + events once so this build starts clean for bug-checking */
+  /** #132: wipe lists + events once so this build starts clean (and on account switch) */
+  function wipeLocalPlanDataKeys() {
+    [
+      LOCAL_EVENTS_KEY,
+      LOCAL_CHORES_KEY,
+      LOCAL_STANDALONE_CHORES_KEY,
+      LOCAL_PERSONAL_KEY,
+      LOCAL_FREE_LISTS_KEY,
+      LOCAL_SAVED_KEY,
+      LOCAL_ITEM_TEMPLATES_KEY,
+      LOCAL_SECTION_TEMPLATES_KEY,
+      LOCAL_FREE_QUALIFIERS_KEY,
+      LOCAL_INBOX_PREFIX + (myId() || 'local'),
+      // Dual-write bags that can rehydrate foreign/test data on same browser
+      'reg_slayer_cal_events_v2',
+      'slayer_event_lists_v1',
+      'plan_slayer_events_v1',
+      'plan_slayer_chores_v1'
+    ].forEach(function (k) {
+      try { localStorage.removeItem(k); } catch (eR) {}
+    });
+    try {
+      var kill = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var key = localStorage.key(i);
+        if (!key) continue;
+        if (key.indexOf(LOCAL_INBOX_PREFIX) === 0) kill.push(key);
+        if (key.indexOf('plan_slayer_private_checklist') === 0) kill.push(key);
+      }
+      kill.forEach(function (k) { localStorage.removeItem(k); });
+    } catch (eI) {}
+  }
   function maybeCleanSlateThisBuild() {
     try {
       if (localStorage.getItem(LOCAL_CLEAN_SLATE_KEY)) return;
-      [
-        LOCAL_EVENTS_KEY,
-        LOCAL_CHORES_KEY,
-        LOCAL_STANDALONE_CHORES_KEY,
-        LOCAL_PERSONAL_KEY,
-        LOCAL_FREE_LISTS_KEY,
-        LOCAL_SAVED_KEY,
-        LOCAL_ITEM_TEMPLATES_KEY,
-        LOCAL_SECTION_TEMPLATES_KEY,
-        LOCAL_FREE_QUALIFIERS_KEY,
-        LOCAL_INBOX_PREFIX + (myId() || 'local')
-      ].forEach(function (k) {
-        try { localStorage.removeItem(k); } catch (eR) {}
-      });
-      // Also clear any plan_slayer_inbox_* keys
-      try {
-        var kill = [];
-        for (var i = 0; i < localStorage.length; i++) {
-          var key = localStorage.key(i);
-          if (key && key.indexOf(LOCAL_INBOX_PREFIX) === 0) kill.push(key);
-        }
-        kill.forEach(function (k) { localStorage.removeItem(k); });
-      } catch (eI) {}
+      wipeLocalPlanDataKeys();
       localStorage.setItem(LOCAL_CLEAN_SLATE_KEY, JSON.stringify({
         wiped_at: new Date().toISOString(),
         version: APP_VERSION
@@ -1000,6 +1012,22 @@
     } catch (e) {
       console.warn('clean slate failed', e);
     }
+  }
+  /** #132: different signed-in user on same browser → wipe previous user's local packs */
+  function maybeWipeOnUserSwitch() {
+    try {
+      var uid = myId();
+      if (!uid) return;
+      var last = localStorage.getItem(LOCAL_LAST_UID_KEY);
+      if (last && String(last) !== String(uid)) {
+        wipeLocalPlanDataKeys();
+        state.events = [];
+        state.activeEventId = null;
+        state.activeNamedListId = null;
+        console.info('[PlanSlayer] Cleared local data after user switch');
+      }
+      localStorage.setItem(LOCAL_LAST_UID_KEY, String(uid));
+    } catch (e) {}
   }
   function sb() {
     return window.PlanSlayerAuth && window.PlanSlayerAuth.getClient && window.PlanSlayerAuth.getClient();
@@ -4357,6 +4385,102 @@
         updated_at: new Date().toISOString()
       }).eq('id', ev.id);
     } catch (e) { console.warn('cloudSaveEvent', e); }
+  }
+
+  /** #134: stamp claim time for race resolution; merge prefers earlier claim */
+  function stampClaimMeta(item, uid, qty) {
+    if (!item || !uid) return;
+    if (!item.claimMeta || typeof item.claimMeta !== 'object') item.claimMeta = {};
+    if (qty > 0) {
+      if (!item.claimMeta[uid] || !item.claimMeta[uid].at) {
+        item.claimMeta[uid] = { at: new Date().toISOString(), qty: qty };
+      } else {
+        item.claimMeta[uid].qty = qty;
+      }
+    } else {
+      delete item.claimMeta[uid];
+    }
+  }
+  function mergeClaimsPreferFirst(localItem, remoteItem) {
+    if (!localItem || !remoteItem) return localItem || remoteItem;
+    var lc = localItem.claims || {};
+    var rc = remoteItem.claims || {};
+    var lm = localItem.claimMeta || {};
+    var rm = remoteItem.claimMeta || {};
+    var all = {};
+    Object.keys(lc).forEach(function (k) { all[k] = true; });
+    Object.keys(rc).forEach(function (k) { all[k] = true; });
+    var need = Math.max(1, Number(localItem.qty) || Number(remoteItem.qty) || 1);
+    var entries = Object.keys(all).map(function (uid) {
+      var lq = Number(lc[uid] || 0);
+      var rq = Number(rc[uid] || 0);
+      var lat = (lm[uid] && lm[uid].at) || null;
+      var rat = (rm[uid] && rm[uid].at) || null;
+      // Prefer whichever has a claim; if both, earlier timestamp wins
+      var qty = 0;
+      var at = null;
+      if (lq > 0 && rq > 0) {
+        if (lat && rat) {
+          if (new Date(lat).getTime() <= new Date(rat).getTime()) {
+            qty = lq; at = lat;
+          } else {
+            qty = rq; at = rat;
+          }
+        } else {
+          qty = lq; at = lat || rat;
+        }
+      } else if (lq > 0) {
+        qty = lq; at = lat;
+      } else if (rq > 0) {
+        qty = rq; at = rat;
+      }
+      return { uid: uid, qty: qty, at: at };
+    }).filter(function (e) { return e.qty > 0; });
+    entries.sort(function (a, b) {
+      var ta = a.at ? new Date(a.at).getTime() : 0;
+      var tb = b.at ? new Date(b.at).getTime() : 0;
+      return ta - tb;
+    });
+    var outClaims = {};
+    var outMeta = {};
+    var used = 0;
+    entries.forEach(function (e) {
+      if (used >= need) return;
+      var take = Math.min(e.qty, need - used);
+      if (take <= 0) return;
+      outClaims[e.uid] = take;
+      outMeta[e.uid] = { at: e.at || new Date().toISOString(), qty: take };
+      used += take;
+    });
+    localItem.claims = outClaims;
+    localItem.claimMeta = outMeta;
+    return localItem;
+  }
+
+  // #134: while a shared list is open, soft-poll cloud every 8s
+  var _listSyncPoll = null;
+  function ensureListSyncPoll() {
+    if (_listSyncPoll) return;
+    _listSyncPoll = setInterval(function () {
+      try {
+        if (!state.activeNamedListId) return;
+        var list = findNamedListById(state.activeNamedListId);
+        if (!list || !list.eventId) return;
+        if (document.hidden) return;
+        if (isTypingInListAdd && isTypingInListAdd()) return;
+        syncNamedListToEventCloud(list);
+        // pull event state back
+        cloudListEvents().then(function (cloud) {
+          if (!cloud) return;
+          var pev = cloud.find(function (e) { return e && String(e.id) === String(list.eventId); });
+          if (!pev || !pev.state || !pev.state.namedListPack) return;
+          applyCloudListPackToLocal(pev);
+          if (!isTypingInListAdd || !isTypingInListAdd()) {
+            try { render(); } catch (eR) {}
+          }
+        }).catch(function () {});
+      } catch (eP) {}
+    }, 8000);
   }
 
   function saveActiveEvent() {
@@ -7901,12 +8025,14 @@
       ? '<div class="ec-meta">' + esc(metaBits.join(' · ')) + '</div>'
       : '';
     // Name + countdown + Edit list (on the dropdown card)
+    var pinned = !!(n.keepOnTop || n.pinned || isDefaultListId(n.id));
     return (
       '<div class="event-card-wrap list-card-wrap' + active + (membersBlock ? ' has-members' : '') +
-        (isPersonalEventShadowList(n) ? ' is-personal-event-list' : '') + '">' +
+        (isPersonalEventShadowList(n) ? ' is-personal-event-list' : '') +
+        (pinned ? ' is-pinned-list' : '') + '">' +
         '<div class="event-card' + active + '" data-open-list="' + esc(n.id) + '" role="button" tabindex="0">' +
           '<div class="ec-top">' +
-            '<strong class="ec-name">' + esc(n.name || 'Untitled list') + '</strong>' +
+            '<strong class="ec-name">' + (pinned ? '📌 ' : '') + esc(n.name || 'Untitled list') + '</strong>' +
             (cd ? ('<span class="ec-countdown">' + cd + '</span>') : '') +
             '<button type="button" class="btn ec-edit-btn" data-edit-list="' + esc(n.id) +
               '" title="Edit list">Edit list</button>' +
@@ -7916,6 +8042,41 @@
         membersBlock +
       '</div>'
     );
+  }
+
+  function getDefaultListId() {
+    try {
+      return localStorage.getItem(LOCAL_DEFAULT_LIST_KEY) || null;
+    } catch (e) { return null; }
+  }
+  function isDefaultListId(id) {
+    if (!id) return false;
+    return String(getDefaultListId() || '') === String(id);
+  }
+  function setDefaultListId(id) {
+    try {
+      if (!id) localStorage.removeItem(LOCAL_DEFAULT_LIST_KEY);
+      else localStorage.setItem(LOCAL_DEFAULT_LIST_KEY, String(id));
+    } catch (e) {}
+  }
+  function sortListsKeepOnTop(arr) {
+    var def = getDefaultListId();
+    return (arr || []).slice().sort(function (a, b) {
+      var ap = (a && (a.keepOnTop || a.pinned || (def && String(a.id) === String(def)))) ? 0 : 1;
+      var bp = (b && (b.keepOnTop || b.pinned || (def && String(b.id) === String(def)))) ? 0 : 1;
+      if (ap !== bp) return ap - bp;
+      return String((a && a.name) || '').localeCompare(String((b && b.name) || ''));
+    });
+  }
+  function syncKeepOnTopBtn() {
+    var btn = $('btn-keep-on-top');
+    if (!btn) return;
+    var id = state.activeNamedListId;
+    var on = id && isDefaultListId(id);
+    btn.classList.toggle('is-active', !!on);
+    btn.style.borderColor = on ? 'var(--accent)' : '';
+    btn.style.color = on ? 'var(--accent)' : '';
+    btn.textContent = on ? '★ On top' : 'Keep on top';
   }
 
   /** My events cards — same shell as lists, with Edit event on the card */
@@ -7987,15 +8148,15 @@
     // Always My lists under the calendar (events live under calendar like Hunt)
     state.leftTab = 'lists';
     var scope = state.homeListScope === 'events' ? 'events' : 'personal';
-    var personal = personalListsOnly();
-    var eventLists = eventLinkedListsAll().filter(function (n) {
+    var personal = sortListsKeepOnTop(personalListsOnly());
+    var eventLists = sortListsKeepOnTop(eventLinkedListsAll().filter(function (n) {
       return eventNameById(n.eventId);
-    });
-    var orphanLists = eventLinkedListsAll().filter(function (n) {
+    }));
+    var orphanLists = sortListsKeepOnTop(eventLinkedListsAll().filter(function (n) {
       return !eventNameById(n.eventId);
-    });
+    }));
     var htmlL = '';
-    // #125: Personal | Events switch under Events/Chores filters this list
+    // #130: Personal | Events filter
     if (scope === 'personal') {
       htmlL += '<div class="section-label section-label-lists">Personal lists</div>';
       if (!personal.length) {
@@ -8035,20 +8196,8 @@
   }
 
   function syncCalModeSwitchUi() {
-    var mode = state.calListMode === 'chores' ? 'chores' : 'events';
-    // Selected mode always on the left — buttons trade places
-    var switchEl = document.querySelector('.cal-mode-switch');
-    if (switchEl) {
-      var leftMode = mode;
-      var rightMode = mode === 'events' ? 'chores' : 'events';
-      var leftLabel = leftMode === 'events' ? 'Events' : 'Chores';
-      var rightLabel = rightMode === 'events' ? 'Events' : 'Chores';
-      switchEl.innerHTML =
-        '<button type="button" class="cal-mode-btn is-active" id="cal-mode-' + leftMode +
-          '" data-cal-mode="' + leftMode + '">' + leftLabel + '</button>' +
-        '<button type="button" class="cal-mode-btn" id="cal-mode-' + rightMode +
-          '" data-cal-mode="' + rightMode + '">' + rightLabel + '</button>';
-    }
+    // #130: Events/Chores switch removed — always events under calendar
+    state.calListMode = 'events';
     try { syncHomeListScopeSwitchUi(); } catch (eHs) {}
     var addBtn = $('add-event-tab-btn');
     if (addBtn) {
@@ -8476,13 +8625,14 @@
       sideCal.classList.toggle('is-collapsed', !!state.calCollapsed);
       sideCal.style.display = state.calCollapsed ? 'none' : '';
     }
-    // #125: Events/Chores + Personal/Events switches live in side-cal-block — hide with calendar
+    // #130: under-cal event cards hide with calendar; Personal|Events stays outside and always visible
     try {
-      var calHeader = $('plan-cal-events-header');
       var calBox = $('plan-cal-events-box');
-      if (calHeader) calHeader.style.display = state.calCollapsed ? 'none' : '';
       if (calBox) calBox.style.display = state.calCollapsed ? 'none' : '';
+      var calHeader = $('plan-cal-events-header');
+      if (calHeader) calHeader.style.display = '';
     } catch (eCalUi) {}
+    state.calListMode = 'events';
     if (calFab) {
       calFab.style.display = state.calCollapsed ? '' : 'none';
       calFab.setAttribute('aria-hidden', state.calCollapsed ? 'false' : 'true');
@@ -8651,6 +8801,7 @@
         try { wireListColumnUi(openList); } catch (eW) { console.warn(eW); }
       }
       try { renderQualifierFilters(qEvList, openList); } catch (eF) { console.warn(eF); }
+      try { syncKeepOnTopBtn(); } catch (eKot) {}
     } else if (showingEventDetail) {
       setRightPanelMode('event');
       if ($('list-detail-bar')) $('list-detail-bar').style.display = 'none';
@@ -14025,6 +14176,46 @@
         appToast(ok ? 'List copied to clipboard' : 'Could not copy');
       });
     });
+    // #135 Keep on top / default list
+    click('btn-keep-on-top', function () {
+      var list = resolveOpenNamedList(null) || findNamedListById(state.activeNamedListId);
+      if (!list || !list.id) {
+        appToast('Open a list first');
+        return;
+      }
+      var on = isDefaultListId(list.id);
+      if (on) {
+        setDefaultListId(null);
+        list.keepOnTop = false;
+        list.pinned = false;
+        try { saveNamedList(list); } catch (e1) {}
+        appToast('Default list cleared');
+      } else {
+        // Clear other pins in free lists store
+        try {
+          var store = loadFreeListsStore();
+          (store.named || []).forEach(function (n) {
+            if (!n) return;
+            if (String(n.id) === String(list.id)) {
+              n.keepOnTop = true;
+              n.pinned = true;
+            } else {
+              n.keepOnTop = false;
+              n.pinned = false;
+            }
+          });
+          saveFreeListsStore(store);
+        } catch (e2) {
+          list.keepOnTop = true;
+          list.pinned = true;
+          try { saveNamedList(list); } catch (e3) {}
+        }
+        setDefaultListId(list.id);
+        appToast('Kept on top — opens by default');
+      }
+      syncKeepOnTopBtn();
+      render();
+    });
     // Edit list or linked event (header only — not on the left card under the name)
     click('btn-edit-list-or-event', function () {
       var list = resolveOpenNamedList(null) || findNamedListById(state.activeNamedListId);
@@ -14556,10 +14747,12 @@
           if (!target.claims) target.claims = {};
           if (n === 0) delete target.claims[myId()];
           else target.claims[myId()] = n;
+          try { stampClaimMeta(target, myId(), n); } catch (eSm) {}
           // To buy Got it → mirror into To bring; stay checked on buy (saves inside)
           if (!afterGotItClaim(target, kind, 'free-list', n)) {
             saveNamedList(nList);
           }
+          try { ensureListSyncPoll(); } catch (ePoll) {}
         } else {
           if (!state.gotItem.claims) state.gotItem.claims = {};
           if (n === 0) delete state.gotItem.claims[myId()];
@@ -14914,13 +15107,34 @@
           showMemberPop(mid, actBtn);
           return 'abort';
         } else if (action === 'drop') {
-          // Fully gotten → Drop releases everything I claimed so it goes back on the list
+          // Fully gotten → Drop releases my claim only (#133: never delete the item row)
           if (!item.claims) item.claims = {};
           if (myClaimQty(item) <= 0) {
             appToast('You have nothing claimed to drop');
             return 'abort';
           }
           clearMyClaimsOnItem(item);
+          // Personal lists / My checklist: unclaim only — do not remove the packing row
+          var isPersCol = String(kind) === 'personal' || String(scope) === 'personal-board';
+          var openL = null;
+          try {
+            openL = (scope === 'free-list')
+              ? (resolveOpenNamedList(null) || findNamedListById(state.activeNamedListId))
+              : null;
+            if (openL && !openL.eventId && !listWantsPersonalChecklist(openL)) isPersCol = true;
+          } catch (ePl) {}
+          if (isPersCol) {
+            try {
+              if (openL) saveNamedList(openL);
+              else if (scope === 'personal-board') {
+                // personal board save path via afterGotItClaim-less persist
+                var board = loadPersonalBoard();
+                savePersonalBoard(board);
+              }
+            } catch (eSv) {}
+            try { appToast('Dropped — still on your list (not grabbed)'); } catch (eTd0) {}
+            return 'rerender-only';
+          }
           var savedDrop = afterGotItClaim(item, kind, scope, 0);
           try { appToast('Dropped — back on the list'); } catch (eTd) {}
           if (savedDrop && (scope === 'free-list' || scope === 'personal-board')) return 'rerender-only';
@@ -15140,6 +15354,7 @@
     onAuth: function (user, profile) {
       state.user = user;
       state.profile = profile;
+      try { maybeWipeOnUserSwitch(); } catch (eWu2) {}
       loadFriends();
       mergeInboxIntoPersonal();
       configurePlanMap();
@@ -15150,6 +15365,16 @@
           window.PlanMap.redraw();
         }
         consumeJoinQuery();
+        // #135: open default keep-on-top list
+        try {
+          var defId = getDefaultListId();
+          if (defId && findNamedListById(defId)) {
+            state.activeNamedListId = defId;
+            state.view = 'home';
+          }
+        } catch (eDef) {}
+        render();
+        try { syncKeepOnTopBtn(); } catch (eK) {}
       });
     },
     onSignOut: function () {
@@ -15169,6 +15394,7 @@
 
   function bootPlanSlayer() {
     maybeCleanSlateThisBuild();
+    try { maybeWipeOnUserSwitch(); } catch (eWu) {}
     loadFriends();
     configurePlanMap();
     // Hide coords immediately (before map open) — only Map settings can re-enable

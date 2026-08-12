@@ -1,0 +1,7 @@
+# 1.3.64→1.3.65
+- #130 remove Events/Chores; Personal|Events survives cal min
+- #132 clean slate v1365 + user-switch wipe
+- #133 drop unclaim only on personal lists
+- #134 claim timestamps + 8s list sync poll
+- #135 Keep on top + Join in My lists header
+Shell v92

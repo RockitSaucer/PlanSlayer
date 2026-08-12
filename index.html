@@ -4362,7 +4362,6 @@
           <button type="button" class="brand-sister-link" id="brand-other-slay-btn" title="Open Hunt Slayer or Reg Slayer">
             <span class="brand-sister-label">Sister sites</span>
           </button>
-          <button type="button" class="btn btn-accent" id="btn-join-event" title="Join event or list with code">Join</button>
           <button type="button" class="user-chip" id="user-chip-btn" title="User settings">—</button>
           <button type="button" class="brand-report-btn" id="brand-homescreen-btn" title="Add this app to your phone home screen" style="display:none">Share to home screen</button>
         </div>
@@ -4422,6 +4421,8 @@
             <div class="left-tab-unit">
               <button type="button" class="left-tab is-active" data-left-tab="lists" role="tab" aria-selected="true">My lists</button>
               <button type="button" class="btn btn-plus-3d" id="btn-create-list" title="Add list" aria-label="Add list">+</button>
+              <!-- #135: Join between + and Sync -->
+              <button type="button" class="btn btn-accent" id="btn-join-event" title="Join event or list with code" style="font-size:11px;font-weight:800;padding:8px 10px">Join</button>
               <button type="button" class="btn" id="btn-sync-hunt" title="Re-sync events &amp; lists from Hunt/Reg (same login)" aria-label="Sync" style="font-size:11px;font-weight:800;padding:8px 10px">Sync</button>
             </div>
           </div>
@@ -4450,27 +4451,21 @@
                 <!-- #123: + Add event bottom-right of calendar (Hunt/Reg parity) -->
                 <button type="button" id="add-event-tab-btn" class="cal-add-event-br" title="Add event">+ Add event</button>
               </div>
-              <div class="plan-cal-events-header-card" id="plan-cal-events-header">
-                <div class="plan-cal-events-title" id="events-title-date" hidden>Events</div>
-                <div class="plan-cal-events-head">
-                  <div class="cal-mode-switch" role="group" aria-label="Calendar list mode">
-                    <button type="button" class="cal-mode-btn is-active" data-cal-mode="events">Events</button>
-                    <button type="button" class="cal-mode-btn" data-cal-mode="chores">Chores</button>
-                  </div>
-                </div>
-                <!-- #125: Personal | Events filter for My lists under calendar -->
-                <div class="plan-cal-events-head" style="margin-top:4px">
-                  <div class="cal-mode-switch home-list-scope-switch" role="group" aria-label="List scope">
-                    <button type="button" class="cal-mode-btn is-active" data-home-list-scope="personal">Personal</button>
-                    <button type="button" class="cal-mode-btn" data-home-list-scope="events">Events</button>
-                  </div>
-                </div>
-              </div>
+              <!-- #130: Events/Chores switch removed; under-cal list is always events -->
               <div class="plan-cal-events-list-card" id="plan-cal-events-box">
                 <div id="calendar-events-list" aria-label="Events list"></div>
               </div>
             </div>
             <button type="button" class="btn cal-collapsed-btn" id="cal-collapsed-btn" style="display:none" title="Show calendar" aria-hidden="true">📅 Calendar</button>
+            <!-- #130: Personal | Events stays visible when calendar is minimized -->
+            <div class="plan-cal-events-header-card" id="plan-cal-events-header" style="margin-top:6px">
+              <div class="plan-cal-events-head">
+                <div class="cal-mode-switch home-list-scope-switch" role="group" aria-label="List scope">
+                  <button type="button" class="cal-mode-btn is-active" data-home-list-scope="personal">Personal</button>
+                  <button type="button" class="cal-mode-btn" data-home-list-scope="events">Events</button>
+                </div>
+              </div>
+            </div>
             <!-- legacy id kept for openCreateModal wiring -->
             <button type="button" id="btn-create-event" hidden aria-hidden="true" tabindex="-1"></button>
             <div class="cal-map-row" id="cal-map-row" hidden aria-hidden="true"></div>
@@ -4768,6 +4763,8 @@
             <h2 id="lists-title">Details</h2>
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap" id="lists-head-actions">
+            <!-- #135: Keep on top / default list (left of Edit) -->
+            <button type="button" class="btn" id="btn-keep-on-top" title="Keep this list on top and open it by default">Keep on top</button>
             <button type="button" class="btn" id="btn-edit-list-or-event" title="Edit">Edit</button>
             <button type="button" class="btn" id="btn-share-list">Share list</button>
           </div>

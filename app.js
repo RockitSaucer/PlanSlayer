@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.70';
+  var APP_VERSION = '8.0.24';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -5300,17 +5300,25 @@
         }
       }
     } catch (eI) {}
+    // Promote Hunt-native imports into real plan_events so they join cloud SoT
+    var promoted = 0;
+    try {
+      promoted = await promoteHuntImportsToPlanCloud();
+    } catch (eProm) {
+      console.warn('promoteHuntImportsToPlanCloud', eProm);
+    }
     // Drop Plan state.events that are tombstoned (import may have re-added)
     try {
       var deadEv = loadTombstones().events || {};
       state.events = (state.events || []).filter(function (e) {
         return e && !deadEv[String(e.id)];
       });
-      // When planIdsOnly is set, drop any event not in that set (except personal-only)
+      // When planIdsOnly is set, drop any event not in that set (except personal-only / still-local hunt imports)
       if (planIdsOnly) {
         state.events = state.events.filter(function (e) {
           if (!e) return false;
           if (e._personalOnly || e._localOnly) return true;
+          if (e.source === 'hunt' && e.hunt_event_id) return true;
           return !!planIdsOnly[String(e.id)];
         });
       }
@@ -5323,7 +5331,80 @@
       } catch (eA) {}
     });
     try { persistLocal({ quiet: true }); } catch (eP) {}
-    return { added: added, pulled: pulled };
+    return { added: added + promoted, pulled: pulled };
+  }
+
+  /**
+   * Turn Hunt-imported _localOnly events into real plan_events (cloud).
+   * Required so signed-in Plan SoT (list_my_plan_events) keeps Hunt trips.
+   */
+  async function promoteHuntImportsToPlanCloud() {
+    var client = sb();
+    var user = me();
+    if (!client || !user) return 0;
+    var n = 0;
+    var list = (state.events || []).slice();
+    for (var i = 0; i < list.length; i++) {
+      var ev = list[i];
+      if (!ev) continue;
+      // Already a real cloud plan event
+      if (isUuidLike(ev.id) && !ev._localOnly) continue;
+      // Only promote Hunt-linked / hunt-sourced rows
+      var isHunt = !!(ev.hunt_event_id || ev.source === 'hunt' || (ev.state && ev.state.fromHuntSlayer));
+      if (!isHunt && !ev._localOnly) continue;
+      if (!ev.hunt_event_id && ev.source !== 'hunt') continue;
+      try {
+        var res = await client.rpc('create_plan_event', {
+          p_name: ev.name || 'Hunt event',
+          p_event_type: ev.event_type || 'hunt',
+          p_start_at: ev.start_at || null
+        });
+        if (res.error || !res.data) continue;
+        var row = Array.isArray(res.data) ? res.data[0] : res.data;
+        if (!row || !row.id) continue;
+        var oldId = ev.id;
+        ev.id = row.id;
+        ev._localOnly = false;
+        ev.owner_user_id = user.id;
+        if (row.invite_code) ev.invite_code = row.invite_code;
+        if (!ev.state || typeof ev.state !== 'object') ev.state = {};
+        if (ev.hunt_event_id) ev.state.hunt_event_id = String(ev.hunt_event_id);
+        ev.state.fromHuntSlayer = true;
+        if (ev.state.color == null && ev.color) ev.state.color = ev.color;
+        // Replace in state.events (same object usually already there)
+        state.events = (state.events || []).map(function (e) {
+          if (!e) return e;
+          if (String(e.id) === String(oldId) || (e.hunt_event_id && ev.hunt_event_id &&
+              String(e.hunt_event_id) === String(ev.hunt_event_id))) {
+            return ev;
+          }
+          return e;
+        });
+        // Dedupe if both old and new slipped in
+        var seen = {};
+        state.events = state.events.filter(function (e) {
+          if (!e || !e.id) return false;
+          var k = String(e.id);
+          if (seen[k]) return false;
+          seen[k] = true;
+          return true;
+        });
+        try { await cloudSaveEvent(ev); } catch (eCs) {}
+        try {
+          var map = JSON.parse(localStorage.getItem(HUNT_IMPORT_MAP_KEY) || '{}') || {};
+          if (ev.hunt_event_id) map[String(ev.hunt_event_id)] = String(ev.id);
+          localStorage.setItem(HUNT_IMPORT_MAP_KEY, JSON.stringify(map));
+        } catch (eM) {}
+        try { dualWriteHuntCalendarEvent(ev, null); } catch (eD) {}
+        n++;
+      } catch (eOne) {
+        console.warn('promote hunt event', eOne);
+      }
+    }
+    if (n) {
+      try { persistLocal({ quiet: true }); } catch (eP2) {}
+    }
+    return n;
   }
 
   async function joinEvent(code) {

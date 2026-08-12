@@ -718,11 +718,22 @@
       background: rgba(0,0,0,0.18);
     }
     #calendar-events-list {
-      font-size: 12px;
+      font-size: 11px;
       max-height: none;
       overflow: visible;
     }
-    #calendar-events-list .event-card-wrap { margin-bottom: 6px; }
+    /* #110: tighter under-cal event cards for more vertical room */
+    #calendar-events-list .event-card-wrap { margin-bottom: 4px; }
+    #calendar-events-list .event-card {
+      padding: 6px 8px !important;
+    }
+    #calendar-events-list .event-card .ec-top strong,
+    #calendar-events-list .event-card .ec-top .ec-name {
+      font-size: 12px;
+    }
+    #calendar-events-list .event-card .ec-countdown .cd {
+      font-size: 11px;
+    }
     #calendar-events-list .event-card-members {
       max-height: none;
       overflow: visible;
@@ -759,7 +770,7 @@
         0 2px 4px rgba(0,0,0,0.3) !important;
     }
     .left-events .section-label {
-      margin: 10px 0 6px; font-size: 11px; font-weight: 800; color: var(--muted);
+      margin: 6px 0 4px; font-size: 10px; font-weight: 800; color: var(--muted);
       text-transform: uppercase; letter-spacing: 0.06em;
     }
     .left-events .section-label.section-label-lists {
@@ -950,11 +961,11 @@
       width: 100%;
       min-width: 0;
       max-width: 100%;
-      /* Keep calendar square */
+      /* Keep calendar square (#110: smaller vertical footprint) */
       aspect-ratio: 1 / 1;
       height: auto;
-      min-height: 240px;
-      max-height: min(52vh, 520px);
+      min-height: 200px;
+      max-height: min(40vh, 400px);
       box-sizing: border-box;
       border-radius: 10px;
       display: flex;
@@ -962,7 +973,7 @@
       overflow: hidden;
       background: var(--panel-light);
       border: 1px solid var(--border);
-      padding: 10px 12px;
+      padding: 6px 8px;
       flex: 0 0 auto;
     }
     /* Map button → square mini map; left stack grows with content (parent card-body scrolls) */
@@ -1042,8 +1053,8 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 8px;
-      gap: 6px;
+      margin-bottom: 4px;
+      gap: 4px;
       flex-shrink: 0;
     }
     .calendar-container .calendar-header .cal-nav-btn,
@@ -1053,11 +1064,11 @@
       background: linear-gradient(180deg, #5d8e3d 0%, var(--green) 55%, #3a5826 100%) !important;
       color: #fff !important;
       border: 1px solid #2f4a1f !important;
-      padding: 6px 11px !important;
-      border-radius: 7px !important;
+      padding: 4px 8px !important;
+      border-radius: 6px !important;
       cursor: pointer !important;
       font-weight: bold !important;
-      font-size: 12px !important;
+      font-size: 11px !important;
       flex-shrink: 0 !important;
       transform: none !important;
       box-shadow:
@@ -1067,7 +1078,7 @@
       min-width: 0 !important;
       width: auto !important;
       height: auto !important;
-      line-height: 1.2 !important;
+      line-height: 1.15 !important;
     }
     .calendar-container .calendar-header .cal-nav-btn:hover,
     #side-cal-prev:hover,
@@ -1089,7 +1100,7 @@
       flex: 1 1 auto;
       min-width: 0;
       text-align: center;
-      font-size: clamp(11px, 1.35vw, 15px) !important;
+      font-size: clamp(10px, 1.2vw, 13px) !important;
       font-weight: 800 !important;
       white-space: nowrap;
       color: #fff;
@@ -1101,21 +1112,21 @@
       display: grid;
       grid-template-columns: repeat(7, minmax(0, 1fr));
       grid-auto-rows: minmax(0, 1fr);
-      gap: 4px;
+      gap: 2px;
       text-align: center;
       width: 100%;
     }
     .calendar-container .cal-day-name {
       font-weight: 700;
       color: var(--muted);
-      font-size: 11px;
+      font-size: 9px;
       padding: 0;
       text-transform: uppercase;
       display: flex;
       align-items: center;
       justify-content: center;
       min-height: 0;
-      line-height: 1.1;
+      line-height: 1.05;
     }
     .calendar-container .cal-cell {
       padding: 3px 2px 4px;
@@ -1168,12 +1179,13 @@
       box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
       display: inline-block !important;
     }
-    .event-card-wrap { margin: 0 0 8px; }
+    .event-card-wrap { margin: 0 0 6px; }
     .event-card {
       position: relative;
       width: 100%;
       text-align: left;
       cursor: pointer;
+      padding: 8px 10px;
     }
     .event-card .ec-top {
       display: flex; align-items: center; gap: 8px; flex-wrap: wrap;

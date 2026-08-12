@@ -1,0 +1,7 @@
+﻿# Changes 1.3.58 → 1.3.59 (site issue #110)
+
+## PlanSlayer only
+- Slim side calendar vertical footprint (keep square): smaller max-height, padding, nav, day names.
+- Tighter under-cal event cards + section labels so personal events stay visible with calendar open.
+
+Shell: plan-slayer-shell-v86

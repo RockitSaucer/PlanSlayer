@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.67';
+  var APP_VERSION = '1.3.68';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -5012,9 +5012,17 @@
     try { map = JSON.parse(localStorage.getItem(HUNT_IMPORT_MAP_KEY) || '{}') || {}; } catch (e2) { map = {}; }
     var added = 0;
     var updated = 0;
+    var deadEvImport = {};
+    var huntDelImport = {};
+    try { deadEvImport = loadTombstones().events || {}; } catch (eDe) {}
+    try { huntDelImport = JSON.parse(localStorage.getItem('reg_slayer_cal_event_deleted_v1') || '{}') || {}; } catch (eHd) {}
     raw.forEach(function (he) {
       if (!he || !he.id) return;
       var huntId = String(he.id);
+      // Never re-import deleted events (ghost dots after delete + refresh)
+      if (huntDelImport[huntId] || deadEvImport[huntId]) return;
+      if (he.planEventId && (huntDelImport[String(he.planEventId)] || deadEvImport[String(he.planEventId)])) return;
+      if (he.planEventId && huntDelImport['plan_' + String(he.planEventId)]) return;
       var existingEv = null;
       if (map[huntId]) {
         existingEv = state.events.find(function (e) { return String(e.id) === String(map[huntId]); }) || null;
@@ -5113,6 +5121,20 @@
     var raw = [];
     try { raw = JSON.parse(localStorage.getItem(HUNT_CAL_EVENTS_KEY) || '[]') || []; } catch (eR) { raw = []; }
     if (!Array.isArray(raw)) raw = [];
+    // Respect Hunt deleted tombstones + Plan event tombstones
+    var huntDeleted = {};
+    try { huntDeleted = JSON.parse(localStorage.getItem('reg_slayer_cal_event_deleted_v1') || '{}') || {}; } catch (eD) {}
+    var planDead = {};
+    try { planDead = loadTombstones().events || {}; } catch (ePd) {}
+    function isHuntDualDead(he) {
+      if (!he) return true;
+      if (huntDeleted[String(he.id)]) return true;
+      if (he.planEventId && (huntDeleted[String(he.planEventId)] || planDead[String(he.planEventId)])) return true;
+      if (he.planEventId && huntDeleted['plan_' + String(he.planEventId)]) return true;
+      if (planDead[String(he.id)]) return true;
+      return false;
+    }
+    var liveCloudIds = {};
     var pulled = 0;
     res.data.forEach(function (row) {
       if (!row || !row.id) return;
@@ -5139,6 +5161,9 @@
         _fromPlanSlayer: !!hl.fromPlanSlayer,
         hunt_link: hl
       };
+      if (isHuntDualDead(he)) return;
+      liveCloudIds[String(he.id)] = true;
+      if (he.planEventId) liveCloudIds['plan:' + String(he.planEventId)] = true;
       var idx = raw.findIndex(function (x) { return x && String(x.id) === String(he.id); });
       if (idx >= 0) {
         var locU = raw[idx].updatedAt || raw[idx].updated_at || 0;
@@ -5163,9 +5188,29 @@
         } catch (eBag) {}
       }
     });
+    // Prune local dual-writes that are dead or no longer in cloud
+    raw = raw.filter(function (x) {
+      if (!x) return false;
+      if (isHuntDualDead(x)) return false;
+      // Drop dual-write rows missing from cloud (deleted on another site)
+      if (x._fromPlanSlayer || x.planEventId) {
+        if (Object.keys(liveCloudIds).length && !liveCloudIds[String(x.id)] &&
+            !(x.planEventId && liveCloudIds['plan:' + String(x.planEventId)])) {
+          return false;
+        }
+      }
+      return true;
+    });
     try { localStorage.setItem(HUNT_CAL_EVENTS_KEY, JSON.stringify(raw)); } catch (eW) {}
     var added = 0;
     try { added = importHuntCalendarEvents() || 0; } catch (eI) {}
+    // Drop Plan state.events that are tombstoned (import may have re-added)
+    try {
+      var deadEv = loadTombstones().events || {};
+      state.events = (state.events || []).filter(function (e) {
+        return e && !deadEv[String(e.id)];
+      });
+    } catch (eFilt) {}
     // Ensure packs for all plan events after import
     (state.events || []).forEach(function (e) {
       try {
@@ -5566,12 +5611,67 @@
     }
   }
 
+  /**
+   * Remove dual-written Hunt/Reg calendar rows (local + cloud) for a Plan event.
+   * Stops ghost calendar dots / map pins after delete + refresh on other sites.
+   */
+  function removeHuntDualWriteForPlanEvent(eid, huntEventId) {
+    eid = String(eid || '');
+    huntEventId = huntEventId ? String(huntEventId) : null;
+    var dropIds = {};
+    if (eid) {
+      dropIds[eid] = true;
+      dropIds['plan_' + eid] = true;
+    }
+    if (huntEventId) dropIds[huntEventId] = true;
+    // Local Hunt/Reg calendar key (same browser profile only)
+    try {
+      var raw = JSON.parse(localStorage.getItem(HUNT_CAL_EVENTS_KEY) || '[]') || [];
+      if (Array.isArray(raw)) {
+        var next = raw.filter(function (x) {
+          if (!x) return false;
+          if (dropIds[String(x.id)]) return false;
+          if (x.planEventId && dropIds[String(x.planEventId)]) return false;
+          return true;
+        });
+        localStorage.setItem(HUNT_CAL_EVENTS_KEY, JSON.stringify(next));
+      }
+    } catch (eL) {}
+    // Tombstone in Hunt calendar deleted bag so pullCloud won't resurrect
+    try {
+      var delKey = 'reg_slayer_cal_event_deleted_v1';
+      var bag = JSON.parse(localStorage.getItem(delKey) || '{}') || {};
+      var now = Date.now();
+      Object.keys(dropIds).forEach(function (k) { bag[k] = now; });
+      localStorage.setItem(delKey, JSON.stringify(bag));
+    } catch (eT) {}
+    // Cloud: map_calendar_events dual-writes
+    try {
+      var client = sb();
+      if (!client) return;
+      if (huntEventId) {
+        client.from('map_calendar_events').delete().eq('id', huntEventId).then(function () {}).catch(function () {});
+      }
+      client.from('map_calendar_events').select('id, hunt_link').then(function (res) {
+        if (!res || !res.data) return;
+        res.data.forEach(function (row) {
+          if (!row || !row.id) return;
+          var pe = row.hunt_link && row.hunt_link.planEventId;
+          if (dropIds[String(row.id)] || (pe && dropIds[String(pe)])) {
+            client.from('map_calendar_events').delete().eq('id', row.id).then(function () {}).catch(function () {});
+          }
+        });
+      }).catch(function () {});
+    } catch (eC) {}
+  }
+
   async function deleteActiveEvent() {
     var ev = activeEvent();
     if (!ev) return;
     var ok = await appConfirm('Delete event “' + (ev.name || 'Event') + '”? Lists linked to it stay as personal packs.', 'Delete event');
     if (!ok) return;
     var eid = String(ev.id);
+    var huntEventId = ev.hunt_event_id || ('plan_' + eid);
     markTombstone('event', eid);
     // Cloud delete first so other members drop it on next poll / visibility
     try {
@@ -5582,9 +5682,21 @@
     } catch (eCloud) {
       console.warn('cloud delete event', eCloud);
     }
+    // Always clear Hunt/Reg dual-write (local + cloud) so dots vanish on all three sites
+    try { removeHuntDualWriteForPlanEvent(eid, huntEventId); } catch (eDw) {
+      console.warn('removeHuntDualWriteForPlanEvent', eDw);
+    }
     if (ev._personalOnly) {
       var board = loadPersonalBoard();
       board.events = (board.events || []).filter(function (e) { return String(e.id) !== eid; });
+      // Drop personal-board pins stamped to this event
+      if (Array.isArray(board.mapPins)) {
+        board.mapPins = board.mapPins.filter(function (p) {
+          if (!p) return false;
+          var pe = p.eventId || p.calendarEventId;
+          return !(pe != null && String(pe) === eid);
+        });
+      }
       savePersonalBoard(board);
     } else {
       state.events = (state.events || []).filter(function (e) { return String(e.id) !== eid; });
@@ -5597,6 +5709,16 @@
         saveNamedList(n);
       });
     } catch (eU) {}
+    // Clear event-pin filter / linked map overlay so map dots disappear immediately
+    try {
+      if (state.eventPinsFilter && String(state.eventPinsFilter.eventId) === eid) {
+        state.eventPinsFilter = null;
+      }
+      if (state._linkedMapOverlay && String(state._linkedMapOverlay.eventId) === eid) {
+        state._linkedMapOverlay = null;
+      }
+      state._mapFollowedEvent = null;
+    } catch (eClr) {}
     state.activeEventId = null;
     state.activeNamedListId = null;
     state.view = 'home';
@@ -5608,6 +5730,9 @@
     broadcastSync({ type: 'delete-event', id: eid });
     appToast('Event deleted');
     render();
+    try {
+      if (window.PlanMap && typeof window.PlanMap.redraw === 'function') window.PlanMap.redraw();
+    } catch (eMap) {}
     closeMobileListSheet(true);
   }
 

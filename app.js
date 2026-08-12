@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '8.0.27';
+  var APP_VERSION = '8.0.29';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -995,40 +995,38 @@
         } catch (err2) {}
       }
     });
-    // When tab becomes visible, re-sync Plan events + Hunt calendar cloud
+    // When tab becomes visible, re-sync free lists + Plan events + Hunt calendar
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState !== 'visible') return;
-      if (typeof resyncHuntEventsNow === 'function') {
-        resyncHuntEventsNow({ quiet: true }).then(function () {
-          if (typeof loadEvents === 'function') return loadEvents();
-        }).then(function () { renderUnlessTypingInListAdd(); })
-          .catch(function () { renderUnlessTypingInListAdd(); });
-      } else if (typeof loadEvents === 'function') {
-        loadEvents().then(function () { renderUnlessTypingInListAdd(); })
-          .catch(function () { renderUnlessTypingInListAdd(); });
-      }
+      Promise.resolve(pullFreeListsCloud()).catch(function () { return 0; }).then(function () {
+        if (typeof resyncHuntEventsNow === 'function') {
+          return resyncHuntEventsNow({ quiet: true }).then(function () {
+            if (typeof loadEvents === 'function') return loadEvents();
+          });
+        }
+        if (typeof loadEvents === 'function') return loadEvents();
+      }).then(function () { renderUnlessTypingInListAdd(); })
+        .catch(function () { renderUnlessTypingInListAdd(); });
     });
     // #103 / #142: soft-poll cloud — slower, no paint unless data changed (stops button flash)
     setInterval(function () {
       if (document.visibilityState !== 'visible') return;
       if (typeof isTypingInListAdd === 'function' && isTypingInListAdd()) return;
       if (typeof isListUiBusy === 'function' && isListUiBusy()) return;
-      // Prefer full loadEvents (pulls plan_events + applies namedListPack)
-      if (typeof loadEvents === 'function') {
-        loadEvents().then(function () {
-          softRenderIfListChanged();
-        }).catch(function () {
-          if (typeof resyncHuntEventsNow === 'function') {
-            resyncHuntEventsNow({ quiet: true }).then(function () {
-              softRenderIfListChanged();
-            }).catch(function () {});
-          }
-        });
-      } else if (typeof resyncHuntEventsNow === 'function') {
-        resyncHuntEventsNow({ quiet: true }).then(function () {
-          softRenderIfListChanged();
-        }).catch(function () {});
-      }
+      Promise.resolve(pullFreeListsCloud()).catch(function () { return 0; }).then(function () {
+        if (typeof loadEvents === 'function') {
+          return loadEvents().then(function () {
+            softRenderIfListChanged();
+          });
+        }
+        softRenderIfListChanged();
+      }).catch(function () {
+        if (typeof resyncHuntEventsNow === 'function') {
+          resyncHuntEventsNow({ quiet: true }).then(function () {
+            softRenderIfListChanged();
+          }).catch(function () {});
+        }
+      });
     }, 14000);
     // After leaving an add box, apply any sync re-render we deferred
     if (!document._psListAddFocusFlush) {
@@ -3171,6 +3169,10 @@
         return true;
       });
       var ok = saveJson(LOCAL_FREE_LISTS_KEY, store);
+      if (ok) {
+        // Always cloud-sync free/personal lists (desktop ↔ phone, same account)
+        try { schedulePushFreeListsCloud(); } catch (eFl) {}
+      }
       if (ok && snapshot.eventId) {
         try { publishEventListBridge(snapshot); } catch (eB) {}
         // Push list items into the linked plan event + cloud so phones/other people see them soon
@@ -3574,10 +3576,9 @@
     } else {
       var list = findNamedListById(_sharePeopleCtx.id || state.activeNamedListId);
       if (list) {
-        if (!list.invite_code) {
-          list.invite_code = makeListInviteCode();
-          saveNamedList(list);
-        }
+        // Same list becomes shared — never clone a second list
+        markListSharedInPlace(list);
+        saveNamedList(list);
         code = list.invite_code;
         type = 'list';
         title = list.name || 'List';
@@ -3657,6 +3658,12 @@
     if (!list) return false;
     var before = (list.members || []).length;
     addListMemberFromPick(list, personId || personName, !isUuidLike(personId));
+    // Personal list + share = this same list turns shared (no new list)
+    try {
+      var live = findNamedListById(list.id) || list;
+      markListSharedInPlace(live);
+      saveNamedList(live);
+    } catch (eMk) {}
     // If list is linked to an event, add them there too (so they see the event)
     if (list.eventId) {
       var prevKind = _sharePeopleCtx.kind;
@@ -3700,10 +3707,182 @@
           try { return sanitizeNamedList(n); } catch (e) { return n; }
         }).filter(function (n) { return n && n.id; });
       }
-      return saveJson(LOCAL_FREE_LISTS_KEY, s);
+      var ok = saveJson(LOCAL_FREE_LISTS_KEY, s);
+      // Same-account multi-device (desktop → phone): free/personal lists live in plan_personal_boards
+      if (ok) {
+        try { schedulePushFreeListsCloud(); } catch (ePush) {}
+      }
+      return ok;
     } catch (e) {
       return false;
     }
+  }
+
+  var _freeListsCloudTimer = null;
+  function schedulePushFreeListsCloud() {
+    if (_freeListsCloudTimer) clearTimeout(_freeListsCloudTimer);
+    _freeListsCloudTimer = setTimeout(function () {
+      _freeListsCloudTimer = null;
+      try { pushFreeListsCloud(); } catch (e) {}
+    }, 450);
+  }
+
+  /** Snapshot named free lists for plan_personal_boards.state.freeLists */
+  function freeListsCloudPayload() {
+    var store = loadFreeListsStoreRaw();
+    var named = [];
+    (store.named || []).forEach(function (n) {
+      if (!n || !n.id) return;
+      try {
+        named.push(sanitizeNamedList(JSON.parse(JSON.stringify(n))));
+      } catch (e) {
+        try { named.push(sanitizeNamedList(n)); } catch (e2) {}
+      }
+    });
+    return { named: named, updated_at: new Date().toISOString() };
+  }
+
+  /**
+   * Push My lists (personal + free packs) to Supabase so Plan mobile / other devices see them.
+   * Uses existing plan_personal_boards.state.freeLists (no new migration).
+   */
+  function pushFreeListsCloud() {
+    var client = sb();
+    var user = me();
+    if (!client || !user || !user.id) return Promise.resolve(false);
+    var payload = freeListsCloudPayload();
+    return client.from('plan_personal_boards').select('state').eq('user_id', user.id).maybeSingle()
+      .then(function (res) {
+        var st = (res && res.data && res.data.state && typeof res.data.state === 'object')
+          ? Object.assign({}, res.data.state)
+          : {};
+        st.freeLists = payload;
+        st.freeListsUpdatedAt = payload.updated_at;
+        return client.from('plan_personal_boards').upsert({
+          user_id: user.id,
+          state: st,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'user_id' });
+      })
+      .then(function (res2) {
+        if (res2 && res2.error) {
+          console.warn('pushFreeListsCloud', res2.error);
+          return false;
+        }
+        return true;
+      })
+      .catch(function (e) {
+        console.warn('pushFreeListsCloud', e);
+        return false;
+      });
+  }
+
+  function freeListItemCount(n) {
+    var c = 0;
+    try {
+      (n && n.columns || []).forEach(function (col) {
+        if (col && Array.isArray(col.items)) c += col.items.length;
+      });
+    } catch (e) {}
+    return c;
+  }
+
+  /**
+   * Pull free/personal lists from cloud and merge into local store (prefer newer / richer).
+   * @returns {Promise<number>} number of lists added or updated
+   */
+  function pullFreeListsCloud() {
+    var client = sb();
+    var user = me();
+    if (!client || !user || !user.id) return Promise.resolve(0);
+    return client.from('plan_personal_boards').select('state').eq('user_id', user.id).maybeSingle()
+      .then(function (res) {
+        if (!res || res.error || !res.data) return 0;
+        var st = res.data.state || {};
+        var cloud = st.freeLists || null;
+        if (!cloud || !Array.isArray(cloud.named) || !cloud.named.length) return 0;
+        var store = loadFreeListsStoreRaw();
+        if (!Array.isArray(store.named)) store.named = [];
+        var byId = {};
+        store.named.forEach(function (n) {
+          if (n && n.id) byId[String(n.id)] = n;
+        });
+        var changed = 0;
+        cloud.named.forEach(function (cn) {
+          if (!cn || !cn.id) return;
+          try { cn = sanitizeNamedList(cn); } catch (eS) {}
+          var id = String(cn.id);
+          var local = byId[id];
+          if (!local) {
+            byId[id] = cn;
+            changed++;
+            return;
+          }
+          var lt = local.updated_at ? new Date(local.updated_at).getTime() : 0;
+          var ct = cn.updated_at ? new Date(cn.updated_at).getTime() : 0;
+          var li = freeListItemCount(local);
+          var ci = freeListItemCount(cn);
+          // Cloud wins if newer, or same age but has more items (phone empty / desktop full)
+          if (ct > lt + 200 || (ci > li && ct >= lt - 2000) || (li === 0 && ci > 0)) {
+            var merged = Object.assign({}, local, cn);
+            // Keep local invite/shared if cloud snapshot is older incomplete
+            if (local.invite_code && !merged.invite_code) merged.invite_code = local.invite_code;
+            if (local.shared || cn.shared || merged.invite_code) merged.shared = true;
+            if ((local.members || []).length > (merged.members || []).length) {
+              merged.members = local.members;
+            }
+            byId[id] = merged;
+            changed++;
+          } else {
+            // Still absorb share flags / members from cloud
+            if (cn.invite_code && !local.invite_code) {
+              local.invite_code = cn.invite_code;
+              local.shared = true;
+              changed++;
+            }
+            if (cn.shared && !local.shared) {
+              local.shared = true;
+              changed++;
+            }
+            if ((cn.members || []).length > (local.members || []).length) {
+              local.members = cn.members;
+              if (listMemberCount(local) > 1) local.shared = true;
+              changed++;
+            }
+          }
+        });
+        if (!changed) return 0;
+        store.named = Object.keys(byId).map(function (k) { return byId[k]; });
+        // Write local only without re-push storm
+        try { saveJson(LOCAL_FREE_LISTS_KEY, store); } catch (eW) {}
+        return changed;
+      })
+      .catch(function (e) {
+        console.warn('pullFreeListsCloud', e);
+        return 0;
+      });
+  }
+
+  /** Mark a list shared in place (same id — never clone a second list). */
+  function markListSharedInPlace(list) {
+    if (!list || !list.id) return list;
+    list.shared = true;
+    if (!list.invite_code) list.invite_code = makeListInviteCode();
+    // Ensure owner is on members
+    if (!Array.isArray(list.members)) list.members = [];
+    var me = myId() || 'local';
+    var hasMe = list.members.some(function (m) {
+      return m && String(m.user_id) === String(me);
+    });
+    if (!hasMe) {
+      list.members.unshift({
+        user_id: me,
+        display_name: myName() || 'You',
+        role: 'owner'
+      });
+    }
+    list.updated_at = new Date().toISOString();
+    return list;
   }
   function freeScope() {
     // Unified My lists — kept for legacy call sites
@@ -4038,6 +4217,10 @@
     return Math.max(1, Object.keys(ids).length);
   }
   function listIsShared(list) {
+    if (!list) return false;
+    // Shared in place: flag, invite code, or more than one member — same list id
+    if (list.shared === true) return true;
+    if (list.invite_code) return true;
     return listMemberCount(list) > 1;
   }
   function makeListInviteCode() {
@@ -8588,9 +8771,10 @@
           membersHtml: chips
         }) + '</div>';
     }
-    // Meta: people count only if >1, event name if linked — no item counts / "just you"
+    // Meta: people count only if >1; tiny shared when list was shared in place
     var metaBits = [];
     if (peopleN > 1) metaBits.push(peopleN + ' people');
+    else if (listIsShared(n) && !isPersonalEventShadowList(n)) metaBits.push('shared');
     if (isPersonalEventShadowList(n)) {
       var pevName = eventNameById(n.personalForEventId || n.eventId);
       if (pevName) metaBits.push('from ' + pevName);
@@ -10241,16 +10425,15 @@
       if (!c) return;
       if (!c.invite_code) {
         c.invite_code = makeListInviteCode();
-        saveNamedList(list);
       }
+      // Whole list becomes shared in place when you share any section
+      markListSharedInPlace(list);
+      saveNamedList(list);
       code = c.invite_code;
       label = (list.name || 'list') + ' · ' + (c.name || 'section');
     } else {
-      if (!list.invite_code) {
-        list.invite_code = makeListInviteCode();
-        list.updated_at = new Date().toISOString();
-        saveNamedList(list);
-      }
+      markListSharedInPlace(list);
+      saveNamedList(list);
       code = list.invite_code;
     }
     if ($('list-invite-code-input')) {
@@ -13045,13 +13228,18 @@
     click('btn-create-list', openListModal);
     click('btn-sync-hunt', function () {
       appToast('Syncing…');
-      resyncHuntEventsNow({ quiet: false }).then(function () {
-        return loadEvents();
-      }).then(function () {
+      pullFreeListsCloud().then(function (nLists) {
+        return resyncHuntEventsNow({ quiet: false }).then(function () {
+          return loadEvents();
+        }).then(function () {
+          return nLists;
+        });
+      }).then(function (nLists) {
         render();
         if (state.mobileSheetOpen) {
           try { renderMobileListSheet(); } catch (eM) {}
         }
+        if (nLists) appToast('Synced · ' + nLists + ' list update' + (nLists === 1 ? '' : 's'));
       }).catch(function () {
         appToast('Sync failed — stay logged in on Plan and Hunt');
       });
@@ -13096,6 +13284,8 @@
       });
       store.named.push(nl);
       saveFreeListsStore(store);
+      // Immediate cloud push so phone sees new personal list without waiting for debounce
+      try { pushFreeListsCloud(); } catch (ePc) {}
       state.activeNamedListId = nl.id;
       state.listTab = 'todo';
       // New personal lists stay on My lists; event-linked can stay on My lists too (Event lists section)
@@ -14437,6 +14627,7 @@
     click('mls-sync', function () {
       appToast('Syncing…');
       Promise.resolve()
+        .then(function () { return pullFreeListsCloud(); })
         .then(function () {
           return typeof resyncHuntEventsNow === 'function'
             ? resyncHuntEventsNow({ quiet: true })
@@ -14459,6 +14650,8 @@
           appToast('Sync failed — stay logged in');
         });
     });
+    // Header / desktop Sync also pulls personal free lists
+    // (btn-sync-hunt already reloads events — extend via after path below)
     click('share-scope-cancel', closeShareScopeModal);
     on('share-scope-modal', 'click', function (e) {
       if (e.target === $('share-scope-modal')) closeShareScopeModal();
@@ -16026,7 +16219,10 @@
       loadFriends();
       mergeInboxIntoPersonal();
       configurePlanMap();
-      loadEvents().then(function () {
+      // Pull personal/free lists first so phone sees desktop lists
+      Promise.resolve(pullFreeListsCloud()).catch(function () { return 0; }).then(function () {
+        return loadEvents();
+      }).then(function () {
         setMapMode(state.mapMode || 'button');
         if (window.PlanMap) {
           window.PlanMap.ensure();
@@ -16043,6 +16239,8 @@
         } catch (eDef) {}
         render();
         try { syncKeepOnTopBtn(); } catch (eK) {}
+        // Push local lists up so desktop creations land in cloud for other devices
+        try { schedulePushFreeListsCloud(); } catch (ePu) {}
       });
     },
     onSignOut: function () {

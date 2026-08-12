@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.65';
+  var APP_VERSION = '1.3.66';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -867,19 +867,89 @@
     } catch (eR) {}
   }
 
+  /** #142: avoid full paint while user is in a modal / expanded item options */
+  function isListUiBusy() {
+    try {
+      if (isTypingInListAdd()) return true;
+      if (state.expandedItemId) return true;
+      if (state.gotItem) return true;
+      var busyIds = ['got-modal', 'share-people-chooser', 'share-people-members', 'edit-list-modal',
+        'col-options-modal', 'sec-share-modal', 'app-confirm-modal', 'app-prompt-modal', 'expense-modal'];
+      for (var i = 0; i < busyIds.length; i++) {
+        var el = $(busyIds[i]);
+        if (el && el.classList && el.classList.contains('is-open')) return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  /** Fingerprint open list so soft-poll can skip no-op repaints (#142) */
+  function listContentFingerprint(list) {
+    if (!list) return '';
+    try {
+      var bits = [String(list.id || ''), String(list.updated_at || '')];
+      (list.columns || []).forEach(function (c) {
+        if (!c) return;
+        bits.push(String(c.id));
+        (c.items || []).forEach(function (it) {
+          if (!it) return;
+          bits.push(String(it.id) + ':' + String(it.qty) + ':' + JSON.stringify(it.claims || {}));
+        });
+      });
+      return bits.join('|');
+    } catch (e) {
+      return String(Date.now());
+    }
+  }
+  var _lastSoftListFp = '';
+  var _softRenderTimer = null;
+
   /** Background sync must not steal the add-item cursor — queue until blur/idle */
   function renderUnlessTypingInListAdd() {
-    if (isTypingInListAdd()) {
+    if (isTypingInListAdd() || isListUiBusy()) {
       state._pendingRenderWhileTyping = true;
       return;
     }
     state._pendingRenderWhileTyping = false;
+    try {
+      var list = state.activeNamedListId ? findNamedListById(state.activeNamedListId) : null;
+      _lastSoftListFp = listContentFingerprint(list);
+    } catch (eFp) {}
     try { render(); } catch (e) { console.warn('renderUnlessTypingInListAdd', e); }
+  }
+
+  /** Soft cloud poll: only full-render when list content actually changed (#142) */
+  function softRenderIfListChanged() {
+    if (document.hidden || document.visibilityState === 'hidden') return;
+    if (isTypingInListAdd() || isListUiBusy()) {
+      state._pendingRenderWhileTyping = true;
+      return;
+    }
+    try {
+      var list = state.activeNamedListId ? findNamedListById(state.activeNamedListId) : null;
+      var fp = listContentFingerprint(list);
+      // Also include active event id so event card selection doesn't thrash
+      fp += '::' + String(state.activeEventId || '') + '::' + String(state.activeNamedListId || '');
+      if (fp && fp === _lastSoftListFp) return;
+      _lastSoftListFp = fp;
+      // Debounce rapid cloud replies into one paint
+      if (_softRenderTimer) clearTimeout(_softRenderTimer);
+      _softRenderTimer = setTimeout(function () {
+        _softRenderTimer = null;
+        if (isTypingInListAdd() || isListUiBusy()) {
+          state._pendingRenderWhileTyping = true;
+          return;
+        }
+        try { render(); } catch (eR) {}
+      }, 180);
+    } catch (e) {
+      try { renderUnlessTypingInListAdd(); } catch (e2) {}
+    }
   }
 
   function flushPendingRenderIfIdle() {
     if (!state._pendingRenderWhileTyping) return;
-    if (isTypingInListAdd()) return;
+    if (isTypingInListAdd() || isListUiBusy()) return;
     state._pendingRenderWhileTyping = false;
     try { render(); } catch (e) {}
   }
@@ -926,27 +996,28 @@
           .catch(function () { renderUnlessTypingInListAdd(); });
       }
     });
-    // #103: poll cloud events + list packs so other members' edits appear while open
+    // #103 / #142: soft-poll cloud — slower, no paint unless data changed (stops button flash)
     setInterval(function () {
       if (document.visibilityState !== 'visible') return;
       if (typeof isTypingInListAdd === 'function' && isTypingInListAdd()) return;
+      if (typeof isListUiBusy === 'function' && isListUiBusy()) return;
       // Prefer full loadEvents (pulls plan_events + applies namedListPack)
       if (typeof loadEvents === 'function') {
         loadEvents().then(function () {
-          renderUnlessTypingInListAdd();
+          softRenderIfListChanged();
         }).catch(function () {
           if (typeof resyncHuntEventsNow === 'function') {
             resyncHuntEventsNow({ quiet: true }).then(function () {
-              renderUnlessTypingInListAdd();
+              softRenderIfListChanged();
             }).catch(function () {});
           }
         });
       } else if (typeof resyncHuntEventsNow === 'function') {
         resyncHuntEventsNow({ quiet: true }).then(function () {
-          renderUnlessTypingInListAdd();
+          softRenderIfListChanged();
         }).catch(function () {});
       }
-    }, 3500);
+    }, 14000);
     // After leaving an add box, apply any sync re-render we deferred
     if (!document._psListAddFocusFlush) {
       document._psListAddFocusFlush = true;
@@ -4457,7 +4528,7 @@
     return localItem;
   }
 
-  // #134: while a shared list is open, soft-poll cloud every 8s
+  // #134 / #142: while a shared list is open, soft-poll cloud — paint only when pack changes
   var _listSyncPoll = null;
   function ensureListSyncPoll() {
     if (_listSyncPoll) return;
@@ -4468,6 +4539,8 @@
         if (!list || !list.eventId) return;
         if (document.hidden) return;
         if (isTypingInListAdd && isTypingInListAdd()) return;
+        if (typeof isListUiBusy === 'function' && isListUiBusy()) return;
+        var fpBefore = listContentFingerprint(list);
         syncNamedListToEventCloud(list);
         // pull event state back
         cloudListEvents().then(function (cloud) {
@@ -4475,12 +4548,18 @@
           var pev = cloud.find(function (e) { return e && String(e.id) === String(list.eventId); });
           if (!pev || !pev.state || !pev.state.namedListPack) return;
           applyCloudListPackToLocal(pev);
-          if (!isTypingInListAdd || !isTypingInListAdd()) {
-            try { render(); } catch (eR) {}
+          if (isTypingInListAdd && isTypingInListAdd()) return;
+          if (typeof isListUiBusy === 'function' && isListUiBusy()) {
+            state._pendingRenderWhileTyping = true;
+            return;
           }
+          var live = findNamedListById(state.activeNamedListId);
+          var fpAfter = listContentFingerprint(live);
+          if (fpAfter && fpAfter === fpBefore && fpAfter === _lastSoftListFp) return;
+          softRenderIfListChanged();
         }).catch(function () {});
       } catch (eP) {}
-    }, 8000);
+    }, 12000);
   }
 
   function saveActiveEvent() {
@@ -15132,7 +15211,7 @@
                 savePersonalBoard(board);
               }
             } catch (eSv) {}
-            try { appToast('Dropped — still on your list (not grabbed)'); } catch (eTd0) {}
+            try { appToast('Dropped — still needed'); } catch (eTd0) {}
             return 'rerender-only';
           }
           var savedDrop = afterGotItClaim(item, kind, scope, 0);
@@ -15142,24 +15221,37 @@
         } else if (action === 'got') {
           var need = Math.max(1, Number(item.qty) || 1);
           if (!item.claims) item.claims = {};
+          // #139: My checklist / personal — never ask “how many”; one tap claims full qty
+          var isPersGot = String(kind) === 'personal' || String(scope) === 'personal-board';
           // If fully gotten and I still have a claim, treat as Drop (safety)
           if (isItemAccounted(item) && myClaimQty(item) > 0) {
             clearMyClaimsOnItem(item);
             var savedAsDrop = afterGotItClaim(item, kind, scope, 0);
-            try { appToast('Dropped — back on the list'); } catch (eTd2) {}
+            try {
+              appToast(isPersGot ? 'Dropped — still needed' : 'Dropped — back on the list');
+            } catch (eTd2) {}
             if (savedAsDrop && (scope === 'free-list' || scope === 'personal-board')) return 'rerender-only';
-          } else if (need === 1) {
+          } else if (need === 1 || isPersGot) {
             var meG = myId();
             var nextQty = 0;
             if (myClaimQty(item) > 0) {
               clearMyClaimsOnItem(item);
               nextQty = 0;
             } else {
-              item.claims[meG] = 1;
-              nextQty = 1;
+              // Claim full remaining need in one tap (personal always; qty=1 always)
+              item.claims[meG] = need;
+              if (meG != null) item.claims[String(meG)] = need;
+              nextQty = need;
+              try {
+                if (typeof stampClaimMeta === 'function') stampClaimMeta(item, meG, need);
+              } catch (eSt) {}
             }
             // To buy → also add/update To bring; leave claim checked on buy
             var savedGot = afterGotItClaim(item, kind, scope, nextQty);
+            try {
+              if (isPersGot && nextQty > 0) appToast('Grabbed');
+              else if (isPersGot && nextQty === 0) appToast('Dropped — still needed');
+            } catch (eTg) {}
             // free-list already saved claims+bring; skip second save of a stale clone
             if (savedGot && scope === 'free-list') return 'rerender-only';
             if (savedGot && scope === 'personal-board') return 'rerender-only';

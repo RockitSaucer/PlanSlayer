@@ -1,0 +1,12 @@
+V1.3.66
+
+#139 My checklist
+- Got it! never asks “how many” on personal/checklist — one tap claims full qty → Already grabbed
+- Drop moves back to Still needed
+
+#142 Buttons flashing on refresh
+- Soft-poll only repaints when list fingerprint changes
+- Poll intervals slowed (14s events / 12s list pack)
+- Skip paint while expanded options, modals, or typing
+
+Shell: plan-slayer-shell-v93

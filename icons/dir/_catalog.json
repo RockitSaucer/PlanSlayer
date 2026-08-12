@@ -8,10 +8,17 @@
   },
   {
     "id": "boat",
-    "name": "boat",
+    "name": "Boat",
     "src": "icons/dir/boat.png",
     "defaultColor": "#1a1a1a",
-    "frontDeg": 0.0
+    "frontDeg": 270.0
+  },
+  {
+    "id": "boat_ramp",
+    "name": "Boat ramp",
+    "src": "icons/dir/boat_ramp.png",
+    "defaultColor": "#1a1a1a",
+    "frontDeg": 130.0
   },
   {
     "id": "bomb",
@@ -56,6 +63,20 @@
     "frontDeg": 0.0
   },
   {
+    "id": "house",
+    "name": "House",
+    "src": "icons/dir/house.png",
+    "defaultColor": "#1a1a1a",
+    "frontDeg": 315.0
+  },
+  {
+    "id": "kayak",
+    "name": "Kayak",
+    "src": "icons/dir/kayak.png",
+    "defaultColor": "#1a1a1a",
+    "frontDeg": 90.0
+  },
+  {
     "id": "prop_plane",
     "name": "prop plane",
     "src": "icons/dir/prop_plane.png",
@@ -77,11 +98,11 @@
     "frontDeg": 0.0
   },
   {
-    "id": "speed_boat",
-    "name": "Speed Boat",
-    "src": "icons/dir/speed_boat.png",
+    "id": "ski_boat",
+    "name": "Ski boat",
+    "src": "icons/dir/ski_boat.png",
     "defaultColor": "#1a1a1a",
-    "frontDeg": 0.0
+    "frontDeg": 90.0
   },
   {
     "id": "truck",

@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '8.0.24';
+  var APP_VERSION = '8.0.25';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -4918,14 +4918,53 @@
       try {
         list.eventId = String(ev.id);
         publishEventListBridge(Object.assign({}, list, { eventId: ev.id }));
-        var bag = loadJson(SLAYER_EVENT_LISTS_KEY, null) || {};
-        if (bag[String(ev.id)]) {
-          bag['hunt:' + huntId] = bag[String(ev.id)];
-          bag[String(ev.id)].huntEventId = huntId;
+        // Always build pack from the list (bag-only path could miss items)
+        packSnapshot = {
+          listId: String(list.id),
+          name: list.name || ((ev.name || 'Event') + ' · lists'),
+          eventId: String(ev.id),
+          huntEventId: String(huntId),
+          invite_code: list.invite_code || null,
+          eventName: ev.name || list.name || 'Event',
+          members: (list.members || []).map(function (m) {
+            return {
+              user_id: m.user_id,
+              display_name: m.display_name || m.username || 'Member',
+              role: m.role || 'member',
+              arrow_color: m.arrow_color || null
+            };
+          }),
+          columns: (list.columns || []).filter(function (c) {
+            return c && String(c.id) !== 'personal';
+          }).map(function (c) {
+            return {
+              id: c.id,
+              name: c.name || c.id,
+              items: (c.items || []).filter(function (it) { return it && it.title; }).map(function (it) {
+                return Object.assign({}, it);
+              }),
+              minimized: !!c.minimized,
+              colors: c.colors || null
+            };
+          }),
+          updated_at: list.updated_at || new Date().toISOString()
+        };
+        try {
+          var bag = loadJson(SLAYER_EVENT_LISTS_KEY, null) || {};
+          bag[String(ev.id)] = packSnapshot;
+          bag['hunt:' + String(huntId)] = packSnapshot;
+          bag['list:' + String(list.id)] = packSnapshot;
           saveJson(SLAYER_EVENT_LISTS_KEY, bag);
-          packSnapshot = bag[String(ev.id)];
-        }
+        } catch (eBag2) {}
       } catch (eP) {}
+    }
+    // Fallback: namedListPack already on the plan event
+    if ((!packSnapshot || !packSnapshot.columns || !packSnapshot.columns.length) &&
+        ev.state && ev.state.namedListPack && ev.state.namedListPack.columns) {
+      packSnapshot = Object.assign({}, ev.state.namedListPack, {
+        eventId: String(ev.id),
+        huntEventId: String(huntId)
+      });
     }
     var row = {
       id: huntId,

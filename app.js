@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '8.0.25';
+  var APP_VERSION = '8.0.26';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -4115,73 +4115,155 @@
     return ev;
   }
 
-  /** Populate Create Event “Select map” from Hunt/Reg Supabase membership. */
+  /** Create-event map picker — Hunt Currently-viewing style (names only, no codes). */
+  var _createMapCache = { pmaps: [], smaps: [], at: 0 };
+  var _createMapLabelByValue = {
+    personal: 'My Map',
+    all: 'No linked map'
+  };
+
+  function setCreateMapValue(value, label) {
+    var hid = $('create-select-map');
+    var btn = $('create-map-scope-btn');
+    var v = value || 'personal';
+    if (hid) hid.value = v;
+    var lab = label || _createMapLabelByValue[v] || 'My Map';
+    if (btn) btn.textContent = lab;
+    _createMapLabelByValue[v] = lab;
+  }
+
+  function closeCreateMapDropdown() {
+    var dd = $('create-map-dropdown');
+    if (dd) {
+      dd.classList.remove('is-open');
+      dd.hidden = true;
+    }
+  }
+
+  function openCreateMapDropdown() {
+    var dd = $('create-map-dropdown');
+    var btn = $('create-map-scope-btn');
+    if (!dd || !btn) return;
+    if (dd.classList.contains('is-open')) {
+      closeCreateMapDropdown();
+      return;
+    }
+    populateCreateMapSelect(hidCreateMapValue());
+    dd.hidden = false;
+    dd.classList.add('is-open');
+    setTimeout(function () {
+      document.addEventListener('click', _createMapOutside, true);
+    }, 0);
+  }
+
+  function _createMapOutside(e) {
+    var dd = $('create-map-dropdown');
+    var btn = $('create-map-scope-btn');
+    if (!dd || !dd.classList.contains('is-open')) return;
+    if (e && e.target && (dd.contains(e.target) || (btn && btn.contains(e.target)))) return;
+    closeCreateMapDropdown();
+    try { document.removeEventListener('click', _createMapOutside, true); } catch (eR) {}
+  }
+
+  function hidCreateMapValue() {
+    var hid = $('create-select-map');
+    return (hid && hid.value) || 'personal';
+  }
+
+  function paintCreateMapDropdown(pmaps, smaps, cur) {
+    var dd = $('create-map-dropdown');
+    if (!dd) return;
+    cur = cur || hidCreateMapValue();
+    var html = '';
+    function item(val, name) {
+      var on = String(val) === String(cur);
+      return '<button type="button" class="cmd-item' + (on ? ' is-current' : '') +
+        '" data-map-val="' + esc(val) + '" data-map-name="' + esc(name) + '" role="option">' +
+        esc(name) + (on ? ' · selected' : '') + '</button>';
+    }
+    html += item('personal', 'My Map');
+    html += item('all', 'No linked map');
+    html += '<div class="cmd-group">Not shared</div>';
+    if (!pmaps || !pmaps.length) {
+      html += '<div class="cmd-empty">No private maps</div>';
+    } else {
+      pmaps.forEach(function (m) {
+        if (!m || !m.id) return;
+        html += item('private:' + m.id, m.name || 'Private map');
+      });
+    }
+    html += '<div class="cmd-group">Shared</div>';
+    if (!smaps || !smaps.length) {
+      html += '<div class="cmd-empty">No shared maps</div>';
+    } else {
+      smaps.forEach(function (m) {
+        if (!m || !m.id) return;
+        // Name only — no invite codes (Hunt switcher parity)
+        html += item('shared:' + m.id, m.name || 'Shared map');
+      });
+    }
+    dd.innerHTML = html;
+    dd.querySelectorAll('.cmd-item').forEach(function (b) {
+      b.onclick = function (ev) {
+        if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+        var val = b.getAttribute('data-map-val');
+        var name = b.getAttribute('data-map-name') || 'My Map';
+        setCreateMapValue(val, name);
+        closeCreateMapDropdown();
+        try { document.removeEventListener('click', _createMapOutside, true); } catch (eR2) {}
+      };
+    });
+  }
+
+  /** Populate Create Event “Select map” from Hunt/Reg membership (Hunt UI). */
   function populateCreateMapSelect(selected) {
-    var sel = $('create-select-map');
-    if (!sel) return;
-    var cur = selected || sel.value || 'personal';
-    sel.innerHTML =
-      '<option value="personal">My personal map (this device / Plan pins)</option>' +
-      '<option value="all">No linked map</option>' +
-      '<option value="" disabled>—— Loading your maps… ——</option>';
+    var cur = selected || hidCreateMapValue() || 'personal';
+    setCreateMapValue(cur, _createMapLabelByValue[cur] || (cur === 'all' ? 'No linked map' : 'My Map'));
     var client = sb();
+    var btn = $('create-map-scope-btn');
+    if (btn && !btn._psMapWired) {
+      btn._psMapWired = true;
+      btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        openCreateMapDropdown();
+      });
+    }
+    // Paint cache immediately
+    if (_createMapCache.at && (Date.now() - _createMapCache.at) < 60000) {
+      paintCreateMapDropdown(_createMapCache.pmaps, _createMapCache.smaps, cur);
+    } else {
+      paintCreateMapDropdown([], [], cur);
+    }
     if (!client) {
-      sel.innerHTML =
-        '<option value="personal">My personal map</option>' +
-        '<option value="all">No linked map</option>' +
-        '<option value="" disabled>Sign in to load Hunt/Reg maps</option>';
+      paintCreateMapDropdown([], [], cur);
       return;
     }
     var pending = 2;
+    var pmaps = [];
+    var smaps = [];
     function finish() {
       pending--;
       if (pending > 0) return;
-      // remove loading row
-      for (var i = sel.options.length - 1; i >= 0; i--) {
-        if (sel.options[i].disabled && /Loading/i.test(sel.options[i].text)) {
-          sel.remove(i);
-        }
-      }
-      var found = false;
-      for (var j = 0; j < sel.options.length; j++) {
-        if (sel.options[j].value === cur) { sel.selectedIndex = j; found = true; break; }
-      }
-      if (!found) sel.value = 'personal';
+      _createMapCache = { pmaps: pmaps, smaps: smaps, at: Date.now() };
+      // Restore labels for known ids
+      pmaps.forEach(function (m) {
+        if (m && m.id) _createMapLabelByValue['private:' + m.id] = m.name || 'Private map';
+      });
+      smaps.forEach(function (m) {
+        if (m && m.id) _createMapLabelByValue['shared:' + m.id] = m.name || 'Shared map';
+      });
+      if (_createMapLabelByValue[cur]) setCreateMapValue(cur, _createMapLabelByValue[cur]);
+      paintCreateMapDropdown(pmaps, smaps, cur);
     }
     client.rpc('list_my_private_maps').then(function (res) {
-      var rows = (res && res.data) || [];
-      if (Array.isArray(rows) && rows.length) {
-        var g = document.createElement('option');
-        g.disabled = true;
-        g.textContent = '—— My private maps (Hunt/Reg) ——';
-        sel.appendChild(g);
-        rows.forEach(function (m) {
-          if (!m || !m.id) return;
-          var o = document.createElement('option');
-          o.value = 'private:' + m.id;
-          o.textContent = 'Private: ' + (m.name || 'Map');
-          if (m.name) o.setAttribute('data-map-name', m.name);
-          sel.appendChild(o);
-        });
-      }
+      pmaps = (res && res.data) || [];
+      if (!Array.isArray(pmaps)) pmaps = [];
       finish();
     }).catch(function () { finish(); });
     client.rpc('list_my_shared_maps').then(function (res) {
-      var rows = (res && res.data) || [];
-      if (Array.isArray(rows) && rows.length) {
-        var g = document.createElement('option');
-        g.disabled = true;
-        g.textContent = '—— Shared maps you are on ——';
-        sel.appendChild(g);
-        rows.forEach(function (m) {
-          if (!m || !m.id) return;
-          var o = document.createElement('option');
-          o.value = 'shared:' + m.id;
-          o.textContent = 'Shared: ' + (m.name || 'Map') + (m.code ? (' · ' + m.code) : '');
-          if (m.name) o.setAttribute('data-map-name', m.name);
-          sel.appendChild(o);
-        });
-      }
+      smaps = (res && res.data) || [];
+      if (!Array.isArray(smaps)) smaps = [];
       finish();
     }).catch(function () { finish(); });
   }
@@ -4205,11 +4287,10 @@
     ev.shared_map_id = ev.sharedMapId;
     ev.private_map_id = ev.privateMapId;
     ev.map_scope = ev.mapScope;
-    var sel = $('create-select-map');
-    if (sel && sel.selectedOptions && sel.selectedOptions[0]) {
-      var nm = sel.selectedOptions[0].getAttribute('data-map-name') ||
-        String(sel.selectedOptions[0].textContent || '').replace(/^(Shared|Private):\s*/, '').split(' · ')[0];
-      if (ev.sharedMapId || ev.privateMapId) ev.linkedMapName = nm;
+    var hid = $('create-select-map');
+    var v = hid && hid.value;
+    if (v && _createMapLabelByValue[v]) {
+      if (ev.sharedMapId || ev.privateMapId) ev.linkedMapName = _createMapLabelByValue[v];
       else ev.linkedMapName = null;
     }
   }

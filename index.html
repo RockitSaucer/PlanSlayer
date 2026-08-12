@@ -4016,6 +4016,81 @@
     #app-confirm-modal, #app-alert-modal, #app-prompt-modal {
       z-index: 50000 !important;
     }
+    /* Create-event Select map — Hunt-style list (no codes, 3D control) */
+    .create-map-scope-btn:hover {
+      filter: brightness(1.08);
+      border-color: rgba(229,154,24,0.75) !important;
+    }
+    .create-map-scope-btn:active {
+      transform: translateY(1px);
+    }
+    #create-map-dropdown {
+      display: none;
+      position: absolute;
+      z-index: 32000;
+      left: 0;
+      right: 0;
+      margin-top: 4px;
+      min-width: 100%;
+      max-height: min(50vh, 320px);
+      overflow-x: hidden;
+      overflow-y: auto;
+      padding: 6px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: rgba(14, 18, 12, 0.98);
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55);
+      box-sizing: border-box;
+      scrollbar-width: thin;
+      scrollbar-color: #1a1e16 #0a0c09;
+    }
+    #create-map-dropdown.is-open {
+      display: block !important;
+    }
+    #create-map-dropdown .cmd-group {
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      padding: 6px 8px 4px;
+    }
+    #create-map-dropdown .cmd-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      margin: 2px 0;
+      padding: 9px 10px;
+      border-radius: 7px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: #e8efe4;
+      font-size: 12px;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      box-sizing: border-box;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #create-map-dropdown .cmd-item:hover {
+      background: rgba(229, 154, 24, 0.12);
+      border-color: rgba(229, 154, 24, 0.35);
+    }
+    #create-map-dropdown .cmd-item.is-current {
+      background: rgba(229, 154, 24, 0.18);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    #create-map-dropdown .cmd-empty {
+      padding: 8px 10px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .field:has(#create-map-scope-btn) {
+      position: relative;
+    }
     /* How many / Got it qty must sit above mobile list sheet (#64) */
     #got-modal {
       z-index: 35000 !important;
@@ -4351,7 +4426,7 @@
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Outdoor trip planner</div>
       <div class="brand-sub">
-        <span class="ver-badge" id="ver-badge">V8.0.25</span>
+        <span class="ver-badge" id="ver-badge">V8.0.26</span>
       </div>
     </div>
     <div class="brand-right brand-header-actions">
@@ -5302,12 +5377,13 @@
         <p class="muted" style="font-size:11px;margin:6px 0 0">Dates: <span id="cal-selected">None</span> · tap start day, then end day</p>
       </div>
       <div class="field" style="margin-top:8px">
-        <label for="create-select-map">Select map</label>
-        <select id="create-select-map" style="width:100%;font-weight:700;border-color:var(--accent)">
-          <option value="personal">My personal map (this device / Plan pins)</option>
-          <option value="all">No linked map</option>
-        </select>
-        <p class="muted" style="font-size:10px;margin:4px 0 0;line-height:1.35">Maps you’re a member of on Hunt Slayer / Reg Slayer. Opening this event opens that map and its data when available.</p>
+        <label for="create-map-scope-btn">Select map</label>
+        <!-- Hunt-style map chooser (no invite codes in labels) -->
+        <button type="button" id="create-map-scope-btn" class="create-map-scope-btn" title="Same list as Hunt Currently viewing"
+          style="display:block;width:100%;margin-top:2px;padding:10px 12px;font-size:13px;box-sizing:border-box;font-weight:800;border:1px solid var(--accent);border-radius:8px;background:linear-gradient(180deg,#323c28 0%,#262e1e 45%,#1a2014 100%);color:var(--ink);cursor:pointer;text-align:left;font-family:inherit;box-shadow:0 1px 0 rgba(255,255,255,0.06) inset,0 2px 0 #0a0c09,0 3px 8px rgba(0,0,0,0.3);">My Map</button>
+        <input type="hidden" id="create-select-map" value="personal" />
+        <div id="create-map-dropdown" class="create-map-dropdown" role="listbox" aria-label="Your maps" hidden></div>
+        <p class="muted" style="font-size:10px;margin:4px 0 0;line-height:1.35">Maps you’re on in Hunt / Reg. Opening this event opens that map when available.</p>
       </div>
       <label class="check-row">
         <input type="checkbox" id="create-template" checked />

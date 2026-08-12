@@ -4,8 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#0a0c09" />
-  <meta name="description" content="PlanSlayer — group event planning lists, invites, expenses, and map." />
-  <title>PLAN SLAYER</title>
+  <!-- #101: family-safe outdoor trip planner wording (reduce false “adult” blocks) -->
+  <meta name="description" content="Plan Slayer — outdoor trip packing lists, shared calendars, expenses, and maps for hunting and camping." />
+  <meta name="rating" content="general" />
+  <meta name="robots" content="index,follow" />
+  <meta property="og:title" content="Plan Slayer — Outdoor trip planner" />
+  <meta property="og:description" content="Packing lists, trip calendars, shared expenses, and maps for outdoor trips." />
+  <meta property="og:type" content="website" />
+  <title>Plan Slayer — Outdoor trip planner</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" href="./icons/app/plan-192.png" />
   <link rel="apple-touch-icon" href="./icons/app/plan-180.png" />
@@ -3395,12 +3401,12 @@
     }
     .suggest-item:hover { background: rgba(229,154,24,0.12); }
 
-    /* Unified list item — slim like Got it! (#70); no per-item minimize */
+    /* #104: list rows ~ same height as Got it! */
     .list-col-body .list-item,
     .list-item {
       border: 1px solid #1a2014 !important;
       border-radius: 8px !important;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
       overflow: hidden;
       position: relative;
       box-shadow:
@@ -3411,29 +3417,48 @@
       user-select: none;
       color: var(--ink) !important;
       font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif !important;
-      min-height: 32px;
+      min-height: 0 !important;
     }
     .list-item .li-min-btn,
     .list-item [data-act="minimize"] { display: none !important; }
     .list-item .li-face,
     .list-item button.li-face,
     .list-item button.li-main {
-      padding-right: 8px !important;
+      padding: 4px 8px 4px 10px !important;
+      min-height: 0 !important;
+      height: auto !important;
     }
     .list-item .li-row {
-      min-height: 32px !important;
+      min-height: 0 !important;
+      height: auto !important;
       align-items: center !important;
+      gap: 4px !important;
+      padding: 0 !important;
     }
     .list-item .li-title {
-      font-size: 14px !important;
-      line-height: 1.2 !important;
+      font-size: 13px !important;
+      line-height: 1.15 !important;
+    }
+    .list-item .li-title-row { gap: 4px !important; }
+    .list-item .li-body-extra { display: none !important; } /* collapsed: face only; expand shows detail */
+    .list-item.is-expanded .li-body-extra { display: block !important; }
+    .list-item .li-actions {
+      padding: 2px 4px 2px 0 !important;
+      gap: 3px !important;
     }
     .list-item .li-actions .btn-got,
-    .list-item .li-actions .btn-expense {
-      min-height: 28px !important;
-      height: 28px !important;
+    .list-item .li-actions .btn-expense,
+    .list-item .li-actions .btn {
+      min-height: 26px !important;
+      height: 26px !important;
       padding: 0 8px !important;
       font-size: 10px !important;
+      line-height: 1 !important;
+    }
+    .list-item .chip {
+      font-size: 9px !important;
+      padding: 1px 5px !important;
+      margin-top: 0 !important;
     }
     .list-item:hover { filter: brightness(1.04); border-color: rgba(229,154,24,0.4) !important; }
     /* Don't wipe claimed/full glow on hover (rule above is weaker for these) */
@@ -4303,9 +4328,9 @@
   <header class="brand-header" role="banner">
     <div class="brand-logo-wrap">
       <div class="brand-title">Plan <span>Slayer</span></div>
-      <div class="brand-tagline">Plan, delegate, slay.</div>
+      <div class="brand-tagline">Outdoor trip planner</div>
       <div class="brand-sub">
-        <span class="ver-badge" id="ver-badge">V1.3.57</span>
+        <span class="ver-badge" id="ver-badge">V1.3.58</span>
       </div>
     </div>
     <div class="brand-right brand-header-actions">

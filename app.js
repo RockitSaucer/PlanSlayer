@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.57';
+  var APP_VERSION = '1.3.58';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -913,23 +913,27 @@
           .catch(function () { renderUnlessTypingInListAdd(); });
       }
     });
-    // Light poll while tab is open (multi-device / multi-user) — faster cross-device list refresh (#66)
+    // #103: poll cloud events + list packs so other members' edits appear while open
     setInterval(function () {
       if (document.visibilityState !== 'visible') return;
-      if (typeof resyncHuntEventsNow === 'function') {
+      if (typeof isTypingInListAdd === 'function' && isTypingInListAdd()) return;
+      // Prefer full loadEvents (pulls plan_events + applies namedListPack)
+      if (typeof loadEvents === 'function') {
+        loadEvents().then(function () {
+          renderUnlessTypingInListAdd();
+        }).catch(function () {
+          if (typeof resyncHuntEventsNow === 'function') {
+            resyncHuntEventsNow({ quiet: true }).then(function () {
+              renderUnlessTypingInListAdd();
+            }).catch(function () {});
+          }
+        });
+      } else if (typeof resyncHuntEventsNow === 'function') {
         resyncHuntEventsNow({ quiet: true }).then(function () {
-          try {
-            if (typeof loadFreeListsStore === 'function') loadFreeListsStore();
-            else if (typeof loadJson === 'function' && typeof LOCAL_FREE_LISTS_KEY !== 'undefined') {
-              /* store re-read happens inside findNamedListById / render paths */
-            }
-          } catch (eL) {}
           renderUnlessTypingInListAdd();
         }).catch(function () {});
-      } else if (typeof loadEvents === 'function') {
-        loadEvents().then(function () { renderUnlessTypingInListAdd(); }).catch(function () {});
       }
-    }, 4000);
+    }, 3500);
     // After leaving an add box, apply any sync re-render we deferred
     if (!document._psListAddFocusFlush) {
       document._psListAddFocusFlush = true;
@@ -3134,9 +3138,9 @@
       }
       var localItems = existing ? countPackItems(existing.columns) : 0;
       var cloudItems = countPackItems(pack.columns);
-      // Prefer cloud only when clearly newer AND not wiping a richer local list
+      // #103: prefer cloud when clearly newer; never wipe local if cloud empty
       var cloudWins = !existing ||
-        (cloudUpdated > localUpdated + 1500 && !(localItems > 0 && cloudItems === 0));
+        (cloudUpdated > localUpdated + 400 && !(localItems > 0 && cloudItems === 0));
       if (cloudWins) {
         // Keep local members that cloud pack might have dropped after a race
         var members = pack.members || [];
@@ -6128,11 +6132,9 @@
           '<div class="field-row">' +
             '<div class="field field-grow"><label>Item name</label><input data-f="title" value="' + esc(item.title) + '" style="text-transform:capitalize" autocomplete="off"' + lockAttr + ' /></div>' +
             '<div class="field field-sm"><label>Qty</label>' +
-              '<div class="qty-stepper qty-stepper-detail" title="How many">' +
-                '<button type="button" data-act="qty-dec"' + lockAttr + ' aria-label="Decrease quantity">−</button>' +
-                '<input data-f="qty" type="number" min="1" step="1" value="' + (item.qty || 1) + '"' + lockAttr + ' />' +
-                '<button type="button" data-act="qty-inc"' + lockAttr + ' aria-label="Increase quantity">+</button>' +
-              '</div></div>' +
+              '<input data-f="qty" type="number" min="1" step="1" inputmode="numeric" pattern="[0-9]*" ' +
+                'value="' + (item.qty || 1) + '" title="How many" style="width:100%;text-align:center;font-weight:800;"' +
+                lockAttr + ' /></div>' +
             '<div class="field field-md"><label>Category</label><select data-f="qualifier" data-cat-select' + lockAttr + '>' + qOpts + '</select></div>' +
             '<div class="field field-sm"><label>Priority</label>' +
               '<select data-f="priority"' + lockAttr + '>' +
@@ -13199,6 +13201,8 @@
         var rowCh = detail.closest('.list-item.is-expanded');
         if (!rowCh) return;
         if (!t.matches || !t.matches('[data-f], [data-share-id]')) return;
+        // #102: qty commits on blur only (avoid spinner intermediate → 1)
+        if (t.getAttribute('data-f') === 'qty') return;
         // __add_category__ opens a modal — don't commit yet
         if (t.getAttribute('data-f') === 'qualifier' && t.value === '__add_category__') {
           var metaAdd = findItemFromRow(rowCh);
@@ -14786,19 +14790,6 @@
           // legacy: redirect to item template
           saveItemTemplate(item);
           appToast('Item template saved');
-          return 'abort';
-        } else if (action === 'qty-inc' || action === 'qty-dec') {
-          // #94: reliable qty steppers in item options
-          var qEl = row.querySelector('[data-f="qty"]');
-          var cur = Math.max(1, parseInt(item.qty, 10) || 1);
-          if (qEl && String(qEl.value || '').trim() !== '') {
-            var parsed = parseInt(qEl.value, 10);
-            if (!isNaN(parsed) && parsed >= 1) cur = parsed;
-          }
-          var next = action === 'qty-inc' ? cur + 1 : Math.max(1, cur - 1);
-          item.qty = next;
-          if (qEl) qEl.value = String(next);
-          try { persistItemByMeta(kind, scope, id, row); } catch (eQ) {}
           return 'abort';
         } else if (action === 'expand' || action === 'face') {
           // #70 — item minimize removed; always toggle options

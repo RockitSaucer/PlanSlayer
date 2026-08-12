@@ -1,7 +1,7 @@
 {
-  "name": "PLAN SLAYER",
+  "name": "Plan Slayer",
   "short_name": "PlanSlayer",
-  "description": "Group event planning — lists, expenses, invites, and a simple map.",
+  "description": "Outdoor trip packing lists, shared calendars, expenses, and maps.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

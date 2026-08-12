@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.47';
+  var APP_VERSION = '1.3.53';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -15,8 +15,15 @@
   /** Legacy key (migrated once into LOCAL_CHORES_KEY) */
   var LOCAL_STANDALONE_CHORES_KEY = 'plan_slayer_standalone_chores_v1';
   var DEFAULT_COL_COLORS = { font: '#f0f4ee', tab: '#2a3222', bg: '#0a0c09' };
-  var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea', '#f0f4ee', '#161a12', '#0a0c09', '#d94136'];
+  /** Hunt Slayer shared palette (same as map pin / location marker presets) */
+  var COL_COLOR_PRESETS = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15', '#e59a18', '#16a34a', '#9333ea'];
+  var ME_COLOR_PRESETS_FIXED = ['#000000', '#ffffff', '#2563eb', '#dc2626', '#facc15'];
+  var ME_COLOR_PRESETS_SEED = ['#e59a18', '#16a34a', '#9333ea'];
+  var ME_CUSTOM_COLORS_KEY = 'plan_slayer_my_custom_colors_v1';
   var LOCAL_ME_COLOR_KEY = 'plan_slayer_my_color_v1';
+  /** Pending color in user settings until Save (Close ↔ Save) */
+  var _userSettingsPendingColor = null;
+  var _userSettingsDirty = false;
   /** Cross-tab / multi-device delete + change signal */
   var LOCAL_SYNC_KEY = 'plan_slayer_sync_v1';
   var LOCAL_TOMBSTONES_KEY = 'plan_slayer_tombstones_v1';
@@ -101,6 +108,20 @@
     /** Hunt calendar kit: optional map pin filter + Quick Load */
     eventPinsFilter: null, // { eventId, name } | null
     mapContext: 'auto', // auto | personal | event:<id> — party/shared map switcher
+    /**
+     * Which map layer is open on the dock (Hunt-style switcher).
+     * mode: plan | private | shared | event
+     * Hunt/Reg maps load map_state pins + customAreas (no deer overlays).
+     */
+    mapViewing: {
+      mode: 'plan',
+      id: null,
+      name: 'Plan personal map',
+      pins: null,
+      customAreas: null,
+      kind: null
+    },
+    _mapSwitcherCache: { pmaps: [], smaps: [], at: 0 },
     /** Left column top tabs: personal lists vs events (+ event-linked lists) */
     leftTab: 'lists', // lists | events
     /** Map: when true, show pins from all events + personal; false = current context only */
@@ -1043,21 +1064,92 @@
     } catch (eP) {}
     return true;
   }
+  function loadMyRecentCustomColors() {
+    try {
+      var arr = JSON.parse(localStorage.getItem(ME_CUSTOM_COLORS_KEY) || '[]');
+      if (!Array.isArray(arr)) return [];
+      return arr.map(normalizeHexColor).filter(Boolean).slice(0, 3);
+    } catch (e) { return []; }
+  }
+  function saveMyRecentCustomColor(hex) {
+    hex = normalizeHexColor(hex);
+    if (!hex) return;
+    if (ME_COLOR_PRESETS_FIXED.indexOf(hex) >= 0 || ME_COLOR_PRESETS_SEED.indexOf(hex) >= 0) return;
+    var list = loadMyRecentCustomColors().filter(function (c) { return c !== hex; });
+    list.unshift(hex);
+    try { localStorage.setItem(ME_CUSTOM_COLORS_KEY, JSON.stringify(list.slice(0, 3))); } catch (e) {}
+  }
+  /** Hunt-style row: fixed 5 + up to 3 custom/seed trailing slots */
+  function getMyColorPresetRow() {
+    var custom = loadMyRecentCustomColors();
+    var row = ME_COLOR_PRESETS_FIXED.slice();
+    for (var i = 0; i < 3; i++) row.push(custom[i] || ME_COLOR_PRESETS_SEED[i] || '#888888');
+    return row;
+  }
   function renderMyColorPicker(selected) {
     selected = normalizeHexColor(selected) || myColor();
     var row = $('user-color-swatches');
     if (row) {
-      row.innerHTML = COL_COLOR_PRESETS.map(function (c) {
+      row.innerHTML = getMyColorPresetRow().map(function (c) {
         var on = normalizeHexColor(c) === selected;
-        return '<button type="button" class="col-swatch' + (on ? ' selected' : '') +
+        return '<button type="button" class="cp-swatch' + (on ? ' selected' : '') +
           '" data-my-color="' + c + '" style="background:' + c +
-          (c === '#ffffff' || c === '#f0f4ee' ? ';box-shadow:inset 0 0 0 1px #666' : '') +
+          (c === '#ffffff' ? ';box-shadow:inset 0 0 0 1px #666' : '') +
           '" title="' + c + '"></button>';
       }).join('');
     }
     if ($('user-color-wheel')) $('user-color-wheel').value = selected;
     if ($('user-color-preview')) $('user-color-preview').style.background = selected;
     if ($('user-color-value')) $('user-color-value').textContent = selected;
+  }
+  /** Close stays Close until a color is picked; then it becomes Save (primary). */
+  function syncUserSettingsCloseSaveBtn() {
+    var btn = $('user-settings-cancel');
+    if (!btn) return;
+    if (_userSettingsDirty) {
+      btn.textContent = 'Save';
+      btn.classList.add('btn-primary');
+      btn.setAttribute('data-mode', 'save');
+    } else {
+      btn.textContent = 'Close';
+      btn.classList.remove('btn-primary');
+      btn.setAttribute('data-mode', 'close');
+    }
+  }
+  function setUserSettingsPendingColor(hex) {
+    hex = normalizeHexColor(hex);
+    if (!hex) return;
+    _userSettingsPendingColor = hex;
+    _userSettingsDirty = true;
+    if (ME_COLOR_PRESETS_FIXED.indexOf(hex) < 0 && ME_COLOR_PRESETS_SEED.indexOf(hex) < 0) {
+      saveMyRecentCustomColor(hex);
+    }
+    renderMyColorPicker(hex);
+    syncUserSettingsCloseSaveBtn();
+  }
+  function saveUserSettingsFromModal() {
+    var nick = ($('user-settings-nick') && $('user-settings-nick').value) || '';
+    var nickOk = true;
+    if (String(nick || '').trim()) {
+      nickOk = applyNicknameEverywhere(nick);
+      if (!nickOk) {
+        appToast('Enter a nickname');
+        return false;
+      }
+      if ($('user-chip-btn')) $('user-chip-btn').textContent = myName();
+    }
+    if (_userSettingsPendingColor) {
+      if (applyMyColor(_userSettingsPendingColor)) {
+        renderMyColorPicker(_userSettingsPendingColor);
+      }
+    }
+    _userSettingsPendingColor = null;
+    _userSettingsDirty = false;
+    syncUserSettingsCloseSaveBtn();
+    appToast('Settings saved');
+    closeUserSettingsModal();
+    try { render(); } catch (eR) {}
+    return true;
   }
 
   function loadPersonalBoard() {
@@ -1995,6 +2087,54 @@
     return col;
   }
   /**
+   * After cloud pull (or open on a second device), rebuild My checklist + Personal {Event}
+   * from claims on the shared pack so phone matches desktop without device-only storage.
+   */
+  function rebuildMyChecklistFromClaims(list) {
+    if (!list || isPersonalEventShadowList(list)) return false;
+    if (!listWantsPersonalChecklist(list) && !list.eventId) return false;
+    var me = String(myId() || 'local');
+    var any = false;
+    try { ensurePersonalColumn(list); } catch (eE) {}
+    (list.columns || []).forEach(function (c) {
+      if (!c || String(c.id) === 'personal') return;
+      (c.items || []).forEach(function (it) {
+        if (!it || !it.id) return;
+        var q = 0;
+        try { q = Number((it.claims || {})[me] || 0); } catch (eQ) { q = 0; }
+        if (q > 0) {
+          any = true;
+          try { syncClaimToPrivateChecklist(list, it, q, c.id); } catch (e1) {}
+          try { syncClaimToPersonalEventList(list, it, q, c.id); } catch (e2) {}
+        }
+      });
+    });
+    if (any) {
+      try { saveNamedList(list); } catch (eS) {}
+    } else if (list.eventId || listWantsPersonalChecklist(list)) {
+      // Still ensure empty Personal {Event} shell exists so parity with desktop structure
+      try {
+        var evHint = resolveEventForList(list) || activeEvent();
+        if (evHint) ensurePersonalEventList(evHint, list);
+        else ensurePersonalEventList(null, list);
+      } catch (eP) {}
+    }
+    return any;
+  }
+  /** Rebuild personal checklists for every packing pack (login / cloud load). */
+  function rebuildAllMyChecklistsFromClaims() {
+    try {
+      (allMyLists() || []).forEach(function (n) {
+        try {
+          if (!n || isPersonalEventShadowList(n)) return;
+          if (n.eventId || listWantsPersonalChecklist(n)) rebuildMyChecklistFromClaims(n);
+        } catch (eOne) {}
+      });
+    } catch (eAll) {
+      console.warn('rebuildAllMyChecklistsFromClaims', eAll);
+    }
+  }
+  /**
    * When I Got it! on To do / To buy / To bring, mirror into my private checklist
    * (device-local) AND the list’s personal column so it always shows under My checklist.
    */
@@ -2920,7 +3060,10 @@
         listId: String(list.id),
         name: list.name || 'List',
         members: list.members || [],
-        columns: (list.columns || []).map(function (c) {
+        // Shared pack only — never put private My checklist rows in the cloud pack
+        columns: (list.columns || []).filter(function (c) {
+          return c && String(c.id) !== 'personal';
+        }).map(function (c) {
           return {
             id: c.id,
             name: c.name,
@@ -3942,6 +4085,11 @@
         };
         state.mapContext = 'event:' + ev.id;
         state.showAllPins = false;
+        // Align on-map switcher chip with linked Hunt/Reg map
+        applyViewingMapState(kind, mapId, res.data.name || ev.linkedMapName || 'Map', {
+          pins: pins,
+          customAreas: (st.customAreas || [])
+        });
         setMapMode(state.mapMode === 'button' ? 'mini' : (state.mapMode || 'mini'));
         try { configurePlanMap(); if (window.PlanMap) { window.PlanMap.ensure(); window.PlanMap.redraw(); } } catch (eM) {}
         if (ev.lat != null && ev.lng != null && window.PlanMap && window.PlanMap.getMap) {
@@ -4241,8 +4389,14 @@
         try { ensureAssociatedListForEvent(e); } catch (e2) {}
       }
     });
+    // Phone/desktop parity: rebuild My checklist + Personal {Event} from shared claims
+    try { rebuildAllMyChecklistsFromClaims(); } catch (eRbAll) {}
     fillTypeDatalist();
     render();
+    // Refresh party location dots from cloud event.state.shareLocations
+    try {
+      if (window.PlanMap && typeof window.PlanMap.redraw === 'function') window.PlanMap.redraw();
+    } catch (eMap) {}
   }
 
   /** Manual / visibility re-sync for mobile when Hunt has events Plan doesn't */
@@ -4922,17 +5076,32 @@
       return;
     }
     sanitizeNamedList(list);
-    // Event packs: ensure personal claim list exists (empty until Got it!)
+    // Same as desktop: My checklist column + Personal {Event} list for packing packs
     try {
-      if (list.eventId || (ev && ev.id)) {
+      if (listWantsPersonalChecklist(list) || list.eventId || (ev && ev.id)) {
+        ensurePersonalColumn(list);
+      }
+    } catch (ePcM) {}
+    try {
+      if (list.eventId || (ev && ev.id) || listWantsPersonalChecklist(list)) {
         var evForP = resolveEventForList(list) || ev;
         if (evForP) ensurePersonalEventList(evForP, list);
+        else ensurePersonalEventList(null, list);
       }
     } catch (ePe) {}
+    // Once per open: rebuild My checklist / Personal list from live claims (cloud has shared pack)
+    try {
+      if (!state._healedChecklist) state._healedChecklist = {};
+      var healKey = String(list.id || '');
+      if (healKey && !state._healedChecklist[healKey]) {
+        state._healedChecklist[healKey] = true;
+        rebuildMyChecklistFromClaims(list);
+      }
+    } catch (eRb) {}
     if ($('mls-title')) {
       $('mls-title').textContent = list.name || (ev && ev.name) || 'List';
     }
-    // Section jump tabs (same columns as desktop triad)
+    // Section jump tabs — include My checklist (was hidden on mobile)
     var tabs = $('mls-tabs');
     if (tabs) {
       var activeTab = state.listTab || (list.columns[0] && list.columns[0].id) || 'todo';
@@ -4941,14 +5110,19 @@
         state.listTab = activeTab;
       }
       tabs.innerHTML = (list.columns || []).map(function (c) {
-        if (!c || String(c.id) === 'personal') return '';
+        if (!c) return '';
         var on = String(c.id) === String(activeTab);
         var count = 0;
         try {
-          var ci = Array.isArray(c.items) ? c.items : [];
-          count = ci.filter(function (it) { return it && typeof it === 'object'; }).length;
+          if (String(c.id) === 'personal') {
+            count = collectMyClaimedItems(list).length;
+          } else {
+            var ci = Array.isArray(c.items) ? c.items : [];
+            count = ci.filter(function (it) { return it && typeof it === 'object'; }).length;
+          }
         } catch (eC) {}
         return '<button type="button" class="mls-tab' + (on ? ' is-active' : '') +
+          (String(c.id) === 'personal' ? ' mls-tab-personal' : '') +
           '" data-mls-tab="' + esc(c.id) + '">' + esc(c.name || listKindLabel(c.id)) +
           (count ? (' · ' + count) : '') + '</button>';
       }).join('');
@@ -4986,10 +5160,11 @@
         body.innerHTML = '<p class="empty">Could not render list. Try reopening.</p>';
       }
       try { wireListColumnUi(list); } catch (eW) {}
-      // Scroll to active section when jumping via tabs
+      // Scroll to active section only when user explicitly changed tab (#76 — no auto jump on refresh)
       try {
         var want = state.listTab;
-        if (want) {
+        if (want && state._scrollListTabOnce) {
+          state._scrollListTabOnce = false;
           var colEl = body.querySelector('.list-col[data-col-kind="' + String(want).replace(/"/g, '') + '"]');
           if (colEl && colEl.scrollIntoView) colEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
         }
@@ -6463,6 +6638,7 @@
   function renderMapContextBar() {
     var el = $('map-context-bar');
     if (!el) return;
+    // Left stack context chips stay as quick filters; main switcher is on-map chip
     var parts = [
       { id: 'auto', label: 'Auto' },
       { id: 'personal', label: 'Personal map' }
@@ -6476,6 +6652,279 @@
       return '<button type="button" class="map-ctx-btn' + on + '" data-map-ctx="' + esc(p.id) + '">' +
         esc(p.label) + '</button>';
     }).join('');
+    updateMapViewingChip();
+  }
+
+  function currentMapViewingLabel() {
+    var v = state.mapViewing || {};
+    if (v.name && String(v.name).trim()) return String(v.name).trim();
+    if (v.mode === 'shared') return 'Shared map';
+    if (v.mode === 'private') return 'Private map';
+    if (v.mode === 'event') return 'Event map';
+    return 'Plan personal map';
+  }
+  function updateMapViewingChip() {
+    var btn = $('map-viewing-chip');
+    if (!btn) return;
+    var label = currentMapViewingLabel();
+    btn.textContent = label;
+    btn.title = 'Viewing: ' + label + ' — tap to switch maps';
+    btn.setAttribute('aria-label', 'Map: ' + label + '. Click to switch.');
+    var sub = $('map-viewing-chip-sub');
+    if (sub) {
+      var v = state.mapViewing || {};
+      if (v.mode === 'shared') sub.textContent = 'Shared · Hunt/Reg';
+      else if (v.mode === 'private') sub.textContent = 'Private · Hunt/Reg';
+      else if (v.mode === 'event') sub.textContent = 'Event pins';
+      else sub.textContent = 'Plan pins';
+    }
+  }
+  function closeMapViewingSwitcher() {
+    var dd = $('map-viewing-dropdown');
+    if (dd) {
+      dd.classList.remove('open');
+      dd.setAttribute('aria-hidden', 'true');
+    }
+    var chip = $('map-viewing-chip');
+    if (chip) chip.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('click', _mapViewingOutside, true);
+  }
+  function _mapViewingOutside(ev) {
+    var dd = $('map-viewing-dropdown');
+    if (!dd || !dd.classList.contains('open')) return;
+    if (dd.contains(ev.target)) return;
+    if (ev.target && ev.target.closest && ev.target.closest('#map-viewing-chip-wrap')) return;
+    closeMapViewingSwitcher();
+  }
+  async function fetchHuntRegMapLists() {
+    var client = sb();
+    var out = { pmaps: [], smaps: [] };
+    if (!client) return out;
+    try {
+      var pr = await client.rpc('list_my_private_maps');
+      out.pmaps = (pr && pr.data) || [];
+    } catch (eP) { out.pmaps = []; }
+    try {
+      var sr = await client.rpc('list_my_shared_maps');
+      out.smaps = (sr && sr.data) || [];
+    } catch (eS) { out.smaps = []; }
+    state._mapSwitcherCache = { pmaps: out.pmaps, smaps: out.smaps, at: Date.now() };
+    return out;
+  }
+  function buildMapViewingDropdownHtml(pmaps, smaps) {
+    var v = state.mapViewing || {};
+    function item(mode, id, name, meta) {
+      var on = v.mode === mode && (
+        (mode === 'plan' && !v.id) ||
+        (id != null && String(v.id) === String(id))
+      );
+      return '<button type="button" class="mvd-item' + (on ? ' is-on' : '') +
+        '" data-view-mode="' + esc(mode) + '" data-view-id="' + esc(id || '') +
+        '" data-view-name="' + esc(name || '') + '">' +
+        '<span class="mvd-name">' + esc(name) + '</span>' +
+        (meta ? '<span class="mvd-meta">' + esc(meta) + '</span>' : '') +
+        '</button>';
+    }
+    var html = '';
+    html += '<div class="mvd-group">Plan Slayer</div>';
+    html += item('plan', '', 'Plan personal map', 'This app’s pins');
+    (state.events || []).slice(0, 12).forEach(function (e) {
+      if (!e || !e.id) return;
+      html += item('event', e.id, e.name || 'Event', 'Event pins');
+    });
+    html += '<div class="mvd-group">Private maps (Hunt/Reg)</div>';
+    if (!pmaps || !pmaps.length) {
+      html += '<div class="mvd-empty">No private maps · create one in Hunt or Reg</div>';
+    } else {
+      pmaps.forEach(function (m) {
+        if (!m || !m.id) return;
+        html += item('private', m.id, m.name || 'Private map', 'Pins & areas');
+      });
+    }
+    html += '<div class="mvd-group">Shared maps (Hunt/Reg)</div>';
+    if (!smaps || !smaps.length) {
+      html += '<div class="mvd-empty">No shared maps · join one in Hunt or Reg</div>';
+    } else {
+      smaps.forEach(function (m) {
+        if (!m || !m.id) return;
+        html += item('shared', m.id, m.name || 'Shared map', m.code ? ('Code ' + m.code) : 'Party map');
+      });
+    }
+    return html;
+  }
+  async function openMapViewingSwitcher() {
+    var dd = $('map-viewing-dropdown');
+    var chip = $('map-viewing-chip');
+    if (!dd) return;
+    if (dd.classList.contains('open')) {
+      closeMapViewingSwitcher();
+      return;
+    }
+    // Open map if minimized
+    if (state.mapMode === 'button') setMapMode('mini');
+    var cache = state._mapSwitcherCache || {};
+    var fresh = cache.at && (Date.now() - cache.at) < 45000;
+    dd.innerHTML = fresh
+      ? buildMapViewingDropdownHtml(cache.pmaps, cache.smaps)
+      : '<div class="mvd-empty">Loading maps…</div>';
+    dd.classList.add('open');
+    dd.setAttribute('aria-hidden', 'false');
+    if (chip) chip.setAttribute('aria-expanded', 'true');
+    setTimeout(function () {
+      document.addEventListener('click', _mapViewingOutside, true);
+    }, 0);
+    try {
+      var lists = await fetchHuntRegMapLists();
+      if (!dd.classList.contains('open')) return;
+      dd.innerHTML = buildMapViewingDropdownHtml(lists.pmaps, lists.smaps);
+    } catch (e) {
+      if (!dd.querySelector('.mvd-item')) {
+        dd.innerHTML = '<div class="mvd-empty">Could not load maps — sign in?</div>';
+      }
+    }
+  }
+  /**
+   * Load Hunt/Reg map_state (pins + customAreas only — no deer/WMA overlays).
+   */
+  function applyViewingMapState(kind, id, name, mapState) {
+    mapState = mapState || {};
+    // Pins only — strip hunt-only junk fields that Plan pin renderer ignores
+    var pins = Array.isArray(mapState.pins) ? mapState.pins.filter(function (p) {
+      return p && p.lat != null && p.lng != null;
+    }).map(function (p) {
+      // Normalize Hunt pin shape → Plan pin shape
+      return {
+        id: p.id || uid(),
+        lat: Number(p.lat),
+        lng: Number(p.lng),
+        name: p.name || p.title || 'Pin',
+        notes: p.notes || '',
+        iconId: p.iconId || p.icon || p.pinIcon || null,
+        color: p.color || p.outerColor || p.pinColor || '#e59a18',
+        innerColor: p.innerColor || '#ffffff',
+        glyphColor: p.glyphColor || p.iconColor || 'natural',
+        photos: p.photos || [],
+        hidden: !!p.hidden,
+        fromHuntMap: true
+      };
+    }) : [];
+    var areas = Array.isArray(mapState.customAreas) ? mapState.customAreas : [];
+    state.mapViewing = {
+      mode: kind === 'shared' ? 'shared' : (kind === 'private' ? 'private' : kind),
+      id: id ? String(id) : null,
+      name: name || (kind === 'shared' ? 'Shared map' : 'Private map'),
+      pins: pins,
+      customAreas: areas,
+      kind: kind,
+      rawState: mapState
+    };
+    state.showAllPins = false;
+    if (kind === 'event') {
+      state.mapContext = 'event:' + String(id);
+    } else if (kind === 'plan') {
+      state.mapContext = 'personal';
+    }
+    updateMapViewingChip();
+    configurePlanMap();
+    if (window.PlanMap) {
+      window.PlanMap.ensure();
+      window.PlanMap.redraw();
+    }
+  }
+  /** Write pin list back to Hunt/Reg map_state (preserve customAreas / other keys). */
+  function pushPinsToHuntRegMap(mode, mapId, pins, rawState) {
+    var client = sb();
+    if (!client || !mapId) return;
+    var table = mode === 'shared' ? 'shared_maps' : 'private_maps';
+    var next = Object.assign({}, rawState || {});
+    next.pins = pins || [];
+    if (!next.meta) next.meta = {};
+    next.meta.savedAt = new Date().toISOString();
+    next.meta.from = 'planslayer';
+    client.from(table).update({ map_state: next, updated_at: new Date().toISOString() })
+      .eq('id', mapId)
+      .then(function (res) {
+        if (res && res.error) {
+          console.warn('pushPinsToHuntRegMap', res.error);
+          appToast('Could not save pins to Hunt/Reg map');
+        } else {
+          if (state.mapViewing) state.mapViewing.rawState = next;
+        }
+      }).catch(function (e) {
+        console.warn('pushPinsToHuntRegMap', e);
+      });
+  }
+
+  async function selectMapViewing(mode, id, name) {
+    mode = String(mode || 'plan');
+    closeMapViewingSwitcher();
+    if (state.mapMode === 'button') setMapMode('mini');
+    if (mode === 'plan') {
+      state.mapViewing = {
+        mode: 'plan', id: null, name: 'Plan personal map',
+        pins: null, customAreas: null, kind: 'plan'
+      };
+      state.mapContext = 'personal';
+      state.showAllPins = false;
+      updateMapViewingChip();
+      configurePlanMap();
+      if (window.PlanMap) { window.PlanMap.ensure(); window.PlanMap.redraw(); }
+      appToast('Viewing Plan personal map');
+      return;
+    }
+    if (mode === 'event') {
+      var ev = (state.events || []).find(function (e) { return String(e.id) === String(id); });
+      var pins = (ev && ev.state && ev.state.mapPins) || [];
+      applyViewingMapState('event', id, name || (ev && ev.name) || 'Event', { pins: pins, customAreas: [] });
+      if (ev && ev.lat != null && window.PlanMap && window.PlanMap.getMap) {
+        try { window.PlanMap.getMap().setView([Number(ev.lat), Number(ev.lng)], 13); } catch (e) {}
+      }
+      appToast('Viewing event map: ' + (name || 'Event'));
+      return;
+    }
+    var client = sb();
+    if (!client) {
+      appToast('Sign in to open Hunt/Reg maps');
+      return;
+    }
+    var table = mode === 'shared' ? 'shared_maps' : 'private_maps';
+    appToast('Loading map…');
+    try {
+      var res = await client.from(table).select('id, name, map_state, code').eq('id', id).maybeSingle();
+      if (res.error || !res.data) {
+        appToast('Map not found — open it once in Hunt/Reg');
+        return;
+      }
+      var st = res.data.map_state || {};
+      // Never load deer/WMA-only layers — only pins + custom areas
+      applyViewingMapState(mode, res.data.id, res.data.name || name, {
+        pins: st.pins || [],
+        customAreas: st.customAreas || []
+      });
+      // Fit pins/areas if possible
+      try {
+        var map = window.PlanMap && window.PlanMap.getMap && window.PlanMap.getMap();
+        if (map) {
+          var bounds = [];
+          (state.mapViewing.pins || []).forEach(function (p) {
+            if (p && p.lat != null) bounds.push([p.lat, p.lng]);
+          });
+          (state.mapViewing.customAreas || []).forEach(function (a) {
+            var ring = a && (a.ring || a.latlngs);
+            if (!ring) return;
+            ring.forEach(function (pt) {
+              if (Array.isArray(pt) && pt.length >= 2) bounds.push([pt[0], pt[1]]);
+              else if (pt && pt.lat != null) bounds.push([pt.lat, pt.lng]);
+            });
+          });
+          if (bounds.length) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+        }
+      } catch (eFit) {}
+      appToast('Viewing: ' + (res.data.name || name || 'map') + ' (pins & areas · no deer layers)');
+    } catch (eLoad) {
+      console.warn('selectMapViewing', eLoad);
+      appToast('Could not load map');
+    }
   }
 
   function closeQuickLoadModal() {
@@ -6671,6 +7120,7 @@
         ensureMap();
       }
       updateMapPinFilterBtn();
+      try { updateMapViewingChip(); } catch (eC) {}
     } else {
       updateMapPinFilterBtn();
     }
@@ -6712,7 +7162,24 @@
       getBasemapKey: function () {
         return (window.PlanMap && window.PlanMap.getMap) ? (state.basemapKey || 'topo') : 'topo';
       },
+      ensureMapOpen: function () {
+        if (state.mapMode === 'button') setMapMode('mini');
+        else if (state.mapMode !== 'mini' && state.mapMode !== 'max') setMapMode('mini');
+      },
+      getCustomAreas: function () {
+        var v = state.mapViewing;
+        if (v && (v.mode === 'private' || v.mode === 'shared') && Array.isArray(v.customAreas)) {
+          return v.customAreas;
+        }
+        return [];
+      },
       getPins: function () {
+        var v = state.mapViewing;
+        // Explicit Hunt/Reg / event viewing from map switcher
+        if (v && (v.mode === 'private' || v.mode === 'shared') && Array.isArray(v.pins)) {
+          return v.pins;
+        }
+        if (v && v.mode === 'event' && Array.isArray(v.pins)) return v.pins;
         // Linked Hunt/Reg map overlay for the open event
         if (state._linkedMapOverlay && state._linkedMapOverlay.pins &&
             state.activeEventId && String(state._linkedMapOverlay.eventId) === String(state.activeEventId)) {
@@ -6750,6 +7217,24 @@
         return pinsForMapContext();
       },
       savePins: function (pins) {
+        var v = state.mapViewing;
+        // Saving while viewing Hunt/Reg map → push pins into that map_state (keep areas)
+        if (v && (v.mode === 'private' || v.mode === 'shared') && v.id) {
+          v.pins = pins || [];
+          pushPinsToHuntRegMap(v.mode, v.id, pins || [], v.rawState || {});
+          return;
+        }
+        if (v && v.mode === 'event' && v.id) {
+          var eEv = (state.events || []).find(function (x) { return String(x.id) === String(v.id); });
+          if (eEv) {
+            if (!eEv.state) eEv.state = {};
+            eEv.state.mapPins = pins || [];
+            v.pins = pins || [];
+            persistLocal();
+            cloudSaveEvent(eEv);
+          }
+          return;
+        }
         // Stamp eventId when saving under an event
         var stampId = null;
         if (state.eventPinsFilter && state.eventPinsFilter.eventId) stampId = state.eventPinsFilter.eventId;
@@ -6889,22 +7374,46 @@
         if (ev && !ev._personalOnly) {
           if (!ev.state) ev.state = {};
           if (!ev.state.shareLocations) ev.state.shareLocations = {};
-          if (!loc) delete ev.state.shareLocations[uid];
-          else {
+          if (!loc) {
+            // Keep last known so others still see you after stop/close
+            var prev0 = ev.state.shareLocations[uid];
+            if (prev0 && prev0.lat != null) {
+              prev0.active = false;
+              prev0.at = prev0.at || new Date().toISOString();
+            }
+          } else if (loc.lat == null && loc.active === false) {
+            var prev1 = ev.state.shareLocations[uid];
+            if (prev1) prev1.active = false;
+          } else {
+            var prev = ev.state.shareLocations[uid] || {};
             ev.state.shareLocations[uid] = {
-              lat: loc.lat, lng: loc.lng, at: loc.at,
+              lat: loc.lat != null ? loc.lat : prev.lat,
+              lng: loc.lng != null ? loc.lng : prev.lng,
+              at: loc.at || new Date().toISOString(),
               name: myName(),
               color: loc.color || myColor(),
-              iconId: loc.iconId || null,
-              heading: loc.heading != null ? loc.heading : null,
-              scale: loc.scale != null ? loc.scale : 1
+              iconId: loc.iconId != null ? loc.iconId : (prev.iconId || null),
+              heading: loc.heading != null ? loc.heading : (prev.heading != null ? prev.heading : null),
+              scale: loc.scale != null ? loc.scale : (prev.scale != null ? prev.scale : 1),
+              active: loc.active !== false
             };
           }
           saveActiveEvent();
+          try {
+            if (window.PlanMap && typeof window.PlanMap.redraw === 'function') window.PlanMap.redraw();
+          } catch (eR) {}
         } else {
           var key = 'plan_slayer_share_loc_v1';
-          if (!loc) localStorage.removeItem(key);
-          else localStorage.setItem(key, JSON.stringify(loc));
+          if (!loc) {
+            try {
+              var raw = localStorage.getItem(key);
+              if (raw) {
+                var o = JSON.parse(raw);
+                o.active = false;
+                localStorage.setItem(key, JSON.stringify(o));
+              }
+            } catch (eK) { localStorage.removeItem(key); }
+          } else localStorage.setItem(key, JSON.stringify(loc));
         }
       },
       getShareLocations: function () {
@@ -7225,6 +7734,11 @@
   }
 
   function goGps() {
+    // Prefer PlanMap (directional marker + snap)
+    if (state.mapMode === 'button') setMapMode('mini');
+    if (window.PlanMap && typeof window.PlanMap.goGps === 'function') {
+      try { window.PlanMap.ensure(); window.PlanMap.goGps(); return; } catch (e) {}
+    }
     ensureMap();
     if (!navigator.geolocation || !state.map) return;
     var btn = $('gps-snap-btn');
@@ -7237,7 +7751,7 @@
         try { state.map.removeLayer(state.gpsMarker); } catch (e) {}
       }
       state.gpsMarker = L.circleMarker([lat, lng], {
-        radius: 8, color: '#fff', weight: 2, fillColor: DEFAULT_ME_COLOR, fillOpacity: 1
+        radius: 8, color: '#fff', weight: 2, fillColor: myColor(), fillOpacity: 1
       }).bindPopup('You').addTo(state.map);
       setTimeout(function () { if (btn) btn.classList.remove('is-on'); }, 1200);
     }, function () {
@@ -7835,9 +8349,60 @@
     }).join('');
   }
 
+  /** Preserve list scroll positions across full render() rebuilds (#76) */
+  function captureListScrollPositions() {
+    var out = { cols: {} };
+    try {
+      var ev = $('ev-list');
+      if (ev) out.evList = ev.scrollTop;
+      var mls = $('mls-body');
+      if (mls) out.mls = mls.scrollTop;
+      var planBody = document.querySelector('.card-planner .card-body');
+      if (planBody) out.planBody = planBody.scrollTop;
+      var listsBody = document.querySelector('.card-lists .card-body');
+      if (listsBody) out.listsBody = listsBody.scrollTop;
+      document.querySelectorAll('.list-col-body[data-col-body]').forEach(function (el) {
+        var k = el.getAttribute('data-col-body');
+        if (k) out.cols[k] = el.scrollTop;
+      });
+    } catch (e) {}
+    return out;
+  }
+  function restoreListScrollPositions(saved) {
+    if (!saved) return;
+    function apply() {
+      try {
+        if (saved.evList != null && $('ev-list')) $('ev-list').scrollTop = saved.evList;
+        if (saved.mls != null && $('mls-body')) $('mls-body').scrollTop = saved.mls;
+        if (saved.planBody != null) {
+          var planBody = document.querySelector('.card-planner .card-body');
+          if (planBody) planBody.scrollTop = saved.planBody;
+        }
+        if (saved.listsBody != null) {
+          var listsBody = document.querySelector('.card-lists .card-body');
+          if (listsBody) listsBody.scrollTop = saved.listsBody;
+        }
+        if (saved.cols) {
+          Object.keys(saved.cols).forEach(function (k) {
+            var el = document.querySelector('.list-col-body[data-col-body="' + String(k).replace(/"/g, '') + '"]');
+            if (el) el.scrollTop = saved.cols[k];
+          });
+        }
+      } catch (e) {}
+    }
+    try {
+      apply();
+      requestAnimationFrame(function () {
+        apply();
+        requestAnimationFrame(apply);
+      });
+    } catch (e2) {}
+  }
+
   function render() {
     // Full UI rebuild replaces #ev-list / mobile triad — keep in-progress item typing
     var listAddDraft = captureListAddDrafts();
+    var listScroll = captureListScrollPositions();
 
     // Keep header badge in sync with APP_VERSION (avoid stale index.html hardcode)
     try {
@@ -7966,9 +8531,12 @@
         var barCd = $('list-bar-countdown');
         if (barCd) { barCd.innerHTML = ''; barCd.style.display = 'none'; }
       } catch (eCd) {}
-      // Ensure My checklist column exists on event packing lists
+      // Ensure My checklist column exists + mirror claims (same on mobile & desktop)
       try {
-        if (listWantsPersonalChecklist(openList)) ensurePersonalColumn(openList);
+        if (listWantsPersonalChecklist(openList) || openList.eventId) {
+          ensurePersonalColumn(openList);
+          rebuildMyChecklistFromClaims(openList);
+        }
       } catch (ePers) {}
       // Compact member chips in the detail bar (never inside #ev-list — that crushed the triad)
       try {
@@ -8114,6 +8682,8 @@
     }
     // Restore typed text + caret after triad/sheet DOM was rebuilt
     try { restoreListAddDrafts(listAddDraft); } catch (eDraft) {}
+    // Restore list scroll after full rebuild (#76)
+    try { restoreListScrollPositions(listScroll); } catch (eScr) {}
   }
 
   /**
@@ -8679,6 +9249,8 @@
   }
 
   function openUserSettingsModal() {
+    _userSettingsPendingColor = null;
+    _userSettingsDirty = false;
     if ($('user-settings-nick')) {
       $('user-settings-nick').value = myName() || '';
     }
@@ -8688,12 +9260,15 @@
     }
     renderMyColorPicker(myColor());
     if ($('user-color-panel')) $('user-color-panel').style.display = 'none';
+    syncUserSettingsCloseSaveBtn();
     if ($('user-settings-modal')) {
       $('user-settings-modal').classList.add('is-open');
       $('user-settings-modal').setAttribute('aria-hidden', 'false');
     }
   }
   function closeUserSettingsModal() {
+    _userSettingsPendingColor = null;
+    _userSettingsDirty = false;
     if ($('user-settings-modal')) {
       $('user-settings-modal').classList.remove('is-open');
       $('user-settings-modal').setAttribute('aria-hidden', 'true');
@@ -11525,6 +12100,121 @@
     });
   }
 
+  function wireHomescreenUi() {
+    var btn = $('brand-homescreen-btn');
+    var overlay = $('homescreen-overlay');
+    var closeBtn = $('homescreen-close');
+    var installBtn = $('homescreen-install');
+    var bodyEl = $('homescreen-body');
+    var titleEl = $('homescreen-title');
+    if (!btn || !overlay || btn._psHomescreenWired) return;
+    btn._psHomescreenWired = true;
+
+    var deferredPrompt = null;
+    var appName = 'Plan Slayer';
+
+    function isStandalone() {
+      try {
+        if (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) return true;
+        if (window.navigator && window.navigator.standalone === true) return true;
+      } catch (e) {}
+      return false;
+    }
+    function isIos() {
+      var ua = (navigator.userAgent || '');
+      return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    }
+    function isAndroid() {
+      return /Android/i.test(navigator.userAgent || '');
+    }
+    function close() {
+      overlay.classList.remove('is-open');
+      overlay.setAttribute('aria-hidden', 'true');
+    }
+    function open() {
+      if (titleEl) titleEl.textContent = 'Share to home screen';
+      if (installBtn) installBtn.style.display = 'none';
+      if (isStandalone()) {
+        if (bodyEl) {
+          bodyEl.innerHTML = '<strong>' + appName + '</strong> is already running as an installed app on this device. ' +
+            'If you do not see the icon, check your home screen folders or app library.';
+        }
+      } else if (deferredPrompt && installBtn) {
+        if (bodyEl) {
+          bodyEl.innerHTML = 'Install <strong>' + appName + '</strong> on this device. ' +
+            'The home-screen icon uses the official Plan Slayer artwork.';
+        }
+        installBtn.style.display = '';
+        installBtn.textContent = 'Install ' + appName;
+      } else if (isIos()) {
+        if (bodyEl) {
+          bodyEl.innerHTML =
+            'On <strong>iPhone / iPad</strong>, Safari cannot add apps automatically. Do this:<br><br>' +
+            '1. Tap the <strong>Share</strong> button (square with ↑) at the bottom of Safari<br>' +
+            '2. Scroll and tap <strong>Add to Home Screen</strong><br>' +
+            '3. Confirm — the icon will show the Plan Slayer logo<br><br>' +
+            '<span style="opacity:0.85">Use Safari (not Chrome/in-app browsers) for the best result.</span>';
+        }
+      } else if (isAndroid()) {
+        if (bodyEl) {
+          bodyEl.innerHTML =
+            'On <strong>Android Chrome</strong>:<br><br>' +
+            '1. Tap the browser menu (⋮)<br>' +
+            '2. Tap <strong>Install app</strong> or <strong>Add to Home screen</strong><br>' +
+            '3. Confirm — the icon uses the Plan Slayer logo<br><br>' +
+            '<span style="opacity:0.85">If Install is missing, the site may need a moment online, or you already installed it.</span>';
+        }
+      } else {
+        if (bodyEl) {
+          bodyEl.innerHTML =
+            'On desktop Chrome/Edge: open the address-bar install icon, or use the browser menu → ' +
+            '<strong>Install ' + appName + '</strong>.';
+        }
+      }
+      overlay.classList.add('is-open');
+      overlay.setAttribute('aria-hidden', 'false');
+    }
+
+    window.addEventListener('beforeinstallprompt', function (e) {
+      try { e.preventDefault(); } catch (err) {}
+      deferredPrompt = e;
+    });
+    window.addEventListener('appinstalled', function () {
+      deferredPrompt = null;
+      appToast('Added to home screen');
+      close();
+    });
+
+    btn.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      open();
+    });
+    if (installBtn) {
+      installBtn.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        if (!deferredPrompt) { open(); return; }
+        var p = deferredPrompt;
+        deferredPrompt = null;
+        try {
+          p.prompt();
+          p.userChoice.then(function () { close(); }).catch(function () { close(); });
+        } catch (eP) {
+          open();
+        }
+      });
+    }
+    if (closeBtn) closeBtn.addEventListener('click', function (ev) { ev.preventDefault(); close(); });
+    overlay.addEventListener('click', function (ev) { if (ev.target === overlay) close(); });
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape' && overlay.classList.contains('is-open')) close();
+    });
+
+    if (isStandalone()) {
+      btn.title = appName + ' is already on your home screen';
+      btn.textContent = 'On home screen';
+    }
+  }
+
   function wire() {
     function on(id, ev, fn) {
       var el = $(id);
@@ -11534,6 +12224,7 @@
 
     wireOtherWaysToSlay();
     wireReportIssueUi();
+    wireHomescreenUi();
     try { wireOcrReviewModal(); } catch (eOcrW) {}
 
     click('btn-create-event', openCreateModal);
@@ -11548,7 +12239,7 @@
     // Do NOT close create-event by clicking the overlay — Cancel only
     click('btn-create-list', openListModal);
     click('btn-sync-hunt', function () {
-      appToast('Syncing from Hunt…');
+      appToast('Syncing…');
       resyncHuntEventsNow({ quiet: false }).then(function () {
         return loadEvents();
       }).then(function () {
@@ -12114,45 +12805,45 @@
     });
     // User settings (click username)
     click('user-chip-btn', function () { openUserSettingsModal(); });
-    click('user-settings-cancel', closeUserSettingsModal);
+    // Close OR Save (same button — turns into Save after a color pick)
+    click('user-settings-cancel', function () {
+      var btn = $('user-settings-cancel');
+      if (btn && btn.getAttribute('data-mode') === 'save') {
+        saveUserSettingsFromModal();
+        return;
+      }
+      closeUserSettingsModal();
+    });
     on('user-settings-modal', 'click', function (e) {
       if (e.target === $('user-settings-modal')) closeUserSettingsModal();
     });
-    click('user-settings-save-nick', function () {
-      var nick = ($('user-settings-nick') && $('user-settings-nick').value) || '';
-      if (!applyNicknameEverywhere(nick)) {
-        appToast('Enter a nickname');
-        return;
-      }
-      if ($('user-chip-btn')) $('user-chip-btn').textContent = myName();
-      appToast('Nickname updated');
-      closeUserSettingsModal();
-      render();
+    // Nickname edits also enable Save (same Close→Save control)
+    on('user-settings-nick', 'input', function () {
+      _userSettingsDirty = true;
+      syncUserSettingsCloseSaveBtn();
     });
-    // My Color — same swatches + wheel as pin / section customize
+    // My Color — regular palette; apply only on Save
     click('user-color-open', function () {
       var panel = $('user-color-panel');
       if (!panel) return;
       var open = panel.style.display !== 'none';
       panel.style.display = open ? 'none' : '';
-      if (!open) renderMyColorPicker(myColor());
+      if (!open) renderMyColorPicker(_userSettingsPendingColor || myColor());
     });
     on('user-color-swatches', 'click', function (e) {
       var b = e.target.closest && e.target.closest('[data-my-color]');
       if (!b) return;
-      var hex = b.getAttribute('data-my-color');
-      if (applyMyColor(hex)) {
-        renderMyColorPicker(hex);
-        appToast('Your color updated');
-        render();
-      }
+      setUserSettingsPendingColor(b.getAttribute('data-my-color'));
+    });
+    click('user-color-wheel-btn', function () {
+      var w = $('user-color-wheel');
+      if (w) try { w.click(); } catch (e) {}
     });
     on('user-color-wheel', 'input', function () {
-      var hex = this.value;
-      if (applyMyColor(hex)) {
-        renderMyColorPicker(hex);
-        render();
-      }
+      setUserSettingsPendingColor(this.value);
+    });
+    on('user-color-wheel', 'change', function () {
+      setUserSettingsPendingColor(this.value);
     });
     click('user-settings-signout', function () {
       closeUserSettingsModal();
@@ -12221,9 +12912,116 @@
       state.activeNamedListId = state.activeNamedListId === id ? null : id;
       render();
     });
+    /**
+     * Column head actions (Settings ⚙ / Share / Minimize / Restore / Rename).
+     * Must work for desktop #ev-list AND mobile #mobile-list-sheet / #mls-body.
+     * Returns true if handled.
+     */
+    function handleListColHeadAction(e) {
+      var t = e.target;
+      if (!t || !t.closest) return false;
+      // Only inside a list triad host
+      var inList = t.closest('#ev-list, #lists-active, #mobile-list-sheet, #mls-body, .list-triad');
+      if (!inList) return false;
+      var list = resolveOpenNamedList(t);
+      if (!list) {
+        // Mobile sheet always has an active list id when open
+        try {
+          if (state.activeNamedListId) list = findNamedListById(state.activeNamedListId);
+        } catch (eL) {}
+      }
+      // Minimize
+      var mini = t.closest('[data-col-minimize]');
+      if (mini) {
+        if (!list) return true;
+        e.preventDefault(); e.stopPropagation();
+        var liveMini = findNamedListById(list.id) || list;
+        var mc = getListColumn(liveMini, mini.getAttribute('data-col-minimize'));
+        if (mc) {
+          mc.minimized = true;
+          saveNamedList(liveMini);
+          render();
+          if (state.mobileSheetOpen) {
+            try { renderMobileListSheet(); } catch (eM) {}
+          }
+        }
+        return true;
+      }
+      // Restore minimized column
+      var restore = t.closest('[data-col-restore]');
+      if (restore) {
+        if (!list) return true;
+        e.preventDefault(); e.stopPropagation();
+        var liveRest = findNamedListById(list.id) || list;
+        var rc = getListColumn(liveRest, restore.getAttribute('data-col-restore'));
+        if (rc) {
+          rc.minimized = false;
+          saveNamedList(liveRest);
+          render();
+          if (state.mobileSheetOpen) {
+            try { renderMobileListSheet(); } catch (eM2) {}
+          }
+        }
+        return true;
+      }
+      // Settings / options
+      var opt = t.closest('[data-col-options]');
+      if (opt) {
+        if (!list) { appToast('Open a list first'); return true; }
+        e.preventDefault(); e.stopPropagation();
+        openColOptionsModal(list, opt.getAttribute('data-col-options'));
+        return true;
+      }
+      // Share this section
+      var sh = t.closest('[data-col-share]');
+      if (sh) {
+        if (!list) { appToast('Open a list first'); return true; }
+        e.preventDefault(); e.stopPropagation();
+        var sc = getListColumn(list, sh.getAttribute('data-col-share'));
+        if (sc) openSectionShareModal(list, sc);
+        return true;
+      }
+      // Rename section title (creator)
+      var ren = t.closest('[data-col-rename]');
+      if (ren && list && isNamedListOwner(list)) {
+        e.preventDefault(); e.stopPropagation();
+        var rid = ren.getAttribute('data-col-rename');
+        var liveRen = findNamedListById(list.id) || list;
+        var rcol = getListColumn(liveRen, rid);
+        if (!rcol) return true;
+        appPrompt('Rename this section', rcol.name || 'New list', 'Rename').then(function (name) {
+          if (!name) return;
+          rcol.name = autoCap(String(name).trim()) || rcol.name;
+          saveNamedList(liveRen);
+          render();
+          if (state.mobileSheetOpen) {
+            try { renderMobileListSheet(); } catch (eM3) {}
+          }
+        });
+        return true;
+      }
+      return false;
+    }
+
+    // Capture-phase so mobile sheet never loses ⚙ / Share / Minimize taps
+    if (!document._psColHeadWired) {
+      document._psColHeadWired = true;
+      document.addEventListener('click', function (e) {
+        try {
+          if (handleListColHeadAction(e)) return;
+        } catch (eH) { console.warn('list col head', eH); }
+      }, true);
+    }
+
     // RIGHT panel: per-column list pack controls
     on('ev-list', 'click', function (e) {
       var list = resolveOpenNamedList(e.target);
+
+      // Column head actions handled by document capture (mobile + desktop)
+      if (e.target && e.target.closest &&
+          e.target.closest('[data-col-minimize],[data-col-restore],[data-col-options],[data-col-share],[data-col-rename]')) {
+        return;
+      }
 
       // Click empty area of a column body → focus that column’s add input
       var focusBody = e.target.closest && e.target.closest('[data-col-focus-add]');
@@ -12262,54 +13060,6 @@
       if (addBtn) {
         e.preventDefault(); e.stopPropagation();
         submitColumnAddFromUi(addBtn);
-        return;
-      }
-      // Minimize / restore
-      var mini = e.target.closest && e.target.closest('[data-col-minimize]');
-      if (mini && list) {
-        e.preventDefault(); e.stopPropagation();
-        var liveMini = findNamedListById(list.id) || list;
-        var mc = getListColumn(liveMini, mini.getAttribute('data-col-minimize'));
-        if (mc) { mc.minimized = true; saveNamedList(liveMini); render(); }
-        return;
-      }
-      var restore = e.target.closest && e.target.closest('[data-col-restore]');
-      if (restore && list) {
-        e.preventDefault(); e.stopPropagation();
-        var liveRest = findNamedListById(list.id) || list;
-        var rc = getListColumn(liveRest, restore.getAttribute('data-col-restore'));
-        if (rc) { rc.minimized = false; saveNamedList(liveRest); render(); }
-        return;
-      }
-      // Rename section title (creator)
-      var ren = e.target.closest && e.target.closest('[data-col-rename]');
-      if (ren && list && isNamedListOwner(list)) {
-        e.preventDefault(); e.stopPropagation();
-        var rid = ren.getAttribute('data-col-rename');
-        var liveRen = findNamedListById(list.id) || list;
-        var rcol = getListColumn(liveRen, rid);
-        if (!rcol) return;
-        appPrompt('Rename this section', rcol.name || 'New list', 'Rename').then(function (name) {
-          if (!name) return;
-          rcol.name = autoCap(String(name).trim()) || rcol.name;
-          saveNamedList(liveRen);
-          render();
-        });
-        return;
-      }
-      // Options
-      var opt = e.target.closest && e.target.closest('[data-col-options]');
-      if (opt && list) {
-        e.preventDefault(); e.stopPropagation();
-        openColOptionsModal(list, opt.getAttribute('data-col-options'));
-        return;
-      }
-      // Share this section — Copy or share to member
-      var sh = e.target.closest && e.target.closest('[data-col-share]');
-      if (sh && list) {
-        e.preventDefault(); e.stopPropagation();
-        var sc = getListColumn(list, sh.getAttribute('data-col-share'));
-        if (sc) openSectionShareModal(list, sc);
         return;
       }
       // (Add section is handled on #qualifier-filters — far-left chip)
@@ -12882,6 +13632,7 @@
         if (er) { try { commitExpandedItemDetail(er); } catch (eTab) {} }
       }
       state.listTab = t.getAttribute('data-mls-tab');
+      state._scrollListTabOnce = true;
       state.expandedItemId = null;
       clearItemDetailEditState();
       renderMobileListSheet();
@@ -12957,6 +13708,22 @@
     configurePlanMap();
     click('btn-toggle-map', function () { setMapMode('mini'); });
     click('map-maximize-btn', function () { setMapMode('max'); });
+    // Hunt-style “which map am I viewing” chip (center above toolbar)
+    click('map-viewing-chip', function (e) {
+      try { if (e) { e.preventDefault(); e.stopPropagation(); } } catch (eS) {}
+      openMapViewingSwitcher();
+    });
+    on('map-viewing-dropdown', 'click', function (e) {
+      var b = e.target.closest && e.target.closest('[data-view-mode]');
+      if (!b) return;
+      e.preventDefault();
+      e.stopPropagation();
+      selectMapViewing(
+        b.getAttribute('data-view-mode'),
+        b.getAttribute('data-view-id') || null,
+        b.getAttribute('data-view-name') || ''
+      );
+    });
     click('map-minimize-btn', function () { setMapMode('mini'); });
     click('map-min-hide', function () {
       setMapMode('button');

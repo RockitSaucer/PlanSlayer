@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.66';
+  var APP_VERSION = '1.3.67';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -28,6 +28,8 @@
   var LOCAL_SYNC_KEY = 'plan_slayer_sync_v1';
   var LOCAL_TOMBSTONES_KEY = 'plan_slayer_tombstones_v1';
   var LOCAL_CAL_COLLAPSED_KEY = 'plan_slayer_cal_collapsed_v1';
+  /** #persist: Personal | Events list filter under calendar */
+  var LOCAL_HOME_LIST_SCOPE_KEY = 'plan_slayer_home_list_scope_v1';
   /** Import Hunt/Reg calendar events (shared browser localStorage) once per session */
   var HUNT_CAL_EVENTS_KEY = 'reg_slayer_cal_events_v2';
   var HUNT_IMPORT_MAP_KEY = 'plan_slayer_hunt_import_map_v1';
@@ -133,8 +135,14 @@
     calCollapsed: false,
     /** Under-calendar list: events | chores */
     calListMode: 'events',
-    /** #125: under My lists filter — personal lists only | event-linked lists only */
-    homeListScope: 'personal',
+    /** #125: under My lists filter — personal lists only | event-linked lists only (persisted) */
+    homeListScope: (function () {
+      try {
+        var s = localStorage.getItem(LOCAL_HOME_LIST_SCOPE_KEY);
+        if (s === 'events' || s === 'personal') return s;
+      } catch (e) {}
+      return 'personal';
+    })(),
     /** Item id whose Make Chore panel is expanded */
     makeChoreOpenId: null,
     /** Multi-step chore schedule picker */
@@ -8260,6 +8268,12 @@
     return htmlL;
   }
 
+  function saveHomeListScope(scope) {
+    scope = scope === 'events' ? 'events' : 'personal';
+    state.homeListScope = scope;
+    try { localStorage.setItem(LOCAL_HOME_LIST_SCOPE_KEY, scope); } catch (e) {}
+  }
+
   /** #125: Personal | Events switch UI (mirrors Events/Chores switch style) */
   function syncHomeListScopeSwitchUi() {
     var scope = state.homeListScope === 'events' ? 'events' : 'personal';
@@ -12877,7 +12891,7 @@
       if (scopeBtn) {
         var sc = scopeBtn.getAttribute('data-home-list-scope');
         if (sc === 'personal' || sc === 'events') {
-          state.homeListScope = sc;
+          saveHomeListScope(sc);
           try { syncHomeListScopeSwitchUi(); } catch (eS) {}
           try {
             var homeL = $('view-home-list');

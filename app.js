@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '8.0.30';
+  var APP_VERSION = '8.0.31';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -45,6 +45,8 @@
   var LOCAL_EVENTS_KEY = 'plan_slayer_events_v1';
   var LOCAL_PERSONAL_KEY = 'plan_slayer_personal_v1';
   var LOCAL_SAVED_KEY = 'plan_slayer_saved_lists_v1';
+  /** Pending list/event invite from deep link until signed in (map-style) */
+  var PENDING_JOIN_KEY = 'plan_slayer_pending_join_v1';
   var LOCAL_ITEM_TEMPLATES_KEY = 'plan_slayer_item_templates_v1';
   var LOCAL_SECTION_TEMPLATES_KEY = 'plan_slayer_section_templates_v1';
   /** One-shot clean slate for this build (lists + events wiped once) */
@@ -3183,6 +3185,22 @@
         // Push list items into the linked plan event + cloud so phones/other people see them soon
         try { syncNamedListToEventCloud(snapshot); } catch (eSync) {}
       }
+      // Owner of a shared list: refresh cloud invite snapshot so joiners get latest items
+      if (ok && snapshot.invite_code && listIsShared(snapshot)) {
+        try {
+          var mePub = myId();
+          var amOwner = false;
+          if (mePub) {
+            if (snapshot.owner_id && String(snapshot.owner_id) === String(mePub)) amOwner = true;
+            if (!amOwner && Array.isArray(snapshot.members)) {
+              amOwner = snapshot.members.some(function (m) {
+                return m && String(m.user_id) === String(mePub) && String(m.role || '') === 'owner';
+              });
+            }
+          }
+          if (amOwner) schedulePublishListInvite(snapshot);
+        } catch (ePubSave) {}
+      }
       return ok;
     } catch (eS) {
       console.warn('saveNamedList', eS);
@@ -3567,6 +3585,7 @@
     var code = '';
     var type = 'event';
     var title = 'Plan Slayer';
+    var listToPublish = null;
     if (_sharePeopleCtx.kind === 'event') {
       var ev = findEventById(_sharePeopleCtx.id) || activeEvent();
       if (ev) {
@@ -3577,23 +3596,47 @@
         code = ev.invite_code;
         type = 'event';
         title = ev.name || 'Event';
+        // Also publish linked packing list so invitees can get both
+        try {
+          var linked = listsForEvent(ev.id);
+          if (linked[0]) {
+            markListSharedInPlace(linked[0]);
+            saveNamedList(linked[0]);
+            listToPublish = linked[0];
+          }
+        } catch (eL) {}
       }
     } else {
       var list = findNamedListById(_sharePeopleCtx.id || state.activeNamedListId);
       if (list) {
         // Same list becomes shared — never clone a second list
         markListSharedInPlace(list);
+        // If list is linked to an event, ensure event has an invite code too
+        if (list.eventId) {
+          var evL = findEventById(list.eventId);
+          if (evL && !evL.invite_code) {
+            evL.invite_code = String(Math.floor(100000 + Math.random() * 900000));
+            try { saveActiveEvent(); } catch (eS2) { try { persistLocal(); } catch (eP) {} }
+          }
+        }
         saveNamedList(list);
         code = list.invite_code;
         type = 'list';
         title = list.name || 'List';
+        listToPublish = list;
       }
     }
     if (!code) {
       appToast('Could not create a code');
       return;
     }
-    shareInviteLink(code, type, title).then(function (ok) {
+    // Publish list invite to cloud first so the link works for other users
+    var ready = listToPublish
+      ? Promise.resolve(publishListInviteToCloud(listToPublish)).catch(function () { return null; })
+      : Promise.resolve(null);
+    ready.then(function () {
+      return shareInviteLink(code, type, title);
+    }).then(function (ok) {
       if (ok) appToast('Share link ready — opens Plan Slayer with access');
     });
   }
@@ -3950,12 +3993,115 @@
       });
   }
 
-  /** Mark a list shared in place (same id — never clone a second list). */
+  /** Mark a list shared in place (same id — never clone a second list) + schedule cloud invite publish. */
   function markListSharedInPlace(list) {
+    markListSharedInPlaceNoPublish(list);
+    try { schedulePublishListInvite(list); } catch (ePub) {}
+    return list;
+  }
+
+  /** Strip private My checklist from a list snapshot before cloud publish. */
+  function listStateForCloudPublish(list) {
+    if (!list) return {};
+    var snap;
+    try {
+      snap = sanitizeNamedList(JSON.parse(JSON.stringify(list)));
+    } catch (e) {
+      try { snap = sanitizeNamedList(list); } catch (e2) { snap = list; }
+    }
+    if (!snap) return {};
+    // Never publish private personal checklist rows
+    if (Array.isArray(snap.columns)) {
+      snap.columns = snap.columns.filter(function (c) {
+        return c && String(c.id) !== 'personal';
+      });
+    }
+    if (snap.buckets && typeof snap.buckets === 'object') {
+      try { delete snap.buckets.personal; } catch (eB) {}
+    }
+    snap.shared = true;
+    return snap;
+  }
+
+  var _publishListInviteTimer = null;
+  var _publishListInvitePending = null;
+  function schedulePublishListInvite(list) {
+    if (!list || !list.id) return;
+    _publishListInvitePending = list;
+    if (_publishListInviteTimer) clearTimeout(_publishListInviteTimer);
+    _publishListInviteTimer = setTimeout(function () {
+      _publishListInviteTimer = null;
+      var L = _publishListInvitePending;
+      _publishListInvitePending = null;
+      try { publishListInviteToCloud(L); } catch (e) {}
+    }, 350);
+  }
+
+  /**
+   * Publish list invite + snapshot so ?join=&type=list auto-grants access
+   * (and linked event when eventId / event invite_code is set).
+   */
+  function publishListInviteToCloud(list) {
+    var client = sb();
+    var user = me();
+    if (!client || !user || !list || !list.id) return Promise.resolve(null);
+    markListSharedInPlaceNoPublish(list);
+    var code = String(list.invite_code || '').replace(/\D/g, '').slice(0, 6);
+    if (code.length !== 6) {
+      list.invite_code = makeListInviteCode();
+      code = list.invite_code;
+    }
+    var eventId = list.eventId || null;
+    var eventInvite = null;
+    if (eventId) {
+      var ev = findEventById(eventId);
+      if (ev) {
+        if (!ev.invite_code) {
+          ev.invite_code = String(Math.floor(100000 + Math.random() * 900000));
+          try { saveActiveEvent(); } catch (eS) {
+            try { persistLocal(); } catch (eP) {}
+          }
+        }
+        eventInvite = String(ev.invite_code || '').replace(/\D/g, '').slice(0, 6) || null;
+        // Only pass cloud UUIDs for event_id FK
+        if (!isUuidLike(eventId)) eventId = null;
+      } else {
+        eventId = isUuidLike(eventId) ? eventId : null;
+      }
+    } else {
+      eventId = null;
+    }
+    var payload = {
+      p_invite_code: code,
+      p_client_list_id: String(list.id),
+      p_name: String(list.name || 'List').slice(0, 120),
+      p_list_state: listStateForCloudPublish(list),
+      p_event_id: eventId,
+      p_event_invite_code: eventInvite
+    };
+    return client.rpc('publish_plan_list', payload).then(function (res) {
+      if (res && res.error) {
+        console.warn('publish_plan_list', res.error);
+        return null;
+      }
+      var row = res && res.data;
+      if (Array.isArray(row)) row = row[0];
+      if (row && row.invite_code && String(row.invite_code) !== String(list.invite_code)) {
+        list.invite_code = String(row.invite_code);
+        try { saveNamedList(list); } catch (eSave) {}
+      }
+      return row || null;
+    }).catch(function (e) {
+      console.warn('publish_plan_list', e);
+      return null;
+    });
+  }
+
+  /** Like markListSharedInPlace but no cloud schedule (avoids recursion). */
+  function markListSharedInPlaceNoPublish(list) {
     if (!list || !list.id) return list;
     list.shared = true;
     if (!list.invite_code) list.invite_code = makeListInviteCode();
-    // Ensure owner is on members
     if (!Array.isArray(list.members)) list.members = [];
     var me = myId() || 'local';
     var hasMe = list.members.some(function (m) {
@@ -3970,6 +4116,240 @@
     }
     list.updated_at = new Date().toISOString();
     return list;
+  }
+
+  function writePendingJoin(code, type) {
+    try {
+      localStorage.setItem(PENDING_JOIN_KEY, JSON.stringify({
+        code: String(code || '').replace(/\D/g, '').slice(0, 6),
+        type: type === 'list' ? 'list' : (type === 'map' ? 'map' : 'event'),
+        at: Date.now()
+      }));
+    } catch (e) {}
+  }
+  function readPendingJoin() {
+    try {
+      var raw = localStorage.getItem(PENDING_JOIN_KEY);
+      if (!raw) return null;
+      var o = JSON.parse(raw);
+      if (!o || !o.code || String(o.code).replace(/\D/g, '').length !== 6) return null;
+      // Expire after 7 days
+      if (o.at && Date.now() - Number(o.at) > 7 * 24 * 3600 * 1000) {
+        clearPendingJoin();
+        return null;
+      }
+      return o;
+    } catch (e) { return null; }
+  }
+  function clearPendingJoin() {
+    try { localStorage.removeItem(PENDING_JOIN_KEY); } catch (e) {}
+  }
+
+  /**
+   * Install a joined shared list from cloud payload into local free lists.
+   * Returns the local list object.
+   */
+  function installJoinedListFromCloud(payload) {
+    if (!payload) return null;
+    var st = payload.list_state || payload.listState || {};
+    var list;
+    try {
+      list = sanitizeNamedList(typeof st === 'object' && st ? JSON.parse(JSON.stringify(st)) : {});
+    } catch (e) {
+      list = sanitizeNamedList(st || {});
+    }
+    if (!list || typeof list !== 'object') list = {};
+    // Prefer cloud client_list_id so re-joins match the same list
+    var clientId = payload.client_list_id || list.id || uid();
+    list.id = String(clientId);
+    list.name = list.name || payload.name || 'Shared list';
+    list.invite_code = String(payload.invite_code || list.invite_code || '').replace(/\D/g, '').slice(0, 6) || list.invite_code;
+    list.shared = true;
+    list.cloud_list_id = payload.id || list.cloud_list_id || null;
+    if (payload.event_id) list.eventId = String(payload.event_id);
+    else if (payload.event && payload.event.id) list.eventId = String(payload.event.id);
+    if (!Array.isArray(list.members)) list.members = [];
+    var me = myId();
+    if (me) {
+      var hasMe = list.members.some(function (m) {
+        return m && String(m.user_id) === String(me);
+      });
+      if (!hasMe) {
+        list.members.push({
+          user_id: me,
+          display_name: myName() || 'You',
+          role: 'member'
+        });
+      }
+    }
+    // Drop any personal column from host — rebuild private checklist for me
+    if (Array.isArray(list.columns)) {
+      list.columns = list.columns.filter(function (c) {
+        return c && String(c.id) !== 'personal';
+      });
+    }
+    try { list = sanitizeNamedList(list); } catch (eS) {}
+    list.updated_at = new Date().toISOString();
+    try { clearTombstone('list', list.id); } catch (eT) {}
+    saveNamedList(list);
+    return findNamedListById(list.id) || list;
+  }
+
+  /**
+   * Join a list by invite code (cloud). Grants list access and linked event when present.
+   */
+  async function joinListByCode(code) {
+    var client = sb();
+    var user = me();
+    code = String(code || '').replace(/\D/g, '').slice(0, 6);
+    if (code.length !== 6) throw new Error('Enter a 6-digit code');
+    if (!user) throw new Error('Sign in to join');
+    // Local already has it?
+    var store = loadFreeListsStore();
+    var local = (store.named || []).find(function (n) {
+      return n && String(n.invite_code) === code;
+    });
+    if (local) {
+      state.activeNamedListId = local.id;
+      if (local.kind) state.listTab = local.kind;
+      state.view = 'home';
+      if (local.eventId) {
+        try {
+          var evL = findEventById(local.eventId);
+          if (evL) openEvent(evL.id);
+        } catch (eO) {}
+      }
+      return { list: local, localOnly: true };
+    }
+    if (!client) throw new Error('Cloud required to join remote list codes');
+    var res = await client.rpc('join_plan_list', { p_code: code });
+    if (res.error) throw res.error;
+    var payload = res.data;
+    if (typeof payload === 'string') {
+      try { payload = JSON.parse(payload); } catch (eJ) {}
+    }
+    if (!payload) throw new Error('List not found');
+    var list = installJoinedListFromCloud(payload);
+    // Install linked event from join payload when present
+    if (payload.event) {
+      try {
+        var ev = normalizeEvent(payload.event);
+        if (ev && ev.id && !state.events.some(function (e) { return e.id === ev.id; })) {
+          state.events.unshift(ev);
+          persistLocal();
+        }
+        if (ev && ev.id) {
+          try { applyCloudListPackToLocal(ev); } catch (eA) {}
+        }
+      } catch (eEv) {}
+    } else if (payload.event_invite_code || payload.joined_event) {
+      // Fallback: join event by code if RPC only set membership
+      var ecode = String(payload.event_invite_code || '').replace(/\D/g, '').slice(0, 6);
+      if (ecode.length === 6) {
+        try { await joinEvent(ecode); } catch (eJoin) {}
+      }
+    }
+    if (list) {
+      state.activeNamedListId = list.id;
+      state.view = 'home';
+      if (list.eventId) {
+        var hasEv = findEventById(list.eventId);
+        if (hasEv) {
+          try { await openEvent(hasEv.id); } catch (eOpen) {
+            state.activeNamedListId = list.id;
+          }
+        }
+      }
+      try { render(); } catch (eR) {}
+    }
+    return { list: list, payload: payload };
+  }
+
+  /**
+   * Pull shared lists I own/joined from cloud into local store.
+   */
+  function pullSharedListsCloud() {
+    var client = sb();
+    var user = me();
+    if (!client || !user) return Promise.resolve(0);
+    return client.rpc('list_my_plan_shared_lists').then(function (res) {
+      if (res.error || !res.data) return 0;
+      var rows = Array.isArray(res.data) ? res.data : [res.data];
+      var n = 0;
+      rows.forEach(function (row) {
+        if (!row) return;
+        try {
+          var before = findNamedListById(row.client_list_id);
+          var installed = installJoinedListFromCloud({
+            id: row.id,
+            invite_code: row.invite_code,
+            client_list_id: row.client_list_id,
+            name: row.name,
+            event_id: row.event_id,
+            event_invite_code: row.event_invite_code,
+            list_state: row.list_state,
+            updated_at: row.updated_at
+          });
+          if (installed && (!before || (row.updated_at && before.updated_at &&
+              new Date(row.updated_at) > new Date(before.updated_at)))) {
+            n++;
+          } else if (installed && !before) {
+            n++;
+          }
+        } catch (eOne) {
+          console.warn('pullSharedListsCloud row', eOne);
+        }
+      });
+      return n;
+    }).catch(function (e) {
+      console.warn('pullSharedListsCloud', e);
+      return 0;
+    });
+  }
+
+  async function consumePendingJoin() {
+    var pending = readPendingJoin();
+    if (!pending || !pending.code) return null;
+    if (!me()) return null;
+    var code = String(pending.code).replace(/\D/g, '').slice(0, 6);
+    var type = pending.type || 'event';
+    try {
+      if (type === 'list') {
+        var r = await joinListByCode(code);
+        clearPendingJoin();
+        appToast('Joined list via invite link');
+        return r;
+      }
+      if (type === 'map') {
+        clearPendingJoin();
+        return null;
+      }
+      try {
+        await joinEvent(code);
+        clearPendingJoin();
+        appToast('Joined event via invite link');
+        return true;
+      } catch (eEv) {
+        // Maybe it was a list code with wrong/missing type
+        try {
+          await joinListByCode(code);
+          clearPendingJoin();
+          appToast('Joined list via invite link');
+          return true;
+        } catch (eL) {
+          throw eEv;
+        }
+      }
+    } catch (err) {
+      var msg = (err && err.message) ? err.message : String(err || 'Join failed');
+      if (/already|member|joined/i.test(msg)) {
+        clearPendingJoin();
+        return null;
+      }
+      // Keep pending so retry works after re-auth
+      appAlert(msg || 'Could not join from invite link.', 'Join failed');
+      return null;
+    }
   }
   function freeScope() {
     // Unified My lists — kept for legacy call sites
@@ -10502,43 +10882,59 @@
       $('list-modal').setAttribute('aria-hidden', 'true');
     }
   }
+  /**
+   * Show whole-list invite deep link (map-style). Always list.invite_code — never a separate section code.
+   * Optional col is display-only (label).
+   */
   function openListInviteModal(list, col) {
     if (!list) return;
-    var code = null;
     var label = list.name || 'list';
     if (col) {
       normalizeNamedList(list);
       var c = getListColumn(list, col.id || col);
-      if (!c) return;
-      if (!c.invite_code) {
-        c.invite_code = makeListInviteCode();
-      }
-      // Whole list becomes shared in place when you share any section
-      markListSharedInPlace(list);
-      saveNamedList(list);
-      code = c.invite_code;
-      label = (list.name || 'list') + ' · ' + (c.name || 'section');
-    } else {
-      markListSharedInPlace(list);
-      saveNamedList(list);
-      code = list.invite_code;
+      if (c && c.name) label = (list.name || 'list') + ' · ' + c.name;
     }
-    if ($('list-invite-code-input')) {
-      // Prefer deep link so Share opens Plan Slayer with access
-      try {
-        $('list-invite-code-input').value = planJoinLink(code, 'list');
-      } catch (eL) {
-        $('list-invite-code-input').value = code;
+    // Whole list becomes shared in place (same id — never clone)
+    markListSharedInPlace(list);
+    saveNamedList(list);
+    var code = list.invite_code;
+    // Ensure linked event also has a code so join grants both
+    if (list.eventId) {
+      var evL = findEventById(list.eventId);
+      if (evL && !evL.invite_code) {
+        evL.invite_code = String(Math.floor(100000 + Math.random() * 900000));
+        try { saveActiveEvent(); } catch (eS) { try { persistLocal(); } catch (eP) {} }
       }
     }
-    if ($('list-invite-blurb')) {
-      $('list-invite-blurb').textContent =
-        'Share this link so others open Plan Slayer and join “' + label + '”. Code: ' + code;
+    function showInviteUi(finalCode) {
+      var cde = String(finalCode || code || '').replace(/\D/g, '').slice(0, 6);
+      if ($('list-invite-code-input')) {
+        try {
+          $('list-invite-code-input').value = planJoinLink(cde, 'list');
+        } catch (eL) {
+          $('list-invite-code-input').value = cde;
+        }
+      }
+      if ($('list-invite-blurb')) {
+        var both = list.eventId ? ' They also get access to the linked event.' : '';
+        $('list-invite-blurb').textContent =
+          'Share this link — when they open it, Plan Slayer grants access to “' + label + '” automatically.' +
+          both + ' Code: ' + cde;
+      }
+      if ($('list-invite-modal')) {
+        $('list-invite-modal').classList.add('is-open');
+        $('list-invite-modal').setAttribute('aria-hidden', 'false');
+      }
     }
-    if ($('list-invite-modal')) {
-      $('list-invite-modal').classList.add('is-open');
-      $('list-invite-modal').setAttribute('aria-hidden', 'false');
-    }
+    showInviteUi(code);
+    // Publish so the link works for other accounts (map-style)
+    Promise.resolve(publishListInviteToCloud(list)).then(function (row) {
+      if (row && row.invite_code) {
+        code = row.invite_code;
+        list.invite_code = String(row.invite_code);
+        showInviteUi(code);
+      }
+    }).catch(function () {});
   }
 
   var _shareCtx = { listId: null, colId: null, itemId: null, kind: null, mode: 'section' };
@@ -13513,13 +13909,14 @@
     });
     click('list-invite-done', closeListInviteModal);
     click('list-invite-copy', function () {
-      var code = ($('list-invite-code-input') && $('list-invite-code-input').value) || '';
-      if (!code) return;
+      var linkOrCode = ($('list-invite-code-input') && $('list-invite-code-input').value) || '';
+      if (!linkOrCode) return;
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(code).then(function () { appToast('Invite code copied'); })
-          .catch(function () { appToast(code); });
+        navigator.clipboard.writeText(linkOrCode).then(function () {
+          appToast(linkOrCode.indexOf('http') === 0 ? 'Invite link copied' : 'Invite code copied');
+        }).catch(function () { appToast(linkOrCode); });
       } else {
-        appToast(code);
+        appToast(linkOrCode);
       }
     });
 
@@ -14674,22 +15071,32 @@
         if (!code) return;
         var digits = String(code).replace(/\D/g, '').slice(0, 6);
         if (digits.length !== 6) { appAlert('Enter a 6-digit code', 'Join'); return; }
-        // Try list first (local My lists invite codes)
+        if (!me()) {
+          writePendingJoin(digits, 'event');
+          appToast('Sign in to join — code saved');
+          return;
+        }
+        // Try list first (local + cloud)
         var store = loadFreeListsStore();
         var found = (store.named || []).find(function (n) { return String(n.invite_code) === digits; });
         if (found) {
-          // Already have it — open it
           state.activeNamedListId = found.id;
           if (found.kind) state.listTab = found.kind;
           appToast('Opened list “' + (found.name || '') + '”');
           render();
           return;
         }
-        // Local join: if we don't own the list, store a joined stub is N/A without cloud;
-        // still try event join on server
-        joinEvent(digits).catch(function (e) {
-          // Allow joining a list shared via code that was added to localStorage by host export later
-          appAlert(e.message || 'No event or list found for that code.', 'Join failed');
+        joinListByCode(digits).then(function (r) {
+          var nm = (r && r.list && r.list.name) || 'list';
+          var both = r && r.list && r.list.eventId;
+          appToast(both ? ('Joined list + event “' + nm + '”') : ('Joined list “' + nm + '”'));
+          try { render(); } catch (eR) {}
+        }).catch(function () {
+          joinEvent(digits).then(function () {
+            appToast('Joined event');
+          }).catch(function (e) {
+            appAlert(e.message || 'No event or list found for that code.', 'Join failed');
+          });
         });
       });
     });
@@ -15595,7 +16002,18 @@
         ev.invite_code = String(Math.floor(100000 + Math.random() * 900000));
         try { saveActiveEvent(); } catch (eS) {}
       }
-      shareInviteLink(ev.invite_code, 'event', ev.name || 'Event');
+      // Publish linked packing list so invitees can get list + event
+      try {
+        var linked = listsForEvent(ev.id);
+        if (linked[0]) {
+          markListSharedInPlace(linked[0]);
+          saveNamedList(linked[0]);
+          Promise.resolve(publishListInviteToCloud(linked[0])).catch(function () {});
+        }
+      } catch (eL) {}
+      shareInviteLink(ev.invite_code, 'event', ev.name || 'Event').then(function (ok) {
+        if (ok) appToast('Invite link ready — opens Plan Slayer with access');
+      });
     });
 
     function closeGot() {
@@ -16258,44 +16676,74 @@
         u.searchParams.delete('join');
         u.searchParams.delete('type');
         history.replaceState({}, '', u.pathname + (u.search || '') + (u.hash || ''));
+        // Persist until signed in (map-style pending join)
+        writePendingJoin(code, type);
         setTimeout(function () {
-          // Prefer list when type=list; otherwise event then list fallback
-          function tryList() {
+          if (!me()) {
+            appToast('Sign in to join — invite is saved');
+            return;
+          }
+          function tryLocalList() {
             var store = loadFreeListsStore();
             var found = (store.named || []).find(function (n) { return String(n.invite_code) === code; });
             if (found) {
+              clearPendingJoin();
               state.activeNamedListId = found.id;
               if (found.kind) state.listTab = found.kind;
               state.view = 'home';
               appToast('Opened shared list “' + (found.name || '') + '”');
+              if (found.eventId) {
+                try {
+                  var evF = findEventById(found.eventId);
+                  if (evF) openEvent(evF.id);
+                } catch (eF) {}
+              }
               render();
               return true;
             }
             return false;
           }
-          if (type === 'list') {
-            if (tryList()) return;
-            joinEvent(code).then(function () {
-              appToast('Joined via invite link');
-            }).catch(function (e) {
-              appAlert(e.message || 'No list or event found for that link.', 'Join failed');
-            });
-            return;
-          }
           if (type === 'map') {
-            // Map codes live on Hunt/Reg — send user there with same join param
+            clearPendingJoin();
             var mapUrl = 'https://www.huntslayer.com/?join=' + code;
             try { window.location.href = mapUrl; } catch (eM) {
               appAlert('Open Hunt Slayer and join with code ' + code, 'Shared map');
             }
             return;
           }
+          if (type === 'list') {
+            if (tryLocalList()) return;
+            joinListByCode(code).then(function (r) {
+              clearPendingJoin();
+              var nm = (r && r.list && r.list.name) || 'list';
+              var both = r && r.list && r.list.eventId;
+              appToast(both ? ('Joined list + event “' + nm + '”') : ('Joined list “' + nm + '”'));
+              try { render(); } catch (eR) {}
+            }).catch(function (e) {
+              // Fallback: maybe they shared an event code as list type
+              joinEvent(code).then(function () {
+                clearPendingJoin();
+                appToast('Joined event via invite link');
+              }).catch(function () {
+                appAlert((e && e.message) || 'No list or event found for that link.', 'Join failed');
+              });
+            });
+            return;
+          }
+          // type=event (default): event first, then list
           joinEvent(code).then(function () {
+            clearPendingJoin();
             appToast('Joined event via invite link');
           }).catch(function () {
-            if (!tryList()) {
-              appAlert('No event or list found for that invite link.', 'Join failed');
-            }
+            if (tryLocalList()) return;
+            joinListByCode(code).then(function (r) {
+              clearPendingJoin();
+              var nm = (r && r.list && r.list.name) || 'list';
+              appToast('Joined list “' + nm + '”');
+              try { render(); } catch (eR2) {}
+            }).catch(function (e2) {
+              appAlert((e2 && e2.message) || 'No event or list found for that invite link.', 'Join failed');
+            });
           });
         }, 400);
       }
@@ -16317,6 +16765,8 @@
       configurePlanMap();
       // Pull personal/free lists first so phone sees desktop lists
       Promise.resolve(pullFreeListsCloud()).catch(function () { return 0; }).then(function () {
+        return Promise.resolve(pullSharedListsCloud()).catch(function () { return 0; });
+      }).then(function () {
         return loadEvents();
       }).then(function () {
         setMapMode(state.mapMode || 'button');
@@ -16324,13 +16774,18 @@
           window.PlanMap.ensure();
           window.PlanMap.redraw();
         }
+        // Deep link from URL, then any pending invite after sign-in
         consumeJoinQuery();
-        // #135: open default keep-on-top list
+        return Promise.resolve(consumePendingJoin()).catch(function () { return null; });
+      }).then(function () {
+        // #135: open default keep-on-top list (don't clobber an invite just joined)
         try {
-          var defId = getDefaultListId();
-          if (defId && findNamedListById(defId)) {
-            state.activeNamedListId = defId;
-            state.view = 'home';
+          if (!readPendingJoin()) {
+            var defId = getDefaultListId();
+            if (defId && findNamedListById(defId) && !state.activeNamedListId) {
+              state.activeNamedListId = defId;
+              state.view = 'home';
+            }
           }
         } catch (eDef) {}
         render();

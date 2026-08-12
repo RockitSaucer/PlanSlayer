@@ -3799,9 +3799,9 @@
     .member-pop ul { margin: 0; padding-left: 16px; color: var(--ink); }
     .member-pop li { margin: 2px 0; }
 
-    /* Expand details — drop down under the item button */
+    /* Expand details — drop down under the item button (#90 condensed) */
     .li-detail {
-      display: none; padding: 10px 12px 12px; border-top: 1px solid #1f2618;
+      display: none; padding: 6px 8px 8px; border-top: 1px solid #1f2618;
       background: #0e120c;
     }
     .list-item.is-expanded .li-detail { display: block !important; }
@@ -3813,50 +3813,64 @@
       width: 48px; height: 36px; padding: 2px; border: 1px solid var(--border);
       border-radius: 8px; background: var(--panel-light); cursor: pointer;
     }
-    .li-detail .field-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: flex-end; }
-    .li-detail label { display: block; font-size: 10px; font-weight: 700; color: var(--muted); margin-bottom: 3px; }
+    .li-detail .field-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; align-items: flex-end; }
+    .li-detail label { display: block; font-size: 9px; font-weight: 700; color: var(--muted); margin-bottom: 1px; }
     .li-detail .field { flex: 1 1 auto; min-width: 0; max-width: 100%; }
-    .li-detail .field.field-grow { flex: 1 1 140px; min-width: 120px; }
-    .li-detail .field.field-sm { flex: 0 0 auto; width: 72px; min-width: 64px; }
-    .li-detail .field.field-md { flex: 0 0 auto; width: 110px; min-width: 96px; }
-    .li-detail .field.field-due { flex: 0 0 auto; width: 118px; min-width: 100px; }
-    .li-detail .field.field-days { flex: 0 0 auto; width: 64px; min-width: 56px; }
-    .li-detail .field-row-due { gap: 6px !important; }
-    .li-detail input, .li-detail select, .li-detail textarea { width: 100%; box-sizing: border-box; }
-    .li-detail select[data-f="due_mode"] {
-      font-size: 11px !important;
+    .li-detail .field.field-grow { flex: 1 1 100px; min-width: 90px; }
+    .li-detail .field.field-sm { flex: 0 0 auto; width: 56px; min-width: 48px; }
+    .li-detail .field.field-md { flex: 0 0 auto; width: 96px; min-width: 84px; }
+    .li-detail .field.field-due { flex: 0 0 auto; width: 100px; min-width: 88px; }
+    .li-detail .field.field-days { flex: 0 0 auto; width: 52px; min-width: 48px; }
+    .li-detail .field-row-due { gap: 4px !important; }
+    .li-detail input, .li-detail select, .li-detail textarea {
+      width: 100%; box-sizing: border-box;
+      font-size: 12px !important;
       padding: 4px 6px !important;
       min-height: 0 !important;
-      height: 28px;
     }
-    .li-detail textarea { min-height: 48px; resize: vertical; }
+    .li-detail select[data-f="due_mode"] {
+      font-size: 10px !important;
+      padding: 3px 5px !important;
+      min-height: 0 !important;
+      height: 26px;
+    }
+    .li-detail textarea { min-height: 32px; resize: vertical; }
+    .li-detail .check-row { margin-top: 4px !important; font-size: 11px; }
+    .li-detail .highlight-row { margin-top: 4px !important; }
+    .li-detail .make-chore-wrap { margin-top: 6px !important; }
     .li-detail-actions {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
-      align-items: flex-end;
+      gap: 4px;
+      align-items: center;
       justify-content: space-between;
-      margin-top: 14px;
-      padding-top: 10px;
+      margin-top: 8px;
+      padding-top: 6px;
       border-top: 1px solid #1f2618;
     }
     .li-detail-actions-left {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
+      gap: 4px;
       align-items: center;
       flex: 1 1 auto;
       min-width: 0;
     }
+    .li-detail-actions-left .btn,
+    .li-detail-actions .btn {
+      min-height: 28px !important;
+      padding: 4px 8px !important;
+      font-size: 11px !important;
+    }
     .li-detail-actions .btn-save-detail {
       flex: 0 0 auto;
       margin-left: auto;
-      min-width: 112px !important;
-      min-height: 48px !important;
-      padding: 12px 22px !important;
-      font-size: 16px !important;
+      min-width: 72px !important;
+      min-height: 32px !important;
+      padding: 6px 12px !important;
+      font-size: 13px !important;
       font-weight: 900 !important;
-      letter-spacing: 0.03em;
+      letter-spacing: 0.02em;
     }
     /* Compact delete in item options (swapped to leading edge vs Done) */
     .li-detail .btn-item-del {
@@ -4281,7 +4295,7 @@
       <div class="brand-title">Plan <span>Slayer</span></div>
       <div class="brand-tagline">Plan, delegate, slay.</div>
       <div class="brand-sub">
-        <span class="ver-badge" id="ver-badge">V1.3.54</span>
+        <span class="ver-badge" id="ver-badge">V1.3.55</span>
       </div>
     </div>
     <div class="brand-right brand-header-actions">

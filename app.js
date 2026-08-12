@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.3.60';
+  var APP_VERSION = '1.3.61';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -477,32 +477,36 @@
         var hit = resolveNamedListItemHit(list, kind, item.id);
         if (!hit || !hit.item) return false;
 
-        // Got it from My checklist → toggle claim on the source pack item
-        if ((String(hit.colId) === 'personal' || hit.isChecklist || hit.isPrivateOnly) &&
-            hit.item.source_item_id) {
-          var srcHit = findInNamedListColumn(list, hit.item.source_col || null, hit.item.source_item_id) ||
-            findInNamedListColumn(list, null, hit.item.source_item_id);
-          if (srcHit && srcHit.item) {
-            if (!srcHit.item.claims || typeof srcHit.item.claims !== 'object') srcHit.item.claims = {};
-            var meSrc = myId();
-            if (claimQty > 0) srcHit.item.claims[meSrc] = claimQty;
-            else delete srcHit.item.claims[meSrc];
-            if (isBuyColumnKind(srcHit.colId, list)) {
-              syncBuyGotToBringOnNamedList(list, srcHit.item, claimQty, srcHit.colId);
-            }
-            try {
-              ensurePersonalColumn(list);
-              syncClaimToPrivateChecklist(list, srcHit.item, claimQty, srcHit.colId);
-            } catch (ePc0) {}
-            try {
-              var evHint0 = resolveEventForList(list) || activeEvent();
-              if (evHint0) ensurePersonalEventList(evHint0, list);
-              else ensurePersonalEventList(null, list);
-              syncClaimToPersonalEventList(list, srcHit.item, claimQty, srcHit.colId);
-            } catch (ePe0) {}
-            saveNamedList(list);
-            return true;
+        // Got it from My checklist → complete personal packing row (full highlight for its qty)
+        if ((String(hit.colId) === 'personal' || hit.isChecklist || hit.isPrivateOnly)) {
+          var mePers = myId();
+          if (!hit.item.claims || typeof hit.item.claims !== 'object') hit.item.claims = {};
+          // #117: personal row need is its own qty; fill claim to complete (home packing)
+          var needP = Math.max(1, Number(hit.item.qty) || Number(hit.item.claimed_qty) || 1);
+          if (claimQty > 0) {
+            hit.item.qty = needP;
+            hit.item.claims[mePers] = Math.min(needP, Math.max(claimQty, needP));
+            // Full complete face: claim fills the personal qty
+            hit.item.claims[mePers] = needP;
+          } else {
+            delete hit.item.claims[mePers];
           }
+          // Also keep group source claim in sync when linked
+          if (hit.item.source_item_id) {
+            var srcHit = findInNamedListColumn(list, hit.item.source_col || null, hit.item.source_item_id) ||
+              findInNamedListColumn(list, null, hit.item.source_item_id);
+            if (srcHit && srcHit.item) {
+              if (!srcHit.item.claims || typeof srcHit.item.claims !== 'object') srcHit.item.claims = {};
+              var packAmt = Math.max(1, Number(hit.item.claimed_qty) || needP);
+              if (claimQty > 0) srcHit.item.claims[mePers] = packAmt;
+              else delete srcHit.item.claims[mePers];
+              if (isBuyColumnKind(srcHit.colId, list)) {
+                syncBuyGotToBringOnNamedList(list, srcHit.item, claimQty > 0 ? packAmt : 0, srcHit.colId);
+              }
+            }
+          }
+          saveNamedList(list);
+          return true;
         }
 
         // Apply claims from the toggled item onto the store list, then sync bring
@@ -2166,20 +2170,30 @@
       }
     } else {
       var prevPriv = idx >= 0 ? items[idx] : null;
+      // #117: personal packing row qty = claimed amount; starts unclaimed so home “Got it!” completes fully
       var copy = Object.assign({}, cloneItemOptionFields(sourceItem), {
         id: prevPriv && prevPriv.id ? prevPriv.id : uid(),
         source_item_id: srcId,
         source_col: sourceColId || (prevPriv && prevPriv.source_col) || null,
         private_to: me,
-        claims: {},
+        qty: Math.max(1, claimQty),
+        claims: (prevPriv && prevPriv.claims && typeof prevPriv.claims === 'object')
+          ? Object.assign({}, prevPriv.claims)
+          : {},
         claimed_qty: claimQty,
         from_claim: true,
         created_by: (prevPriv && prevPriv.created_by) || me,
         created_at: (prevPriv && prevPriv.created_at) || new Date().toISOString(),
         updated_at: new Date().toISOString()
       });
-      copy.claims[me] = claimQty;
-      if (idx >= 0) items[idx] = Object.assign({}, prevPriv, copy);
+      // Do not auto-fill my claim — packing checklist is “not grabbed” until Got it again
+      if (!prevPriv || !prevPriv.claims || !prevPriv.claims[me]) {
+        copy.claims = {};
+      }
+      if (idx >= 0) items[idx] = Object.assign({}, prevPriv, copy, {
+        qty: Math.max(1, claimQty),
+        claims: (prevPriv.claims && Object.keys(prevPriv.claims).length) ? prevPriv.claims : {}
+      });
       else items.push(copy);
       savePrivateChecklist(list.id, items);
     }
@@ -2196,12 +2210,14 @@
           if (pIdx >= 0) pcol.items.splice(pIdx, 1);
         } else {
           var row = pIdx >= 0 ? pcol.items[pIdx] : null;
+          var hadHomeClaim = !!(row && row.claims && row.claims[me]);
           if (!row) {
             row = Object.assign({}, cloneItemOptionFields(sourceItem), {
               id: uid(),
               source_item_id: srcId,
               source_col: sourceColId || null,
               private_to: me,
+              qty: Math.max(1, claimQty),
               claims: {},
               from_claim: true,
               created_by: me
@@ -2215,9 +2231,11 @@
               private_to: me,
               from_claim: true
             });
+            // Keep home packing progress if already Got-it on checklist; else unclaimed
+            if (!hadHomeClaim) row.claims = {};
+            else if (!row.claims || typeof row.claims !== 'object') row.claims = {};
           }
-          if (!row.claims || typeof row.claims !== 'object') row.claims = {};
-          row.claims[me] = claimQty;
+          row.qty = Math.max(1, claimQty);
           row.claimed_qty = claimQty;
         }
         if (!list.buckets) list.buckets = {};
@@ -3775,14 +3793,16 @@
       return plist;
     }
     var row = idx >= 0 ? col.items[idx] : null;
+    var hadHomeClaimPe = !!(row && row.claims && row.claims[me]);
     if (!row) {
+      // #117: qty = claimed amount; unclaimed until packing Got it!
       row = {
         id: uid(),
         source_item_id: srcId,
         source_list_id: sourceList.id,
         source_col: sourceColId || colId,
         title: sourceItem.title || 'Item',
-        qty: Math.max(1, Number(sourceItem.qty) || 1),
+        qty: Math.max(1, claimQty),
         qualifier: sourceItem.qualifier || 'other',
         priority: sourceItem.priority || 0,
         notes: sourceItem.notes || '',
@@ -3796,14 +3816,15 @@
       col.items.push(row);
     }
     row.title = sourceItem.title || row.title;
-    row.qty = Math.max(1, Number(sourceItem.qty) || Number(row.qty) || 1);
+    row.qty = Math.max(1, claimQty);
     row.source_item_id = srcId;
     row.source_list_id = sourceList.id;
     row.source_col = sourceColId || row.source_col || colId;
     row.from_event_claim = true;
     row.private_to = me;
     if (!row.claims || typeof row.claims !== 'object') row.claims = {};
-    row.claims[me] = claimQty;
+    // Keep packing progress if already claimed at home; else start unclaimed
+    if (!hadHomeClaimPe) row.claims = {};
     row.claimed_qty = claimQty;
     row.updated_at = new Date().toISOString();
     if (!plist.buckets) plist.buckets = {};

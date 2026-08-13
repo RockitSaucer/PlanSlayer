@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '8.0.31';
+  var APP_VERSION = '8.0.32';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -3586,6 +3586,7 @@
     var type = 'event';
     var title = 'Plan Slayer';
     var listToPublish = null;
+    var requireListPublish = false;
     if (_sharePeopleCtx.kind === 'event') {
       var ev = findEventById(_sharePeopleCtx.id) || activeEvent();
       if (ev) {
@@ -3624,17 +3625,39 @@
         type = 'list';
         title = list.name || 'List';
         listToPublish = list;
+        requireListPublish = true;
       }
     }
     if (!code) {
       appToast('Could not create a code');
       return;
     }
+    if (!me()) {
+      appAlert('Sign in to publish the invite so others can open the link.', 'Share failed');
+      return;
+    }
     // Publish list invite to cloud first so the link works for other users
     var ready = listToPublish
       ? Promise.resolve(publishListInviteToCloud(listToPublish)).catch(function () { return null; })
       : Promise.resolve(null);
-    ready.then(function () {
+    ready.then(function (row) {
+      if (requireListPublish && !(row && row.invite_code)) {
+        appAlert(
+          'Could not publish the list invite to the cloud. Stay signed in and try again — the link will not work for others until publish succeeds.',
+          'Share failed'
+        );
+        return null;
+      }
+      if (listToPublish && row && row.invite_code && type === 'list') {
+        code = String(row.invite_code).replace(/\D/g, '').slice(0, 6) || code;
+        try {
+          listToPublish.invite_code = code;
+          saveNamedList(listToPublish);
+        } catch (eSave) {}
+      }
+      if (listToPublish && !row && type === 'event') {
+        appToast('Event link ready — packing list may not follow until re-share while signed in');
+      }
       return shareInviteLink(code, type, title);
     }).then(function (ok) {
       if (ok) appToast('Share link ready — opens Plan Slayer with access');
@@ -4044,7 +4067,11 @@
   function publishListInviteToCloud(list) {
     var client = sb();
     var user = me();
-    if (!client || !user || !list || !list.id) return Promise.resolve(null);
+    if (!client || !user || !list || !list.id) {
+      if (!user) console.warn('publish_plan_list: not signed in');
+      else if (!client) console.warn('publish_plan_list: no supabase client');
+      return Promise.resolve(null);
+    }
     markListSharedInPlaceNoPublish(list);
     var code = String(list.invite_code || '').replace(/\D/g, '').slice(0, 6);
     if (code.length !== 6) {
@@ -4095,6 +4122,25 @@
       console.warn('publish_plan_list', e);
       return null;
     });
+  }
+
+  /** Guest-facing message when join_plan_list fails (dead local-only codes). */
+  function friendlyJoinListError(err) {
+    var msg = '';
+    try {
+      if (err && typeof err === 'object') {
+        msg = err.message || err.error_description || err.details || err.hint || '';
+      } else if (err != null) {
+        msg = String(err);
+      }
+    } catch (eM) { msg = ''; }
+    msg = String(msg || '');
+    if (/list not found/i.test(msg) || /^not found$/i.test(msg.trim())) {
+      return 'Invite not published or code unknown — ask the host to re-share from Plan Slayer while signed in.';
+    }
+    if (/not authenticated|jwt|sign in/i.test(msg)) return 'Sign in to join';
+    if (/invalid code/i.test(msg)) return 'Enter a valid 6-digit code';
+    return msg || 'Could not join list';
   }
 
   /** Like markListSharedInPlace but no cloud schedule (avoids recursion). */
@@ -4223,12 +4269,14 @@
     }
     if (!client) throw new Error('Cloud required to join remote list codes');
     var res = await client.rpc('join_plan_list', { p_code: code });
-    if (res.error) throw res.error;
+    if (res.error) throw new Error(friendlyJoinListError(res.error));
     var payload = res.data;
     if (typeof payload === 'string') {
       try { payload = JSON.parse(payload); } catch (eJ) {}
     }
-    if (!payload) throw new Error('List not found');
+    if (!payload) {
+      throw new Error(friendlyJoinListError({ message: 'List not found' }));
+    }
     var list = installJoinedListFromCloud(payload);
     // Install linked event from join payload when present
     if (payload.event) {
@@ -10885,7 +10933,9 @@
   /**
    * Show whole-list invite deep link (map-style). Always list.invite_code — never a separate section code.
    * Optional col is display-only (label).
+   * Link is only treated as ready after publish_plan_list succeeds (no dead local-only codes).
    */
+  var _listInvitePublishReady = false;
   function openListInviteModal(list, col) {
     if (!list) return;
     var label = list.name || 'list';
@@ -10898,6 +10948,7 @@
     markListSharedInPlace(list);
     saveNamedList(list);
     var code = list.invite_code;
+    _listInvitePublishReady = false;
     // Ensure linked event also has a code so join grants both
     if (list.eventId) {
       var evL = findEventById(list.eventId);
@@ -10906,35 +10957,74 @@
         try { saveActiveEvent(); } catch (eS) { try { persistLocal(); } catch (eP) {} }
       }
     }
-    function showInviteUi(finalCode) {
+    function showInviteUi(finalCode, phase) {
+      // phase: 'pending' | 'ready' | 'failed'
       var cde = String(finalCode || code || '').replace(/\D/g, '').slice(0, 6);
-      if ($('list-invite-code-input')) {
-        try {
-          $('list-invite-code-input').value = planJoinLink(cde, 'list');
-        } catch (eL) {
-          $('list-invite-code-input').value = cde;
+      var input = $('list-invite-code-input');
+      var blurb = $('list-invite-blurb');
+      if (phase === 'pending') {
+        _listInvitePublishReady = false;
+        if (input) input.value = 'Publishing invite…';
+        if (blurb) {
+          blurb.textContent =
+            'Publishing “' + label + '” so others can join. Stay signed in — the link appears when the cloud is ready.';
         }
-      }
-      if ($('list-invite-blurb')) {
-        var both = list.eventId ? ' They also get access to the linked event.' : '';
-        $('list-invite-blurb').textContent =
-          'Share this link — when they open it, Plan Slayer grants access to “' + label + '” automatically.' +
-          both + ' Code: ' + cde;
+      } else if (phase === 'failed') {
+        _listInvitePublishReady = false;
+        if (input) input.value = '';
+        if (blurb) {
+          blurb.textContent =
+            'Could not publish invite for “' + label + '”. Sign in and try Invite members again — a link copied before publish will not work for others.';
+        }
+      } else {
+        _listInvitePublishReady = true;
+        if (input) {
+          try {
+            input.value = planJoinLink(cde, 'list');
+          } catch (eL) {
+            input.value = cde;
+          }
+        }
+        if (blurb) {
+          var both = list.eventId ? ' They also get access to the linked event.' : '';
+          blurb.textContent =
+            'Share this link — when they open it, Plan Slayer grants access to “' + label + '” automatically.' +
+            both + ' Code: ' + cde;
+        }
       }
       if ($('list-invite-modal')) {
         $('list-invite-modal').classList.add('is-open');
         $('list-invite-modal').setAttribute('aria-hidden', 'false');
       }
     }
-    showInviteUi(code);
+    showInviteUi(code, 'pending');
+    if (!me()) {
+      showInviteUi(code, 'failed');
+      appAlert('Sign in to publish the invite so others can open the link.', 'Share failed');
+      return;
+    }
     // Publish so the link works for other accounts (map-style)
     Promise.resolve(publishListInviteToCloud(list)).then(function (row) {
       if (row && row.invite_code) {
         code = row.invite_code;
         list.invite_code = String(row.invite_code);
-        showInviteUi(code);
+        try { saveNamedList(list); } catch (eSave) {}
+        showInviteUi(code, 'ready');
+        appToast('Invite link ready');
+      } else {
+        showInviteUi(code, 'failed');
+        appAlert(
+          'Could not publish the list invite to the cloud. Stay signed in and try again — the link will not work for others until publish succeeds.',
+          'Share failed'
+        );
       }
-    }).catch(function () {});
+    }).catch(function () {
+      showInviteUi(code, 'failed');
+      appAlert(
+        'Could not publish the list invite to the cloud. Stay signed in and try again.',
+        'Share failed'
+      );
+    });
   }
 
   var _shareCtx = { listId: null, colId: null, itemId: null, kind: null, mode: 'section' };
@@ -13909,11 +13999,18 @@
     });
     click('list-invite-done', closeListInviteModal);
     click('list-invite-copy', function () {
+      if (!_listInvitePublishReady) {
+        appToast('Wait until the invite is published — or try Invite members again while signed in');
+        return;
+      }
       var linkOrCode = ($('list-invite-code-input') && $('list-invite-code-input').value) || '';
-      if (!linkOrCode) return;
+      if (!linkOrCode || linkOrCode.indexOf('http') !== 0) {
+        appToast('No invite link ready yet');
+        return;
+      }
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(linkOrCode).then(function () {
-          appToast(linkOrCode.indexOf('http') === 0 ? 'Invite link copied' : 'Invite code copied');
+          appToast('Invite link copied');
         }).catch(function () { appToast(linkOrCode); });
       } else {
         appToast(linkOrCode);
@@ -16002,16 +16099,26 @@
         ev.invite_code = String(Math.floor(100000 + Math.random() * 900000));
         try { saveActiveEvent(); } catch (eS) {}
       }
-      // Publish linked packing list so invitees can get list + event
+      if (!me()) {
+        appAlert('Sign in to share an invite link that works for others.', 'Share failed');
+        return;
+      }
+      // Publish linked packing list so invitees can get list + event, then share event link
+      var listPub = Promise.resolve(null);
       try {
         var linked = listsForEvent(ev.id);
         if (linked[0]) {
           markListSharedInPlace(linked[0]);
           saveNamedList(linked[0]);
-          Promise.resolve(publishListInviteToCloud(linked[0])).catch(function () {});
+          listPub = Promise.resolve(publishListInviteToCloud(linked[0])).catch(function () { return null; });
         }
       } catch (eL) {}
-      shareInviteLink(ev.invite_code, 'event', ev.name || 'Event').then(function (ok) {
+      listPub.then(function (row) {
+        if (listsForEvent(ev.id)[0] && !row) {
+          appToast('Event link ready — packing list may not follow until re-share while signed in');
+        }
+        return shareInviteLink(ev.invite_code, 'event', ev.name || 'Event');
+      }).then(function (ok) {
         if (ok) appToast('Invite link ready — opens Plan Slayer with access');
       });
     });

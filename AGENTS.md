@@ -1,7 +1,7 @@
 # PlanSlayer — agent notes
 
 **Product:** group event planning (lists, invites, expenses, Hunt-style map + calendar).  
-**Current version:** **V8.0.31** (`app.js` `APP_VERSION`) · shell **`plan-slayer-shell-v104`**  
+**Current version:** **V8.0.32** (`app.js` `APP_VERSION`) · shell **`plan-slayer-shell-v105`**  
 **Deploy:** Vercel **plan-slayer** → https://planslayer.com
 
 ### Skills (Grok) — keep in sync when this product changes
@@ -9,10 +9,10 @@ User skills under `~/.grok/skills/` (SOURCE_OF_TRUTH = this folder):
 
 | Skill | Trigger | Pin |
 |-------|---------|-----|
-| **make-lists** | Full product (lists, calendar, events, chores, Got it!, **share/join invites**, mobile, header, map viewing) | **V8.0.31** |
-| **plan-calendar** | Side calendar + dots | V8.0.31 |
-| **plan-events** | Trips/events + packing + Personal {Event} + **event invite links** | V8.0.31 |
-| **events-chores-switch** | Events/Chores dual button under calendar | V8.0.31 |
+| **make-lists** | Full product (lists, calendar, events, chores, Got it!, **share/join invites**, mobile, header, map viewing) | **V8.0.32** |
+| **plan-calendar** | Side calendar + dots | V8.0.32 |
+| **plan-events** | Trips/events + packing + Personal {Event} + **event invite links** | V8.0.32 |
+| **events-chores-switch** | Events/Chores dual button under calendar | V8.0.32 |
 | **hunt-reusable-kits** | Map/pins/weather/design/party (PlanMap module) | PlanMap in this folder |
 | **report-site-issue** | Report an issue kit | shared inbox |
 
@@ -23,14 +23,14 @@ When shipping list/calendar/chores/events/**share-join**/mobile/map-viewing UX h
 - `~/.grok/skills/make-lists/references/FEATURE_MAP.md`
 - `~/.grok/skills/make-lists/references/SHARING.md` ← **person-to-person + site-to-site invite knowledge**
 
-### Sharing / invites (V8.0.31 baseline — do not regress)
+### Sharing / invites (V8.0.32 baseline — do not regress)
 
 | What | How |
 |------|-----|
 | **List invite link** | `/?join=XXXXXX&type=list` → `join_plan_list` RPC → installs list; if linked event, also event membership |
 | **Event invite link** | `/?join=XXXXXX&type=event` → `join_plan_event` RPC |
 | **Map invite link** | Plan redirects to Hunt `/?join=`; Hunt uses `join_shared_map` |
-| **Publish on share** | `publishListInviteToCloud` / `publish_plan_list` (owner snapshot; never My checklist column) |
+| **Publish on share** | `publishListInviteToCloud` / `publish_plan_list` (owner snapshot; never My checklist column). **Never hand out a list link until publish succeeds** (V8.0.32) |
 | **Same-account devices** | Free lists → `plan_personal_boards.state.freeLists` (+ delete tombstones) |
 | **Share in place** | `markListSharedInPlace` — **same list id**, never clone a second list |
 | **Pending join** | `plan_slayer_pending_join_v1` until signed in (map-style) |

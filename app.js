@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '8.0.33';
+  var APP_VERSION = '8.0.34';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -61,6 +61,8 @@
   var LOCAL_FREE_LISTS_KEY = 'plan_slayer_free_lists_v1'; // My lists (unified)
   var LOCAL_INBOX_PREFIX = 'plan_slayer_inbox_';
   var LOCAL_FREE_QUALIFIERS_KEY = 'plan_slayer_list_qualifiers_v1';
+  /** Custom categories shared by event type: { [typeKey]: [{id,name,color}, ...] } */
+  var LOCAL_TYPE_QUALIFIERS_KEY = 'plan_slayer_type_qualifiers_v1';
   /** Category usage per event-type / list: { [scopeKey]: { recent: [id,...], counts: {id:n} } } */
   var LOCAL_CAT_USAGE_KEY = 'plan_slayer_cat_usage_v1';
   // Muted member / claim colors (less neon)
@@ -319,6 +321,9 @@
     });
     if (!other) other = { id: 'other', name: 'Other', color: '#8a9488' };
     ev.state.qualifiers = rest.concat([other]);
+    if (ev.event_type && !ev._personalOnly) {
+      mergeTypeQualifiersInto(ev.state.qualifiers, String(ev.event_type).toLowerCase());
+    }
     return ev.state.qualifiers;
   }
   function qualifierFor(ev, id) {
@@ -1469,6 +1474,137 @@
   function saveFreeListQualifiers(qs) {
     saveJson(LOCAL_FREE_QUALIFIERS_KEY, qs || []);
   }
+  function otherQualifier() {
+    return { id: 'other', name: 'Other', color: '#8a9488' };
+  }
+  function loadTypeQualifiersBag() {
+    var bag = loadJson(LOCAL_TYPE_QUALIFIERS_KEY, null);
+    return bag && typeof bag === 'object' ? bag : {};
+  }
+  function saveTypeQualifiersBag(bag) {
+    saveJson(LOCAL_TYPE_QUALIFIERS_KEY, bag || {});
+  }
+  function getTypeQualifiers(typeKey) {
+    if (!typeKey) return [];
+    var qs = loadTypeQualifiersBag()[typeKey];
+    if (!Array.isArray(qs)) return [];
+    return qs.filter(function (q) { return q && q.id && q.id !== 'other'; })
+      .map(function (q) { return { id: q.id, name: q.name, color: q.color || '#8a7340' }; });
+  }
+  /** Open list + its event (if any) — used when adding / listing categories */
+  function currentQualifierHost() {
+    var freeList = null;
+    try { freeList = state.activeNamedListId ? findNamedListById(state.activeNamedListId) : null; } catch (eH) {}
+    var ev = null;
+    try {
+      var eid = freeList && (freeList.eventId || freeList.personalForEventId);
+      if (eid) ev = findEventById(eid);
+      if (!ev) ev = activeEvent();
+    } catch (eH2) {}
+    return { ev: ev, freeList: freeList };
+  }
+  function eventTypeKeyFrom(ev, freeList) {
+    if (freeList) {
+      var eid = freeList.eventId || freeList.personalForEventId;
+      if (eid) {
+        var fe = null;
+        try { fe = findEventById(eid) || ev; } catch (eT) { fe = ev; }
+        if (fe && fe.event_type && !fe._personalOnly) return String(fe.event_type).toLowerCase();
+      }
+    }
+    if (ev && ev.event_type && !ev._personalOnly) return String(ev.event_type).toLowerCase();
+    return null;
+  }
+  function upsertQualifierList(qs, cat, atFront) {
+    qs = Array.isArray(qs) ? qs.slice() : [];
+    var id = String(cat.id);
+    qs = qs.filter(function (q) { return q && q.id && q.id !== 'other' && String(q.id) !== id; });
+    var row = { id: cat.id, name: cat.name, color: cat.color || '#8a7340' };
+    if (atFront) qs.unshift(row);
+    else qs.push(row);
+    return qs.concat([otherQualifier()]);
+  }
+  function mergeTypeQualifiersInto(qs, typeKey) {
+    if (!typeKey || !Array.isArray(qs)) return qs || [];
+    getTypeQualifiers(typeKey).forEach(function (q) {
+      if (!q || !q.id || q.id === 'other') return;
+      if (qs.some(function (x) { return x && String(x.id) === String(q.id); })) return;
+      var otherIdx = -1;
+      for (var i = 0; i < qs.length; i++) {
+        if (qs[i] && qs[i].id === 'other') { otherIdx = i; break; }
+      }
+      if (otherIdx >= 0) qs.splice(otherIdx, 0, Object.assign({}, q));
+      else qs.push(Object.assign({}, q));
+    });
+    return qs;
+  }
+  /**
+   * Persist a new category on this list/event and every event of the same type.
+   * New cat sits at the front of type chips / dropdowns.
+   */
+  function addNewCategoryToCatalogs(cat, ev, freeList) {
+    if (!cat || !cat.id) return cat;
+    var typeKey = eventTypeKeyFrom(ev, freeList);
+    var eventHost = ev && !ev._personalOnly ? ev : null;
+    if (!eventHost && freeList && (freeList.eventId || freeList.personalForEventId)) {
+      try { eventHost = findEventById(freeList.eventId || freeList.personalForEventId); } catch (eE) {}
+      if (eventHost && eventHost._personalOnly) eventHost = null;
+    }
+
+    if (eventHost) {
+      ensureQualifiers(eventHost);
+      eventHost.state.qualifiers = upsertQualifierList(eventHost.state.qualifiers, cat, true);
+    }
+
+    // Untyped personal lists share the global catalog
+    if (!typeKey) {
+      saveFreeListQualifiers(upsertQualifierList(freeListQualifiers(), cat, true));
+    } else {
+      var bag = loadTypeQualifiersBag();
+      var typeQs = getTypeQualifiers(typeKey);
+      bag[typeKey] = upsertQualifierList(typeQs, cat, true).filter(function (q) {
+        return q && q.id !== 'other';
+      });
+      saveTypeQualifiersBag(bag);
+      var changed = false;
+      (state.events || []).forEach(function (e) {
+        if (!e || e._personalOnly) return;
+        if (String(e.event_type || '').toLowerCase() !== typeKey) return;
+        ensureQualifiers(e);
+        var before = (e.state.qualifiers || []).map(function (q) { return q && q.id; }).join(',');
+        var putFront = eventHost && String(e.id) === String(eventHost.id);
+        e.state.qualifiers = upsertQualifierList(e.state.qualifiers, cat, putFront);
+        var after = (e.state.qualifiers || []).map(function (q) { return q && q.id; }).join(',');
+        if (after !== before) {
+          e.updated_at = new Date().toISOString();
+          changed = true;
+          try { cloudSaveEvent(e); } catch (eC) {}
+        }
+      });
+      if (changed || eventHost) persistLocal();
+    }
+    try { harvestTypeQualifiersFromEvents(); } catch (eHv) {}
+    return cat;
+  }
+  /** Pull custom cats off events so a new event of the same type already has them */
+  function harvestTypeQualifiersFromEvents() {
+    var bag = loadTypeQualifiersBag();
+    var changed = false;
+    (state.events || []).forEach(function (e) {
+      if (!e || !e.event_type || e._personalOnly) return;
+      var key = String(e.event_type).toLowerCase();
+      if (!e.state || !Array.isArray(e.state.qualifiers)) return;
+      if (!Array.isArray(bag[key])) bag[key] = [];
+      e.state.qualifiers.forEach(function (q) {
+        if (!q || !q.id || q.id === 'other') return;
+        if (DEFAULT_QUALIFIERS.some(function (d) { return d.id === q.id; })) return;
+        if (bag[key].some(function (x) { return x && x.id === q.id; })) return;
+        bag[key].push({ id: q.id, name: q.name, color: q.color || '#8a7340' });
+        changed = true;
+      });
+    });
+    if (changed) saveTypeQualifiersBag(bag);
+  }
 
   /** Scope key for category ranking: event type, or list id, or "personal" */
   function catUsageScopeKey(ev, freeList) {
@@ -1566,6 +1702,7 @@
     } else {
       qs = freeListQualifiers().map(function (q) { return Object.assign({}, q); });
     }
+    mergeTypeQualifiersInto(qs, eventTypeKeyFrom(ev, freeList));
     var usage = getCatUsage(catUsageScopeKey(ev, freeList));
     var other = null;
     var rest = [];
@@ -5241,6 +5378,7 @@
       state.events = (state.events || []).filter(function (e) { return e && !dead[String(e.id)]; });
     } catch (e) {}
     saveJson(LOCAL_EVENTS_KEY, state.events);
+    try { harvestTypeQualifiersFromEvents(); } catch (eHv) {}
     if (!opts.quiet) broadcastSync({ type: 'events-save' });
   }
 
@@ -6486,7 +6624,7 @@
       var qEv = { state: { qualifiers: DEFAULT_QUALIFIERS.map(function (q) { return Object.assign({}, q); }) } };
       try {
         var aevQ = list.eventId ? findEventById(list.eventId) : (ev || null);
-        if (aevQ && aevQ.state && aevQ.state.qualifiers) qEv.state.qualifiers = aevQ.state.qualifiers;
+        qEv.state.qualifiers = orderedQualifiersForSelect(aevQ, list);
       } catch (eQ) {}
       try {
         body.innerHTML = renderListTriad(list, qEv);
@@ -6600,8 +6738,9 @@
       try {
         setRightPanelMode('list');
         if ($('ev-list')) {
+          var evFb = nl.eventId ? findEventById(nl.eventId) : null;
           $('ev-list').innerHTML = renderListTriad(nl, {
-            state: { qualifiers: DEFAULT_QUALIFIERS.map(function (q) { return Object.assign({}, q); }) }
+            state: { qualifiers: orderedQualifiersForSelect(evFb, nl) }
           });
           wireListColumnUi(nl);
         }
@@ -7461,6 +7600,12 @@
       try {
         q = freeListQualifiers().find(function (x) { return x.id === item.qualifier; }) ||
           DEFAULT_QUALIFIERS.find(function (x) { return x.id === item.qualifier; }) || null;
+        if (!q) {
+          var hostQ = currentQualifierHost();
+          q = getTypeQualifiers(eventTypeKeyFrom(hostQ.ev, hostQ.freeList)).find(function (x) {
+            return x && x.id === item.qualifier;
+          }) || null;
+        }
       } catch (eQ2) { q = null; }
     }
     if (!q) q = { id: 'other', name: 'Other', color: '#8a9488' };
@@ -7834,7 +7979,7 @@
   function renderEventTriad(ev) {
     if (!ev) return '';
     var linked = listsForEvent(ev.id);
-    if (linked.length) return renderListTriad(linked[0], { state: { qualifiers: DEFAULT_QUALIFIERS.slice() } });
+    if (linked.length) return renderListTriad(linked[0], { state: { qualifiers: orderedQualifiersForSelect(ev, linked[0]) } });
     // Fallback: three fixed packing buckets on the event itself
     var order = ['todo', 'buy', 'bring'];
     var html = '<div class="list-triad" id="list-triad">';
@@ -10057,7 +10202,7 @@
       var qEvList = { state: { qualifiers: DEFAULT_QUALIFIERS.map(function (q) { return Object.assign({}, q); }) } };
       try {
         var aevQ = openList.eventId ? findEventById(openList.eventId) : null;
-        if (aevQ && aevQ.state && aevQ.state.qualifiers) qEvList.state.qualifiers = aevQ.state.qualifiers;
+        qEvList.state.qualifiers = orderedQualifiersForSelect(aevQ, openList);
       } catch (eQ0) {}
       if ($('ev-list')) {
         try {
@@ -10123,10 +10268,7 @@
             }
           } catch (eCd2) {}
           if ($('ev-list')) {
-            var qEv2 = { state: { qualifiers: DEFAULT_QUALIFIERS.map(function (q) { return Object.assign({}, q); }) } };
-            try {
-              if (ev.state && ev.state.qualifiers) qEv2.state.qualifiers = ev.state.qualifiers;
-            } catch (eQ) {}
+            var qEv2 = { state: { qualifiers: orderedQualifiersForSelect(ev, openList) } };
             $('ev-list').innerHTML = renderListTriad(openList, qEv2);
             wireListColumnUi(openList);
             renderQualifierFilters(ev, openList);
@@ -11320,7 +11462,8 @@
       listId: list && list.id,
       item: item
     };
-    var qs = freeListQualifiers();
+    var host = currentQualifierHost();
+    var qs = orderedQualifiersForSelect(host.ev, host.freeList || list);
     var box = $('item-cat-list');
     if (box) {
       box.innerHTML = qs.map(function (q) {
@@ -11355,6 +11498,10 @@
     if (!item && _catItemCtx.item) item = _catItemCtx.item;
     if (!item) return;
     item.qualifier = catId;
+    try {
+      var hostA = currentQualifierHost();
+      recordCategoryUse(catId, hostA.ev, list || hostA.freeList);
+    } catch (eRec) {}
     if (list && hit) saveNamedListItemHit(hit);
     else if (list) saveNamedList(list);
     else if (_catItemCtx.scope === 'group') saveActiveEvent();
@@ -11672,10 +11819,11 @@
           }
           if ($('list-detail-bar')) $('list-detail-bar').style.display = '';
           if ($('ev-list')) {
-            var q = { state: { qualifiers: DEFAULT_QUALIFIERS.map(function (qq) { return Object.assign({}, qq); }) } };
+            var qEvPaint = live.eventId ? findEventById(live.eventId) : null;
+            var q = { state: { qualifiers: orderedQualifiersForSelect(qEvPaint, live) } };
             $('ev-list').innerHTML = renderListTriad(live, q);
             wireListColumnUi(live);
-            try { renderQualifierFilters(q, live); } catch (eF) {}
+            try { renderQualifierFilters(qEvPaint, live); } catch (eF) {}
           }
         } catch (eP) { console.warn('paintOpenTriad', eP); }
       }
@@ -15973,43 +16121,31 @@
       var name = autoCap(($('cat-name') && $('cat-name').value || '').trim());
       if (!name) { appToast('Enter a category name'); return; }
       var color = ($('cat-color') && $('cat-color').value) || '#8a7340';
-      var id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || uid();
-      var newId = id;
-      // Prefer active event qualifiers, else free-list global categories, else personal board
-      var ev = activeEvent();
-      var freeOpen = state.activeNamedListId && findNamedListById(state.activeNamedListId);
-      if (ev && !ev._personalOnly && !freeOpen) {
-        var qs = ensureQualifiers(ev);
-        if (qs.some(function (q) { return q.id === id; })) newId = id + '_' + Date.now().toString(36).slice(-3);
-        qs.push({ id: newId, name: name, color: color });
-        // Keep "other" at end
-        ev.state.qualifiers = qs.filter(function (q) { return q.id !== 'other'; })
-          .concat(qs.filter(function (q) { return q.id === 'other'; }));
-        saveActiveEvent();
-      } else if (freeOpen || !ev || ev._personalOnly) {
-        var fqs = freeListQualifiers();
-        if (fqs.some(function (q) { return q.id === id; })) newId = id + '_' + Date.now().toString(36).slice(-3);
-        fqs.push({ id: newId, name: name, color: color });
-        fqs = fqs.filter(function (q) { return q.id !== 'other'; })
-          .concat(fqs.filter(function (q) { return q.id === 'other'; }));
-        saveFreeListQualifiers(fqs);
+      var host = currentQualifierHost();
+      var ev = host.ev;
+      var freeOpen = host.freeList;
+      var pool = [];
+      try { pool = orderedQualifiersForSelect(ev, freeOpen); } catch (eP) { pool = []; }
+      var exist = pool.find(function (q) {
+        return q && String(q.name || '').toLowerCase() === String(name).toLowerCase();
+      });
+      var newId;
+      if (exist && exist.id) {
+        newId = exist.id;
       } else {
-        var board = loadPersonalBoard();
-        if (!board.qualifiers) board.qualifiers = DEFAULT_QUALIFIERS.map(function (q) { return Object.assign({}, q); });
-        if (board.qualifiers.some(function (q) { return q.id === id; })) newId = id + '_' + Date.now().toString(36).slice(-3);
-        board.qualifiers.push({ id: newId, name: name, color: color });
-        board.qualifiers = board.qualifiers.filter(function (q) { return q.id !== 'other'; })
-          .concat(board.qualifiers.filter(function (q) { return q.id === 'other'; }));
-        savePersonalBoard(board);
+        var id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || uid();
+        newId = id;
+        if (pool.some(function (q) { return q && q.id === id; })) {
+          newId = id + '_' + Date.now().toString(36).slice(-3);
+        }
+        addNewCategoryToCatalogs({ id: newId, name: name, color: color }, ev, freeOpen);
       }
       if ($('category-modal')) {
         $('category-modal').classList.remove('is-open');
         $('category-modal').setAttribute('aria-hidden', 'true');
       }
       try {
-        var freeOpenCat = state.activeNamedListId ? findNamedListById(state.activeNamedListId) : null;
-        recordCategoryUse(newId, activeEvent(), freeOpenCat);
-        state.filterQualifier = newId;
+        recordCategoryUse(newId, ev, freeOpen);
       } catch (eCu) {}
       var cb = _catAddCallback;
       _catAddCallback = null;
@@ -16036,7 +16172,6 @@
           try {
             var freeOpenN = state.activeNamedListId ? findNamedListById(state.activeNamedListId) : null;
             recordCategoryUse(newId, activeEvent(), freeOpenN || (cur.free && cur.free.named) || null);
-            state.filterQualifier = newId;
           } catch (eRec) {}
           if (cur.scope === 'group' && cur.ev) saveActiveEvent();
           else if (cur.free) {

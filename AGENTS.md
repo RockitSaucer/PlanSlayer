@@ -1,7 +1,7 @@
 # PlanSlayer — agent notes
 
 **Product:** group event planning (lists, invites, expenses, Hunt-style map + calendar).  
-**Current version:** **V8.0.33** (`app.js` `APP_VERSION`) · shell **`plan-slayer-shell-v106`**  
+**Current version:** **V8.0.34** (`app.js` `APP_VERSION`) · shell **`plan-slayer-shell-v107`**  
 **Deploy:** Vercel **plan-slayer** → https://planslayer.com
 
 ### Skills (Grok) — keep in sync when this product changes
@@ -9,7 +9,7 @@ User skills under `~/.grok/skills/` (SOURCE_OF_TRUTH = this folder):
 
 | Skill | Trigger | Pin |
 |-------|---------|-----|
-| **make-lists** | Full product (lists, calendar, events, chores, Got it!, **share/join invites**, mobile, header, map viewing) | **V8.0.33** |
+| **make-lists** | Full product (lists, calendar, events, chores, Got it!, **share/join invites**, mobile, header, map viewing) | **V8.0.34** |
 | **plan-calendar** | Side calendar + dots | V8.0.33 |
 | **plan-events** | Trips/events + packing + Personal {Event} + **event invite links** | V8.0.33 |
 | **events-chores-switch** | Events/Chores dual button under calendar | V8.0.33 |

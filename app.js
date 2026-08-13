@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '8.0.32';
+  var APP_VERSION = '8.0.33';
   var DEFAULT_CHORE_COLOR = '#6a8ab8';
   var CHORE_COLOR_PRESETS = ['#6a8ab8', '#e59a18', '#d94136', '#16a34a', '#9333ea', '#0ea5e9', '#f59e0b', '#ec4899'];
   /** Private per-user checklist (not shared): key listId:userId → items[] */
@@ -3567,7 +3567,8 @@
   function shareInviteLink(code, type, title) {
     var url = planJoinLink(code, type);
     var label = title || (type === 'list' ? 'Plan Slayer list' : 'Plan Slayer event');
-    var text = 'Join me on Plan Slayer — ' + label + '\n' + url;
+    // Put URL only in `url` — including it in `text` + `url` makes iOS/Android show the link twice (#144)
+    var text = 'Join me on Plan Slayer — ' + label;
     if (navigator.share) {
       return navigator.share({ title: label, text: text, url: url }).then(function () {
         return true;
